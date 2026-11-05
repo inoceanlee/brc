@@ -16,6 +16,18 @@ export interface ShellProbeResult {
 
 export const SHELL_PROBE_TIMEOUT_MS = 5000;
 export const SHELL_PROBE_OUTPUT_LIMIT_BYTES = 64 * 1024;
+// CMD can silently truncate expanded Unicode commands near its 8191-byte limit.
+// Leave room for the nested /c invocation and environment expansion.
+export const CMD_COMMAND_MAX_UTF8_BYTES = 7 * 1024;
+
+export function validateCmdCommand(command: string): void {
+  if (command.includes('\0')) throw new Error('CMD command contains NUL');
+  if (/[\r\n]/.test(command)) throw new Error('CMD command must be single-line');
+  const bytes = Buffer.byteLength(command, 'utf8');
+  if (bytes > CMD_COMMAND_MAX_UTF8_BYTES) {
+    throw new Error(`CMD command exceeds ${CMD_COMMAND_MAX_UTF8_BYTES} UTF-8 bytes (${bytes})`);
+  }
+}
 
 const WINDOWS_CODE_PAGES: Record<number, string> = {
   932: 'shift_jis',
@@ -160,12 +172,16 @@ export function getShellProbeCommand(
   shell: 'powershell' | 'cmd' | 'posix',
   marker: string,
   command: string,
+  cmdVariable?: string,
 ): string {
   if (shell === 'powershell') {
     return `$utf8=New-Object System.Text.UTF8Encoding($false);if([Console]::InputEncoding.CodePage -ne 65001){[Console]::InputEncoding=$utf8};if([Console]::OutputEncoding.CodePage -ne 65001){[Console]::OutputEncoding=$utf8};if($OutputEncoding.CodePage -ne 65001){$OutputEncoding=$utf8};$in=[Console]::InputEncoding.WebName;$out=[Console]::OutputEncoding.WebName;$pipe=$OutputEncoding.WebName;$cp=[Console]::OutputEncoding.CodePage;$report='${marker}|in='+$in+';out='+$out+';pipe='+$pipe+';cp='+$cp+[char]10;$bytes=[Text.Encoding]::ASCII.GetBytes($report);$stream=[Console]::OpenStandardOutput();$stream.Write($bytes,0,$bytes.Length);$stream.Flush();if([Console]::In.ReadLine() -ne 'Y'){exit 125};${command}`;
   }
   if (shell === 'cmd') {
-    return `for /f "tokens=2 delims=:" %A in ('chcp') do @echo ${marker}^|cp=%A & set /p "_BRC_READY=" && ${command}`;
+    if (!cmdVariable || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(cmdVariable)) {
+      throw new Error('CMD probe requires a valid command environment variable');
+    }
+    return `chcp 65001 >nul & for /f "tokens=2 delims=:" %A in ('chcp') do @echo ${marker}^|cp=%A & set /p "_BRC_READY=" && cmd /d /c !${cmdVariable}!`;
   }
   return getPosixShellProbeCommand(marker, command);
 }

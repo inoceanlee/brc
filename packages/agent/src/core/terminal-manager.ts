@@ -125,7 +125,7 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
   if (shellName === 'cmd' || shellName === 'cmd.exe') {
     return { 
       executable: shellPath, 
-      args: ['/c', command],
+      args: ['/d', '/v:on', '/c', command],
       windowsVerbatim: true,
       useShellOption: false 
     };
@@ -234,6 +234,7 @@ export class TerminalManager {
       spawnOptions = {
         env: {
           ...process.env,
+          ...encodingSession.commandEnvironment,
           TERM: 'xterm-256color'  // Better terminal compatibility
         },
         windowsHide: true  // Prevent visible console windows on Windows

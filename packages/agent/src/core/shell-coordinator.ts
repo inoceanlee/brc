@@ -6,6 +6,7 @@ import {
   getShellProbeCommand,
   SHELL_PROBE_OUTPUT_LIMIT_BYTES,
   SHELL_PROBE_TIMEOUT_MS,
+  validateCmdCommand,
   ShellEncodingProbe,
   type ShellEncodingInfo,
 } from './terminal-encoding.js';
@@ -38,6 +39,7 @@ export class ShellProbeFeedResult implements FeedResult {
 
 export interface ShellEncodingSession {
   readonly wrappedCommand: string;
+  readonly commandEnvironment: Readonly<Record<string, string>>;
   readonly command: string;
   readonly marker: string;
   readonly probeRequired: boolean;
@@ -63,6 +65,7 @@ export class DefaultShellEncodingSession implements ShellEncodingSession {
   readonly probeShell: 'powershell' | 'cmd' | 'posix' | null;
   readonly marker: string;
   readonly wrappedCommand: string;
+  readonly commandEnvironment: Readonly<Record<string, string>>;
   readonly probeRequired: boolean;
 
   private probe: ShellEncodingProbe | null = null;
@@ -91,8 +94,11 @@ export class DefaultShellEncodingSession implements ShellEncodingSession {
     this.marker = this.probeRequired ? (marker ?? `BRC_PROBE_${randomBytes(16).toString('hex')}`) : '';
 
     if (this.probeRequired) {
+      const cmdVariable = this.probeShell === 'cmd' ? `BRC_CMD_${this.marker}` : null;
+      if (cmdVariable) validateCmdCommand(this.command);
+      this.commandEnvironment = cmdVariable ? { [cmdVariable]: this.command } : {};
       this.probe = new ShellEncodingProbe(this.marker, SHELL_PROBE_OUTPUT_LIMIT_BYTES, this.probeShell!);
-      this.wrappedCommand = getShellProbeCommand(this.probeShell!, this.marker, this.command);
+      this.wrappedCommand = getShellProbeCommand(this.probeShell!, this.marker, this.command, cmdVariable ?? undefined);
       this.ready = false;
       this.stdoutDecoder = createShellEncodingDecoder('utf-8');
       this.stderrDecoder = createShellEncodingDecoder('utf-8');
@@ -101,6 +107,7 @@ export class DefaultShellEncodingSession implements ShellEncodingSession {
       }
     } else {
       this.probe = null;
+      this.commandEnvironment = {};
       this.wrappedCommand = this.command;
       this.ready = true;
       this.stdoutDecoder = createShellEncodingDecoder('utf-8');

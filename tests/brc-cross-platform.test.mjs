@@ -653,11 +653,12 @@ test('ShellEncodingSession coordinates PowerShell probe handshake, decoding, and
   session.dispose();
 });
 
-test('ShellEncodingSession coordinates CMD probe handshake with chunked feed and GBK decoding', () => {
+test('ShellEncodingSession coordinates CMD UTF-8 probe handshake and Unicode decoding', () => {
   const session = new DefaultShellEncodingSession('cmd-test', 5000, 'cmd', 'BRC_PROBE_CMD1');
 
-  // Buffer early stderr in GBK bytes: '错误' -> [0xB4, 0xED, 0xCE, 0xF3]
-  const earlyErr = session.feedStderr(Buffer.from([0xB4, 0xED]));
+  // Buffer early UTF-8 stderr across probe chunks.
+  const utf8Error = Buffer.from('错误', 'utf8');
+  const earlyErr = session.feedStderr(utf8Error.subarray(0, 3));
   assert.equal(earlyErr, '');
 
   // Chunk 1 of stdout probe
@@ -665,22 +666,17 @@ test('ShellEncodingSession coordinates CMD probe handshake with chunked feed and
   assert.equal(part1.ready, false);
   assert.equal(part1.text, '');
 
-  // Chunk 2 completing probe with CP936 (GBK)
-  const part2 = session.feedStdout(Buffer.from('936\r\npost-output\r\n'));
+  // CMD initializes UTF-8 before reporting the effective code page.
+  const part2 = session.feedStdout(Buffer.from('65001\r\npost-output\r\n'));
   assert.equal(part2.ready, true);
   assert.equal(session.isReady, true);
-  assert.equal(session.outputEncoding, 'gbk');
-  assert.equal(session.inputEncoding, 'gbk');
+  assert.equal(session.outputEncoding, 'utf-8');
+  assert.equal(session.inputEncoding, 'utf-8');
 
-  // Early stderr is drained through GBK decoder
   assert.equal(part2.earlyStderr, '错');
-
-  // Subsequent stderr
-  const moreErr = session.feedStderr(Buffer.from([0xCE, 0xF3]));
+  const moreErr = session.feedStderr(utf8Error.subarray(3));
   assert.equal(moreErr, '误');
-
-  // Test encodeInput uses GBK: '中文' -> [0xD6, 0xD0, 0xCE, 0xC4]
-  assert.deepEqual(session.encodeInput('中文'), Buffer.from([0xD6, 0xD0, 0xCE, 0xC4]));
+  assert.deepEqual(session.encodeInput('中文🙂'), Buffer.from('中文🙂', 'utf8'));
 
   session.dispose();
 });

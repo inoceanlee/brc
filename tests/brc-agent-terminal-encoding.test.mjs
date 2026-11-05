@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import { test } from 'node:test';
 import { TextDecoder } from 'node:util';
 import path from 'node:path';
@@ -36,8 +38,8 @@ test('Windows shell probe preserves supported stdin/stdout/stderr encodings and 
     },
     {
       executable: 'cmd.exe',
-      command: 'set /p inputText= & cmd /v:on /c "echo BRC-IN-!inputText!" & echo BRC-OUT-ASCII & echo BRC-ERR-ASCII 1>&2 & exit /b 23',
-      input: 'ASCII',
+      command: 'set /p inputText= & cmd /v:on /c "echo BRC-IN-!inputText!" & echo BRC-OUT-中文-日本語-🙂 & echo BRC-ERR-中文-日本語-🙂 1>&2 & exit /b 23',
+      input: '中文-日本語-🙂',
     },
   ];
 
@@ -65,6 +67,40 @@ test('Windows shell probe preserves supported stdin/stdout/stderr encodings and 
     }
     assert.doesNotMatch(text, /BRC_PROBE_/);
     assert.equal(completed.exitCode, 23);
+  }
+});
+
+test('Windows CMD handles UTF-8 files, native streams, Unicode paths, and command operators', { skip: process.platform !== 'win32' }, async () => {
+  const { TerminalManager } = await import(terminalManagerUrl);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'brc-cmd-unicode-'));
+  const inputPath = path.join(directory, '中文 文件.txt');
+  const scriptPath = path.join(directory, 'external.mjs');
+  fs.writeFileSync(inputPath, 'BRC-FILE-中文-日本語-🙂\n', 'utf8');
+  fs.writeFileSync(scriptPath, 'process.stdout.write("BRC-NODE-中文-日本語-🙂\\n"); process.stderr.write("BRC-STDERR-中文\\n"); process.exitCode=23;', 'utf8');
+  const manager = new TerminalManager();
+  const command = `type "${inputPath}" & echo BRC-PIPE-中文 | findstr PIPE & node.exe "${scriptPath}"`;
+  let pid = -1;
+  try {
+    const started = await manager.executeCommand(command, 100, 'cmd.exe');
+    pid = started.pid;
+    assert.ok(pid > 0, JSON.stringify(started));
+    let completed;
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      completed = manager.readOutputPaginated(pid, 0, 1000);
+      if (completed?.isComplete) break;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+    assert.equal(completed?.isComplete, true, 'CMD session should complete');
+    const output = completed.lines.join('\n');
+    assert.match(output, /BRC-FILE-中文-日本語-🙂/);
+    assert.match(output, /BRC-PIPE-中文/);
+    assert.match(output, /BRC-NODE-中文-日本語-🙂/);
+    assert.match(output, /BRC-STDERR-中文/);
+    assert.equal(completed.exitCode, 23);
+  } finally {
+    if (pid > 0 && !manager.readOutputPaginated(pid, 0, 1)?.isComplete) manager.forceTerminate(pid);
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -110,6 +146,16 @@ test('PowerShell child upgrades legacy console encoding for Unicode pipes', { sk
 
 test('PowerShell probe keeps input, output, and native pipe encodings independent', () => {
   assert.deepEqual(parseShellEncodingInfo('powershell', 'in=gbk;out=utf-8;pipe=gbk;cp=936'), info);
+});
+
+test('CMD probe accepts only a validated command environment variable', async () => {
+  const { getShellProbeCommand } = await import(moduleUrl);
+  assert.throws(() => getShellProbeCommand('cmd', 'BRC_PROBE_TEST', 'echo 中文'), /requires a valid/);
+  assert.throws(() => getShellProbeCommand('cmd', 'BRC_PROBE_TEST', 'echo 中文', 'BAD-NAME'), /requires a valid/);
+  const wrapped = getShellProbeCommand('cmd', 'BRC_PROBE_TEST', 'echo 中文', 'BRC_CMD_TEST');
+  assert.match(wrapped, /chcp 65001/);
+  assert.match(wrapped, /cmd \/d \/c !BRC_CMD_TEST!/);
+  assert.doesNotMatch(wrapped, /中文/);
 });
 
 test('CMD probe rejects unsupported code pages', () => {
