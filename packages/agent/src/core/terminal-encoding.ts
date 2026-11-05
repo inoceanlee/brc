@@ -162,7 +162,7 @@ export function getShellProbeCommand(
   command: string,
 ): string {
   if (shell === 'powershell') {
-    return `$in=[Console]::InputEncoding.WebName;$out=[Console]::OutputEncoding.WebName;$pipe=$OutputEncoding.WebName;$cp=[Console]::OutputEncoding.CodePage;$report='${marker}|in='+$in+';out='+$out+';pipe='+$pipe+';cp='+$cp+[char]10;$bytes=[Text.Encoding]::ASCII.GetBytes($report);$stream=[Console]::OpenStandardOutput();$stream.Write($bytes,0,$bytes.Length);$stream.Flush();if([Console]::In.ReadLine() -ne 'Y'){exit 125};${command}`;
+    return `$utf8=New-Object System.Text.UTF8Encoding($false);if([Console]::InputEncoding.CodePage -ne 65001){[Console]::InputEncoding=$utf8};if([Console]::OutputEncoding.CodePage -ne 65001){[Console]::OutputEncoding=$utf8};if($OutputEncoding.CodePage -ne 65001){$OutputEncoding=$utf8};$in=[Console]::InputEncoding.WebName;$out=[Console]::OutputEncoding.WebName;$pipe=$OutputEncoding.WebName;$cp=[Console]::OutputEncoding.CodePage;$report='${marker}|in='+$in+';out='+$out+';pipe='+$pipe+';cp='+$cp+[char]10;$bytes=[Text.Encoding]::ASCII.GetBytes($report);$stream=[Console]::OpenStandardOutput();$stream.Write($bytes,0,$bytes.Length);$stream.Flush();if([Console]::In.ReadLine() -ne 'Y'){exit 125};${command}`;
   }
   if (shell === 'cmd') {
     return `for /f "tokens=2 delims=:" %A in ('chcp') do @echo ${marker}^|cp=%A & set /p "_BRC_READY=" && ${command}`;

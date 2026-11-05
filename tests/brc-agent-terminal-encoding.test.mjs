@@ -92,6 +92,21 @@ test('completed Windows shell waits for the stdout pipe to drain', { skip: proce
 
 const info = { consoleInput: 'gbk', consoleOutput: 'utf-8', nativePipe: 'gbk', codePage: 936 };
 
+test('PowerShell child upgrades legacy console encoding for Unicode pipes', { skip: process.platform !== 'win32' }, async () => {
+  const { getShellProbeCommand } = await import(moduleUrl);
+  const command = '[Console]::Out.WriteLine("BRC-READY"); $v=[Console]::In.ReadLine(); [Console]::Out.WriteLine("BRC-IN-"+$v); [Console]::Out.WriteLine("BRC-OUT-中文"); [Console]::Error.WriteLine("BRC-ERR-中文")';
+  const wrapped = getShellProbeCommand('powershell', 'BRC_CP437', command);
+  const legacy = '[Console]::InputEncoding=[Text.Encoding]::GetEncoding(437);[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(437);$OutputEncoding=[Text.Encoding]::GetEncoding(437)';
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-Command', legacy + ';' + wrapped], {
+    input: ['Y', '中文', ''].join(String.fromCharCode(10)), encoding: 'utf8', windowsHide: true, timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /BRC_CP437\|in=utf-8;out=utf-8;pipe=utf-8;cp=65001/);
+  assert.match(result.stdout, /BRC-IN-中文/);
+  assert.match(result.stdout, /BRC-OUT-中文/);
+  assert.match(result.stderr, /BRC-ERR-中文/);
+});
+
 test('PowerShell probe keeps input, output, and native pipe encodings independent', () => {
   assert.deepEqual(parseShellEncodingInfo('powershell', 'in=gbk;out=utf-8;pipe=gbk;cp=936'), info);
 });
