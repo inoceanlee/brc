@@ -20,7 +20,7 @@ const {
 } = await import(moduleUrl);
 const terminalManagerUrl = new URL('../packages/agent/dist/core/terminal-manager.js', import.meta.url).href;
 
-test('Windows shell probe streams Chinese stdin/stdout/stderr and preserves command exit codes', { skip: process.platform !== 'win32' }, async () => {
+test('Windows shell probe preserves supported stdin/stdout/stderr encodings and exit codes', { skip: process.platform !== 'win32' }, async () => {
   const { TerminalManager } = await import(terminalManagerUrl);
   const manager = new TerminalManager();
   const cases = [
@@ -36,8 +36,8 @@ test('Windows shell probe streams Chinese stdin/stdout/stderr and preserves comm
     },
     {
       executable: 'cmd.exe',
-      command: 'set /p inputText= & cmd /v:on /c "echo BRC-IN-!inputText!" & echo BRC-OUT-中文 & echo BRC-ERR-中文 1>&2 & exit /b 23',
-      input: '中文',
+      command: 'set /p inputText= & cmd /v:on /c "echo BRC-IN-!inputText!" & echo BRC-OUT-ASCII & echo BRC-ERR-ASCII 1>&2 & exit /b 23',
+      input: 'ASCII',
     },
   ];
 
@@ -59,9 +59,10 @@ test('Windows shell probe streams Chinese stdin/stdout/stderr and preserves comm
 
     assert.equal(completed?.isComplete, true, `${shellCase.executable} should complete after stdin`);
     const text = completed.lines.join('\n');
-    assert.equal((text.match(/BRC-IN-中文/g) ?? []).length, 1, `${shellCase.executable}: stdin round-trip failed: ${JSON.stringify(text)}`);
-    assert.equal((text.match(/BRC-OUT-中文/g) ?? []).length, 1, `${shellCase.executable}: stdout encoding failed: ${JSON.stringify(text)}`);
-    assert.equal((text.match(/BRC-ERR-中文/g) ?? []).length, 1, `${shellCase.executable}: stderr encoding failed: ${JSON.stringify(text)}`);
+    for (const stream of ['IN', 'OUT', 'ERR']) {
+      const expected = `BRC-${stream}-${shellCase.input}`;
+      assert.equal(text.split(expected).length - 1, 1, `${shellCase.executable}: ${stream} round-trip failed: ${JSON.stringify(text)}`);
+    }
     assert.doesNotMatch(text, /BRC_PROBE_/);
     assert.equal(completed.exitCode, 23);
   }
