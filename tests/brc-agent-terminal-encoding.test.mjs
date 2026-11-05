@@ -59,12 +59,35 @@ test('Windows shell probe streams Chinese stdin/stdout/stderr and preserves comm
 
     assert.equal(completed?.isComplete, true, `${shellCase.executable} should complete after stdin`);
     const text = completed.lines.join('\n');
-    assert.equal((text.match(/BRC-IN-中文/g) ?? []).length, 1);
-    assert.equal((text.match(/BRC-OUT-中文/g) ?? []).length, 1);
-    assert.equal((text.match(/BRC-ERR-中文/g) ?? []).length, 1);
+    assert.equal((text.match(/BRC-IN-中文/g) ?? []).length, 1, `${shellCase.executable}: stdin round-trip failed: ${JSON.stringify(text)}`);
+    assert.equal((text.match(/BRC-OUT-中文/g) ?? []).length, 1, `${shellCase.executable}: stdout encoding failed: ${JSON.stringify(text)}`);
+    assert.equal((text.match(/BRC-ERR-中文/g) ?? []).length, 1, `${shellCase.executable}: stderr encoding failed: ${JSON.stringify(text)}`);
     assert.doesNotMatch(text, /BRC_PROBE_/);
     assert.equal(completed.exitCode, 23);
   }
+});
+
+test('completed Windows shell waits for the stdout pipe to drain', { skip: process.platform !== 'win32' }, async () => {
+  const { TerminalManager } = await import(terminalManagerUrl);
+  const manager = new TerminalManager();
+  const command = '[Console]::Out.WriteLine("BRC-READY"); [Console]::In.ReadLine() | Out-Null; [Console]::Out.WriteLine("BRC-FLUSHED")';
+  const started = await manager.executeCommand(command, 100, 'powershell.exe');
+  assert.equal(started.isBlocked, true);
+  const child = manager.getSession(started.pid)?.process;
+  assert.ok(child, 'waiting shell must remain active');
+  child.stdout.pause();
+  child.once('exit', () => setTimeout(() => child.stdout.resume(), 50));
+  assert.equal(manager.sendInputToProcess(started.pid, 'continue'), true);
+
+  let completed;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    completed = manager.readOutputPaginated(started.pid, 0, 1000);
+    if (completed?.isComplete) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.equal(completed?.isComplete, true);
+  assert.match(completed.lines.join('\n'), /BRC-FLUSHED/);
 });
 
 const info = { consoleInput: 'gbk', consoleOutput: 'utf-8', nativePipe: 'gbk', codePage: 936 };

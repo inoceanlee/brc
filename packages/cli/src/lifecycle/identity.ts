@@ -57,7 +57,8 @@ async function inspectWindows(pids: readonly number[]): Promise<Map<number, Proc
     else if (entry.status === 'found') result.set(pid, parseProcessIdentity(entry));
     else if (entry.status === 'error') {
       const code = 'code' in entry && typeof entry.code === 'string' && /^[A-Z_]+$/.test(entry.code) ? entry.code : 'UNKNOWN';
-      if (code === 'OPEN_PROCESS') result.set(pid, null);
+      // Windows System (PID 4) can allow opening its handle but deny image-path lookup.
+      if (code === 'OPEN_PROCESS' || (pid === 4 && code === 'PROCESS_PATH')) result.set(pid, null);
       else throw new Error(`Native Windows process inspection could not verify PID ${pid}: ${code}.`);
     } else throw new Error('Native Windows process inspection returned an invalid status.');
   }

@@ -530,7 +530,8 @@ export class TerminalManager {
         }
       }, 100);
 
-      childProcess.on('exit', (code: any) => {
+      // 'exit' can fire before stdout/stderr drain; 'close' fires after both pipes close.
+      childProcess.on('close', (code: any) => {
         if (childProcess.pid) {
           // Store completed session before removing active session
           this.completedSessions.set(childProcess.pid, {
