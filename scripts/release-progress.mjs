@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { RELEASE_CONFIG } from './release-config.mjs';
 
-const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const frames = ['|', '/', '-', '\\'];
 const formatSeconds = (elapsed) => (elapsed / 1000).toFixed(1) + 's';
 
 export class ReleaseProgress {

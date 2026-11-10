@@ -71,7 +71,7 @@ test('progress renderer refreshes a terminal while a stage runs', async () => {
   await new Promise((resolve) => setTimeout(resolve, 280));
   progress.finish();
   assert.match(output.data, /\r\x1b\[2K/);
-  assert.match(output.data, /⠋|⠙|⠹/);
+  assert.match(output.data, /[|/\-\\]/);
   assert.match(output.data, /✓/);
 });
 
