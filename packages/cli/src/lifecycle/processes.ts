@@ -2,8 +2,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import os from 'node:os';
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../config/paths.js';
@@ -173,6 +174,11 @@ function processErrorMessage(error: unknown): string {
 function errorCode(error: unknown): string | undefined {
   if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') return error.code;
   return undefined;
+}
+
+function isStaleFromPreviousBoot(mtimeMs: number): boolean {
+  const bootTimeMs = Date.now() - (os.uptime() * 1000);
+  return mtimeMs < (bootTimeMs - 5000);
 }
 
 
@@ -571,8 +577,14 @@ export class ProcessManager {
   }
 
   private async readRecord(spec: ManagedServiceSpec): Promise<ManagedProcessRecord | null> {
+    const filename = recordPath(this.paths, spec.name);
     try {
-      const record = parseProcessRecord(JSON.parse(await readFile(recordPath(this.paths, spec.name), 'utf8')), spec);
+      const fileInfo = await stat(filename);
+      if (isStaleFromPreviousBoot(fileInfo.mtimeMs)) {
+        await this.removeRecord(spec.name);
+        return null;
+      }
+      const record = parseProcessRecord(JSON.parse(await readFile(filename, 'utf8')), spec);
       if (!samePath(record.workspaceRoot, spec.workspaceRoot) || !samePath(record.entrypoint, spec.entrypoint)) {
         throw new Error(`${spec.name} process record belongs to another workspace; refusing process control.`);
       }
@@ -582,7 +594,6 @@ export class ProcessManager {
       throw error;
     }
   }
-
   private async writeRecord(record: ManagedProcessRecord): Promise<void> {
     const filename = recordPath(this.paths, record.service);
     const temporaryFile = `${filename}.${record.id}.tmp`;

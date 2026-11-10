@@ -854,3 +854,36 @@ test('reused PID belonging to foreign inaccessible system process is evicted and
   assert.equal(statusAfter[0].state, 'running');
   assert.notEqual(statusAfter[0].pid, 4);
 });
+
+test('reboot stale record older than system boot time is evicted without health delay', async (t) => {
+  const harness = await makeHarness(t, { startupTimeoutMs: 2000 });
+  const staleRecord = {
+    version: 1,
+    id: '12345678-1234-4234-8234-123456789abc',
+    service: harness.spec.name,
+    pid: 999999,
+    createdAt: '123456789',
+    executablePath: process.execPath,
+    commandLine: 'node fake-service.mjs',
+    workspaceRoot: harness.spec.workspaceRoot,
+    entrypoint: harness.spec.entrypoint,
+    controlPort: 54321,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    bootId: 'stale-boot',
+  };
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify(staleRecord, null, 2));
+  const pastTime = new Date(Date.now() - (os.uptime() * 1000) - 60000);
+  const { utimes } = await import('node:fs/promises');
+  await utimes(recordFile, pastTime, pastTime);
+
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, new LifecycleLock(harness.paths));
+  const start = Date.now();
+  await serviceManager.start();
+  const elapsed = Date.now() - start;
+
+  const statusAfter = await serviceManager.status();
+  assert.equal(statusAfter[0].state, 'running');
+  assert.notEqual(statusAfter[0].pid, 999999);
+  assert.ok(elapsed < 1500, `startup took ${elapsed}ms, expected fast eviction under 1500ms`);
+});
