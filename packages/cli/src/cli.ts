@@ -305,11 +305,19 @@ async function main(): Promise<void> {
         await serviceManager.withLock(async (operations) => {
           const statuses = await serviceManager.status();
           const hasRunning = statuses.some((status) => status.state === 'running' || status.state === 'pairing');
-          const hasStopped = statuses.some((status) => status.state === 'stopped');
+          const isStaleDegraded = (status: { state: string; detail: string }) => status.state === 'degraded' && (
+            status.detail.includes('Process identity changed') ||
+            status.detail.includes('malformed') ||
+            status.detail.includes('incomplete') ||
+            status.detail.includes('belongs to another workspace') ||
+            status.detail.includes('JSON') ||
+            status.detail.includes('Recorded process has exited')
+          );
+          const hasStopped = statuses.some((status) => status.state === 'stopped' || isStaleDegraded(status));
           if (hasRunning && hasStopped) {
             throw new Error('Cannot start a partially running service set; run brc restart to apply configuration safely.');
           }
-          if (statuses.every((status) => status.state === 'stopped')) {
+          if (statuses.every((status) => status.state === 'stopped' || isStaleDegraded(status))) {
             await traefikManager.writeConfigWithLockHeld(await loadSettings());
           }
           await operations.start();
