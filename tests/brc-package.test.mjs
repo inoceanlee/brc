@@ -77,8 +77,8 @@ function run(command, args, options = {}) {
     env: cleanEnv,
     ...options,
   });
-  assert.equal(result.error, undefined, result.error?.message);
-  assert.equal(result.status, 0, `${command} ${args.join(' ')} failed\n${result.stderr}`);
+  assert.equal(result.error, undefined, `${command} ${args.join(' ')} failed with error: ${result.error?.message}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`);
+  assert.equal(result.status, 0, `${command} ${args.join(' ')} failed\n${result.stderr}\n${result.stdout}`);
   return result.stdout.trim();
 }
 
@@ -241,7 +241,7 @@ test('single package tarball is complete, self-contained, and globally installab
   }
   await writeFile(path.join(extractedPackage, 'package.json'), `${JSON.stringify(manifest)}\n`);
   run('tar', ['-xzf', tarball, '-C', inspectionDir, 'package/node_modules'], { timeout: 120_000 });
-  assert.match(run(process.execPath, [path.join(repoRoot, 'tests', 'brc-package-runtime-smoke.mjs'), extractedPackage], { cwd: root }), /RUNTIME_SMOKE_PASS/);
+  assert.match(run(process.execPath, [path.join(repoRoot, 'tests', 'brc-package-runtime-smoke.mjs'), extractedPackage], { cwd: root, timeout: 120_000 }), /RUNTIME_SMOKE_PASS/);
   if (process.platform !== 'win32') {
     const cliMode = (await stat(path.join(extractedPackage, 'dist/cli.js'))).mode;
     assert.notEqual(cliMode & 0o111, 0, 'CLI bin must retain executable permissions');
