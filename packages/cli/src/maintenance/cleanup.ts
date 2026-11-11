@@ -231,7 +231,7 @@ async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dry
     return result;
   }
 
-  await Promise.all(SERVICE_NAMES.map(async (name) => {
+  const serviceEntries = await Promise.all(SERVICE_NAMES.map(async (name) => {
     const filename = path.join(paths.runtime, `${name}.json`);
     let raw: string;
     let value: unknown;
@@ -241,16 +241,23 @@ async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dry
     } catch (error) {
       if (errorCode(error) === 'ENOENT') {
         result.set(name, { state: 'inactive' });
-        return;
+        return null;
       }
       issue(report.preserved, filename, `Process record is unreadable or damaged: ${error instanceof Error ? error.message : String(error)}`);
       result.set(name, { state: 'unknown' });
-      return;
+      return null;
     }
-
     const spec = recordSpec(name, value, paths);
+    return { name, filename, raw, value, spec };
+  }));
+
+  const activeSpecs = serviceEntries.filter((item): item is NonNullable<typeof item> => item !== null);
+  const statuses = await manager.statusMany(activeSpecs.map((item) => item.spec));
+
+  for (let index = 0; index < activeSpecs.length; index++) {
+    const { name, filename, raw, value, spec } = activeSpecs[index]!;
+    const status = statuses[index]!;
     try {
-      const status = await manager.status(spec);
       if ((await readRegularFile(filename)).contents !== raw) throw new Error('Process record changed during cleanup.');
       if (status.state === 'stopped') {
         if (!isWithin(spec.workspaceRoot, spec.entrypoint)) {
@@ -269,7 +276,7 @@ async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dry
       issue(report.preserved, filename, `Process identity could not be verified: ${error instanceof Error ? error.message : String(error)}`);
       result.set(name, { state: 'unknown', entrypoint: spec.entrypoint });
     }
-  }));
+  }
   return result;
 }
 
@@ -381,8 +388,9 @@ async function cleanLogs(
   dryRun: boolean,
   cutoff: number,
   maxTotalBytes: number,
+  precollectedLogs?: LogFile[],
 ): Promise<void> {
-  const files = await collectLogs(paths, report);
+  const files = precollectedLogs ?? await collectLogs(paths, report);
   const active = new Set<string>();
   for (const name of SERVICE_NAMES) {
     if (runtimes.get(name)?.state !== 'inactive') active.add(path.resolve(paths.logs, `${name}.log`));
@@ -508,41 +516,46 @@ async function cleanTraefikVersions(paths: BrcPaths, runtimes: Map<ManagedServic
   }
 }
 
-async function hasProtectedCleanupCandidates(
+interface ProtectedCandidatesCheck {
+  hasCandidates: boolean;
+  logs?: LogFile[];
+}
+
+async function checkProtectedCleanupCandidates(
   paths: BrcPaths, report: CleanupReport, cutoff: number, maxTotalBytes: number,
-): Promise<boolean> {
+): Promise<ProtectedCandidatesCheck> {
   if (await safeDirectory(paths.root, paths.runtime, report)) {
     try {
       const entries = await readdir(paths.runtime);
       if (entries.some((name) => SERVICE_NAMES.some((service) => name === `${service}.json`)
-          || name.endsWith('.ready.json') || name.endsWith('.ready.json.tmp'))) return true;
+          || name.endsWith('.ready.json') || name.endsWith('.ready.json.tmp'))) return { hasCandidates: true };
     } catch (error) {
       issue(report.failures, paths.runtime, error instanceof Error ? error.message : String(error));
-      return true;
+      return { hasCandidates: true };
     }
   }
   const logs = await collectLogs(paths, report);
   const totalLogBytes = logs.reduce((total, file) => total + file.size, 0);
-  if (logs.some((file) => file.modifiedAt <= cutoff) || totalLogBytes > maxTotalBytes) return true;
+  if (logs.some((file) => file.modifiedAt <= cutoff) || totalLogBytes > maxTotalBytes) return { hasCandidates: true, logs };
 
   const versionsPath = path.join(paths.traefik, 'versions');
-  if (!await safeDirectory(paths.root, versionsPath, report)) return false;
+  if (!await safeDirectory(paths.root, versionsPath, report)) return { hasCandidates: false, logs };
   try {
     const versions = await readdir(versionsPath);
-    if (versions.length === 0) return false;
+    if (versions.length === 0) return { hasCandidates: false, logs };
     let manifest: VersionManifest;
     try {
       const value = JSON.parse((await readRegularFile(path.join(paths.traefik, 'versions.json'))).contents) as Record<string, unknown>;
       if (value.version !== 1 || !validVersion(value.current)
-          || !(value.previous === null || validVersion(value.previous))) return true;
+          || !(value.previous === null || validVersion(value.previous))) return { hasCandidates: true, logs };
       manifest = { version: 1, current: value.current, previous: value.previous };
     } catch {
-      return true;
+      return { hasCandidates: true, logs };
     }
-    return versions.some((version) => version !== manifest.current && version !== manifest.previous);
+    return { hasCandidates: versions.some((version) => version !== manifest.current && version !== manifest.previous), logs };
   } catch (error) {
     issue(report.failures, versionsPath, error instanceof Error ? error.message : String(error));
-    return true;
+    return { hasCandidates: true, logs };
   }
 }
 
@@ -590,14 +603,15 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions = {}
   if (!await safeDirectory(paths.root, paths.runtime, report)) return report;
 
   await cleanLifecycleLock(paths, report, dryRun);
-  if (!await hasProtectedCleanupCandidates(paths, report, cutoff, settings.logs.maxTotalMiB * 1024 * 1024)) return report;
+  const candidatesCheck = await checkProtectedCleanupCandidates(paths, report, cutoff, settings.logs.maxTotalMiB * 1024 * 1024);
+  if (!candidatesCheck.hasCandidates) return report;
 
   try {
     await new LifecycleLock(paths, { waitMs: settings.runtime.lockWaitMs, pollMs: settings.runtime.lockPollMs }).runExclusive(async () => {
       const snapshot = await runtimeSnapshot(paths, report);
       const runtimes = await inspectServiceRecords(paths, report, dryRun, snapshot);
       await cleanReadyFiles(paths, report, dryRun, snapshot);
-      await cleanLogs(paths, runtimes, report, dryRun, cutoff, settings.logs.maxTotalMiB * 1024 * 1024);
+      await cleanLogs(paths, runtimes, report, dryRun, cutoff, settings.logs.maxTotalMiB * 1024 * 1024, candidatesCheck.logs);
       await cleanTraefikVersions(paths, runtimes, report, dryRun, cutoff);
     });
   } catch (error) {
