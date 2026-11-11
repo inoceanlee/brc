@@ -465,3 +465,14 @@ test('cleanup removes exited ready records while preserving live PIDs in the sam
   assert.equal(await exists(liveFile), true);
   assert.ok(report.preserved.some((item) => item.path === liveFile));
 });
+
+test('cleanup evicts stale ready records from previous boot without inspecting process', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const staleReadyFile = path.join(brcPaths.runtime, 'agent.stale-boot.ready.json');
+  await writeFile(staleReadyFile, JSON.stringify({ pid: process.pid, port: 54321 }));
+  const past = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+  await utimes(staleReadyFile, past, past);
+  const report = await cleanRuntime(brcPaths);
+  assert.equal(await exists(staleReadyFile), false);
+  assert.equal(report.preserved.some((item) => item.path === staleReadyFile), false);
+});
