@@ -2,7 +2,7 @@ import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises
 import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../config/settings.js';
-import { inspectProcess, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../lifecycle/processes.js';
+import { inspectProcess, isStaleFromPreviousBoot, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../lifecycle/processes.js';
 import { inspectProcesses } from '../lifecycle/identity.js';
 import { LifecycleLock } from '../lifecycle/lock.js';
 import { LockStore } from '../lifecycle/lock-store.js';
@@ -175,8 +175,11 @@ async function runtimeSnapshot(paths: BrcPaths, report: CleanupReport): Promise<
     if (!names.has(entry.name)
         && !entry.name.endsWith('.ready.json') && !entry.name.endsWith('.ready.json.tmp')) return;
     if (!entry.isFile() || entry.isSymbolicLink()) return;
+    const entryPath = path.join(paths.runtime, entry.name);
     try {
-      const value = JSON.parse((await readRegularFile(path.join(paths.runtime, entry.name))).contents) as unknown;
+      const fileInfo = await lstat(entryPath);
+      if (isStaleFromPreviousBoot(fileInfo.mtimeMs)) return;
+      const value = JSON.parse((await readRegularFile(entryPath)).contents) as unknown;
       if (value && typeof value === 'object' && 'pid' in value
           && typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0) pids.add(value.pid);
     } catch { /* Individual records are reported by their owner. */ }
@@ -313,7 +316,12 @@ async function cleanReadyFiles(paths: BrcPaths, report: CleanupReport, dryRun: b
       continue;
     }
     try {
+      const fileInfo = await lstat(filename);
       const file = await readRegularFile(filename);
+      if (isStaleFromPreviousBoot(fileInfo.mtimeMs)) {
+        await removeFile(paths.root, filename, report, dryRun);
+        continue;
+      }
       const value = JSON.parse(file.contents) as Record<string, unknown>;
       if (typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 0) throw new Error('Ready record has no valid PID.');
       if (!snapshotIdentity(snapshot, value.pid)) await removeUnchangedRecord(paths, filename, file.contents, value.pid, report, dryRun);
