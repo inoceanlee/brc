@@ -176,7 +176,7 @@ function errorCode(error: unknown): string | undefined {
   return undefined;
 }
 
-function isStaleFromPreviousBoot(mtimeMs: number): boolean {
+export function isStaleFromPreviousBoot(mtimeMs: number): boolean {
   const bootTimeMs = Date.now() - (os.uptime() * 1000);
   return mtimeMs < (bootTimeMs - 5000);
 }
