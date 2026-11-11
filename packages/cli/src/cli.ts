@@ -123,6 +123,7 @@ async function dispatch(args: string[], deps: CliDependencies, clean: () => Prom
       return (await deps.commands.updateTraefik()) ?? 0;
     case 'clean':
       requireNoExtraArgs(command, args);
+      skipAutomaticCleanup();
       await clean();
       return 0;
     case 'uninstall':
