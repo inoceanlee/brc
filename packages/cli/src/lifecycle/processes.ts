@@ -461,7 +461,8 @@ export class ProcessManager {
       try {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Health request deadline expired.');
-        return await this.requestHealth(record, Math.min(CONTROL_REQUEST_TIMEOUT_MS, remaining));
+        const attemptTimeout = attempt === 0 ? 500 : CONTROL_REQUEST_TIMEOUT_MS;
+        return await this.requestHealth(record, Math.min(attemptTimeout, remaining));
       } catch (error) {
         if (attempt === HEALTH_RETRY_COUNT || Date.now() >= deadline) throw error;
         await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())));
