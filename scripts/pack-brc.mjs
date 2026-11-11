@@ -129,6 +129,11 @@ function collectRuntimeDependencies(manifests) {
   return dependencies;
 }
 
+function formatPruneDetail(pruning) {
+  const megabytes = (pruning.bytesRemoved / (1024 * 1024)).toFixed(1);
+  return `精简完成 (${pruning.filesRemoved} 个文件，${megabytes} MiB)`;
+}
+
 try {
   verifyPnpmIsolation();
   process.stdout.write('BRC_DETAIL:构建工作区包\n');
@@ -188,7 +193,7 @@ try {
   await installLockedRuntimeDependencies({ workspaceRoot, stageDir, workDir, sourcePackages, runPnpm });
   process.stdout.write('BRC_DETAIL:精简暂存目录内的非运行时文件\n');
   const pruning = await pruneStagedDependencies(stageDir);
-  process.stdout.write(`BRC_DETAIL:精简 ${pruning.filesRemoved} 个文件，${pruning.bytesRemoved} 字节；分类 ${JSON.stringify(pruning.byCategory)}\n`);
+  process.stdout.write(`BRC_DETAIL:${formatPruneDetail(pruning)}\n`);
 
   const bundledSharedPath = path.join(stageDir, 'node_modules', 'brc-shared');
   await rm(bundledSharedPath, { recursive: true, force: true });
