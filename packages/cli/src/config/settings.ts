@@ -21,6 +21,13 @@ export interface BrcSettings {
     maxTotalMiB: number;
     rotateMiB: number;
   };
+  diagnostics: {
+    enabled: boolean;
+    resourceSampleMs: number;
+    functionSnapshotMs: number;
+    maxRecordBytes: number;
+    retentionDays: number;
+  };
   audit: {
     retentionDays: number;
     maxEntries: number;
@@ -45,6 +52,11 @@ export interface BrcSettingValues {
   'logs.retentionDays': number;
   'logs.maxTotalMiB': number;
   'logs.rotateMiB': number;
+  'diagnostics.enabled': boolean;
+  'diagnostics.resourceSampleMs': number;
+  'diagnostics.functionSnapshotMs': number;
+  'diagnostics.maxRecordBytes': number;
+  'diagnostics.retentionDays': number;
   'audit.retentionDays': number;
   'audit.maxEntries': number;
   'runtime.startupTimeoutMs': number;
@@ -71,6 +83,11 @@ export const BRC_SETTING_KEYS = [
   'audit.maxEntries',
   'logs.maxTotalMiB',
   'logs.rotateMiB',
+  'diagnostics.enabled',
+  'diagnostics.resourceSampleMs',
+  'diagnostics.functionSnapshotMs',
+  'diagnostics.maxRecordBytes',
+  'diagnostics.retentionDays',
   'runtime.startupTimeoutMs',
   'runtime.shutdownTimeoutMs',
   'runtime.lockWaitMs',
@@ -91,6 +108,11 @@ export const SETTING_ENVIRONMENT_KEYS: Readonly<Record<BrcSettingKey, string>> =
   'audit.maxEntries': 'BRC_AUDIT_MAX_ENTRIES',
   'logs.maxTotalMiB': 'BRC_LOG_MAX_TOTAL_MIB',
   'logs.rotateMiB': 'BRC_LOG_ROTATE_MIB',
+  'diagnostics.enabled': 'BRC_DIAGNOSTICS_ENABLED',
+  'diagnostics.resourceSampleMs': 'BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS',
+  'diagnostics.functionSnapshotMs': 'BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS',
+  'diagnostics.maxRecordBytes': 'BRC_DIAGNOSTICS_MAX_RECORD_BYTES',
+  'diagnostics.retentionDays': 'BRC_DIAGNOSTICS_RETENTION_DAYS',
   'runtime.startupTimeoutMs': 'BRC_RUNTIME_STARTUP_TIMEOUT_MS',
   'runtime.shutdownTimeoutMs': 'BRC_RUNTIME_SHUTDOWN_TIMEOUT_MS',
   'runtime.lockWaitMs': 'BRC_RUNTIME_LOCK_WAIT_MS',
@@ -112,6 +134,7 @@ export const DEFAULT_SETTINGS: Readonly<BrcSettings> = Object.freeze({
   }),
   services: Object.freeze({ relayPort: 3000, proxyPort: 13001, healthPort: 13002, publicUrl: '' }),
   logs: Object.freeze({ retentionDays: 7, maxTotalMiB: 50, rotateMiB: DEFAULT_MANAGED_LOG_MAX_BYTES / (1024 * 1024) }),
+  diagnostics: Object.freeze({ enabled: true, resourceSampleMs: 1_000, functionSnapshotMs: 10_000, maxRecordBytes: 65_536, retentionDays: 7 }),
   audit: Object.freeze({ retentionDays: 30, maxEntries: 50_000 }),
   runtime: Object.freeze({ startupTimeoutMs: 15_000, shutdownTimeoutMs: 3_000, lockWaitMs: 3_000, lockPollMs: 50 }),
 });
@@ -134,12 +157,13 @@ function copySettings(settings: Readonly<BrcSettings>): BrcSettings {
     },
     services: { ...settings.services },
     logs: { ...settings.logs },
+    diagnostics: { ...settings.diagnostics },
     audit: { ...settings.audit },
     runtime: { ...settings.runtime },
   };
 }
 
-function applySettingValue(settings: BrcSettings, key: BrcSettingKey, value: number | string): void {
+function applySettingValue(settings: BrcSettings, key: BrcSettingKey, value: number | string | boolean): void {
   const [section, ...parts] = key.split('.');
   let target = settings[section as keyof BrcSettings] as unknown as Record<string, unknown>;
   for (let index = 0; index < parts.length - 1; index += 1) {
@@ -158,7 +182,11 @@ export function withSettingValue<K extends BrcSettingKey>(
   return copy;
 }
 
-function validateSettingValue(key: BrcSettingKey, value: unknown): number | string {
+function validateSettingValue(key: BrcSettingKey, value: unknown): number | string | boolean {
+  if (key === 'diagnostics.enabled') {
+    if (typeof value !== 'boolean') throw new Error('diagnostics.enabled must be a boolean.');
+    return value;
+  }
   if (key === 'services.publicUrl') {
     if (typeof value !== 'string') throw new Error('services.publicUrl must be a URL string.');
     if (value === '') return value;
@@ -186,7 +214,16 @@ function validateSettingValue(key: BrcSettingKey, value: unknown): number | stri
     if (value < 1 || value > 65535) throw new Error(`${key} must be an integer from 1 to 65535.`);
     return value;
   }
-  if (key === 'logs.retentionDays' || key === 'audit.retentionDays') {
+  if (key === 'diagnostics.resourceSampleMs' && (value < 100 || value > 60_000)) {
+    throw new Error('diagnostics.resourceSampleMs must be between 100 and 60000.');
+  }
+  if (key === 'diagnostics.functionSnapshotMs' && (value < 1000 || value > 3_600_000)) {
+    throw new Error('diagnostics.functionSnapshotMs must be between 1000 and 3600000.');
+  }
+  if (key === 'diagnostics.maxRecordBytes' && (value < 256 || value > 65_536)) {
+    throw new Error('diagnostics.maxRecordBytes must be between 256 and 65536.');
+  }
+  if (key === 'logs.retentionDays' || key === 'audit.retentionDays' || key === 'diagnostics.retentionDays') {
     if (value < 0) throw new Error(`${key} must be zero or greater.`);
     return value;
   }
@@ -239,7 +276,11 @@ function collectFileValues(document: unknown): Map<BrcSettingKey, unknown> {
   return values;
 }
 
-function parseEnvironmentValue(key: BrcSettingKey, value: string): number | string {
+function parseEnvironmentValue(key: BrcSettingKey, value: string): number | string | boolean {
+  if (key === 'diagnostics.enabled') {
+    if (!/^(true|false|1|0)$/i.test(value)) throw new Error('BRC_DIAGNOSTICS_ENABLED must be true or false.');
+    return value.toLowerCase() === 'true' || value === '1';
+  }
   if (key === 'proxy.rate.period' || key === 'services.publicUrl') return validateSettingValue(key, value);
   if (!/^-?(?:\d+)(?:\.\d+)?$/.test(value.trim())) throw new Error(`${SETTING_ENVIRONMENT_KEYS[key]} must be a number.`);
   return validateSettingValue(key, Number(value));
@@ -252,6 +293,9 @@ function assertCrossFieldConstraints(settings: Readonly<BrcSettings>): void {
   }
   if (settings.logs.rotateMiB > settings.logs.maxTotalMiB) {
     throw new Error('logs.rotateMiB cannot exceed logs.maxTotalMiB.');
+  }
+  if (settings.diagnostics.maxRecordBytes > settings.logs.rotateMiB * 1024 * 1024) {
+    throw new Error('diagnostics.maxRecordBytes cannot exceed log rotation size.');
   }
 }
 

@@ -22,7 +22,7 @@ import {
   writeLastGoodText,
   writeSettings,
 } from './writer.js';
-import type { LifecycleLock } from '../lifecycle/lock.js';
+import type { LifecycleLock } from '../adapters/storage/lock.js';
 
 export interface SettingsManagerDependencies {
   lock: Pick<LifecycleLock, 'runExclusive'>;

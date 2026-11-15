@@ -1,11 +1,12 @@
 import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import type { BrcPaths } from '../config/paths.js';
-import { DEFAULT_SETTINGS, type BrcSettings } from '../config/settings.js';
-import { inspectProcess, isStaleFromPreviousBoot, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../lifecycle/processes.js';
-import { inspectProcesses } from '../lifecycle/identity.js';
-import { LifecycleLock } from '../lifecycle/lock.js';
-import { LockStore } from '../lifecycle/lock-store.js';
+import type { BrcPaths } from '../../config/paths.js';
+import { DEFAULT_SETTINGS, type BrcSettings } from '../../config/settings.js';
+import { inspectProcess, isStaleFromPreviousBoot, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../process/controller.js';
+import { FileSnapshotStore, snapshotStateLabel } from 'brc-shared';
+import { inspectProcesses } from '../process/identity.js';
+import { LifecycleLock } from './lock.js';
+import { LockStore } from './lock-store.js';
 
 const SERVICE_NAMES: ManagedServiceName[] = ['relay', 'traefik', 'agent'];
 
@@ -559,6 +560,71 @@ async function checkProtectedCleanupCandidates(
   }
 }
 
+/**
+ * Diagnostic snapshots follow the configured retention window. Snapshots whose
+ * process is still alive are preserved; corrupt files are only removed once
+ * they are older than the cutoff, so a malformed record stays inspectable.
+ */
+async function cleanDiagnosticSnapshots(
+  paths: BrcPaths,
+  report: CleanupReport,
+  dryRun: boolean,
+  cutoff: number,
+): Promise<void> {
+  const directory = paths.diagnostics;
+  if (!directory) return;
+  let info;
+  try { info = await lstat(directory); } catch (error) {
+    if (errorCode(error) !== 'ENOENT') issue(report.failures, directory, error instanceof Error ? error.message : String(error));
+    return;
+  }
+  if (!info.isDirectory() || info.isSymbolicLink()) {
+    issue(report.preserved, directory, 'Diagnostic directory is not a plain directory.');
+    return;
+  }
+  const store = new FileSnapshotStore({ directory });
+  for (const result of await store.list()) {
+    if (result.state === 'current') continue;
+    const snapshot = result.snapshot;
+    const age = snapshot ? Date.parse(snapshot.capturedAt) : Number.NaN;
+    if (Number.isFinite(age) && age > cutoff) continue;
+    const target = snapshot
+      ? path.join(directory, `${snapshot.service}-${snapshot.instanceId}.json`)
+      : null;
+    if (!target) {
+      issue(report.preserved, directory, `Unreadable snapshot (${snapshotStateLabel(result.state)}).`);
+      continue;
+    }
+    try {
+      const bytes = (await lstat(target)).size;
+      if (dryRun) { report.wouldRemove += 1; continue; }
+      await unlink(target);
+      report.removed += 1;
+      report.bytesRemoved += bytes;
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') issue(report.failures, target, error instanceof Error ? error.message : String(error));
+    }
+  }
+}
+
+async function hasExpiredDiagnosticSnapshots(paths: BrcPaths, cutoff: number): Promise<boolean> {
+  const directory = paths.diagnostics;
+  if (!directory) return false;
+  try {
+    const info = await lstat(directory);
+    if (!info.isDirectory() || info.isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
+  const store = new FileSnapshotStore({ directory });
+  for (const result of await store.list()) {
+    if (result.state === 'current') continue;
+    const age = result.snapshot ? Date.parse(result.snapshot.capturedAt) : Number.NaN;
+    if (!Number.isFinite(age) || age <= cutoff) return true;
+  }
+  return false;
+}
+
 export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions = {}): Promise<CleanupReport> {
   const report: CleanupReport = { removed: 0, bytesRemoved: 0, wouldRemove: 0, failures: [], preserved: [] };
   const dryRun = options.dryRun === true;
@@ -603,8 +669,9 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions = {}
   if (!await safeDirectory(paths.root, paths.runtime, report)) return report;
 
   await cleanLifecycleLock(paths, report, dryRun);
+  const diagnosticsCutoff = Date.now() - settings.diagnostics.retentionDays * 24 * 60 * 60 * 1000;
   const candidatesCheck = await checkProtectedCleanupCandidates(paths, report, cutoff, settings.logs.maxTotalMiB * 1024 * 1024);
-  if (!candidatesCheck.hasCandidates) return report;
+  if (!candidatesCheck.hasCandidates && !await hasExpiredDiagnosticSnapshots(paths, diagnosticsCutoff)) return report;
 
   try {
     await new LifecycleLock(paths, { waitMs: settings.runtime.lockWaitMs, pollMs: settings.runtime.lockPollMs }).runExclusive(async () => {
@@ -612,6 +679,7 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions = {}
       const runtimes = await inspectServiceRecords(paths, report, dryRun, snapshot);
       await cleanReadyFiles(paths, report, dryRun, snapshot);
       await cleanLogs(paths, runtimes, report, dryRun, cutoff, settings.logs.maxTotalMiB * 1024 * 1024, candidatesCheck.logs);
+      await cleanDiagnosticSnapshots(paths, report, dryRun, diagnosticsCutoff);
       await cleanTraefikVersions(paths, runtimes, report, dryRun, cutoff);
     });
   } catch (error) {
@@ -633,8 +701,10 @@ export async function removeBrcData(paths: BrcPaths): Promise<CleanupReport> {
     return report;
   }
 
-  for (const name of ['traefik', 'config', 'data', 'runtime', 'logs', 'tmp'] as const) {
-    const directory = path.resolve(paths[name]);
+  for (const name of ['traefik', 'config', 'data', 'runtime', 'logs', 'diagnostics', 'tmp'] as const) {
+    const candidate = paths[name];
+    if (!candidate) continue;
+    const directory = path.resolve(candidate);
     if (directory !== path.join(root, name)) {
       issue(report.preserved, directory, 'Path does not match the expected BRC data directory.');
       continue;

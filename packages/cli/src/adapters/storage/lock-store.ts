@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { BrcPaths } from '../config/paths.js';
-import type { ProcessIdentity } from './identity.js';
+import type { BrcPaths } from '../../config/paths.js';
+import type { ProcessIdentity } from '../process/identity.js';
 
 export interface LockOwner extends ProcessIdentity {
   version: 1;

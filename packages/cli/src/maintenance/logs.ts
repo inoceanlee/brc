@@ -3,7 +3,7 @@ import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
 
-export type LogComponent = 'relay' | 'agent' | 'traefik';
+export type LogComponent = 'relay' | 'agent' | 'traefik' | 'cli';
 
 const LOG_COMPONENTS: readonly LogComponent[] = ['relay', 'agent', 'traefik'];
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -85,6 +85,12 @@ async function readComponent(paths: BrcPaths, component: LogComponent): Promise<
   if (chunks.length === 0) return null;
   const contents = Buffer.concat(chunks);
   return contents.length > MAX_OUTPUT_BYTES ? contents.subarray(contents.length - MAX_OUTPUT_BYTES) : contents;
+}
+
+export async function readManagedLog(paths: BrcPaths, component: LogComponent): Promise<string | null> {
+  if (!await verifyLogDirectory(paths)) return null;
+  const contents = await readComponent(paths, component);
+  return contents?.toString('utf8') ?? null;
 }
 
 export async function showLogs(

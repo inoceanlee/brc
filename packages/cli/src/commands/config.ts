@@ -7,6 +7,7 @@ export interface ConfigCommandDependencies {
   manager: SettingsManager;
   paths: BrcPaths;
   write: (message: string) => void;
+  json?: boolean;
 }
 
 class ConfigUsageError extends Error {
@@ -25,14 +26,19 @@ export async function runConfigCommand(
   switch (command) {
     case 'show': {
       if (args.length !== 1) throw usageError();
-      const rows = dependencies.manager.entries().map(({ key, value, source }) => `${key} = ${value} (${source})`);
+      const entries = dependencies.manager.entries();
+      if (dependencies.json) {
+        dependencies.write(JSON.stringify({ entries }));
+        return 0;
+      }
+      const rows = entries.map(({ key, value, source }) => `${key} = ${value} (${source})`);
       dependencies.write(rows.join('\n'));
       return 0;
     }
     case 'get': {
       if (args.length !== 2 || !keyArgument || !isBrcSettingKey(keyArgument)) throw usageError();
       const { value, source } = dependencies.manager.get(keyArgument);
-      dependencies.write(`${keyArgument} = ${value} (${source})`);
+      dependencies.write(dependencies.json ? JSON.stringify({ key: keyArgument, value, source }) : `${keyArgument} = ${value} (${source})`);
       return 0;
     }
     case 'set': {
@@ -54,7 +60,8 @@ export async function runConfigCommand(
     }
     case 'path': {
       if (args.length !== 1) throw usageError();
-      dependencies.write(path.join(dependencies.paths.config, 'brc.yaml'));
+      const file = path.join(dependencies.paths.config, 'brc.yaml');
+      dependencies.write(dependencies.json ? JSON.stringify({ path: file }) : file);
       return 0;
     }
     default:

@@ -12,7 +12,7 @@ export interface ProcessIdentity {
 }
 
 const run = promisify(execFile);
-const nativeBinary = fileURLToPath(new URL('../native/win32-x64/brc-process.exe', import.meta.url));
+const nativeBinary = fileURLToPath(new URL('../../native/win32-x64/brc-process.exe', import.meta.url));
 
 function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;

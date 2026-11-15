@@ -7,32 +7,14 @@ import { realpathSync } from 'node:fs';
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { BrcPaths } from '../config/paths.js';
-import { DEFAULT_SETTINGS, HEALTH_REQUEST_TIMEOUT_MS, HEALTH_RETRY_COUNT, IDENTITY_INSPECTION_RETRY_COUNT, type BrcSettings } from '../config/settings.js';
+import type { BrcPaths } from '../../config/paths.js';
+import { DEFAULT_SETTINGS, HEALTH_REQUEST_TIMEOUT_MS, HEALTH_RETRY_COUNT, IDENTITY_INSPECTION_RETRY_COUNT, type BrcSettings } from '../../config/settings.js';
 import { inspectProcess, inspectProcesses, type ProcessIdentity } from './identity.js';
 export { inspectProcess } from './identity.js';
 export type { ProcessIdentity } from './identity.js';
 
-export type ManagedServiceName = 'relay' | 'traefik' | 'agent';
-export type ServiceState = 'stopped' | 'starting' | 'pairing' | 'running' | 'degraded';
-
-export interface ServiceStatus {
-  name: ManagedServiceName;
-  state: ServiceState;
-  pid: number | null;
-  detail: string;
-}
-
-export interface ManagedServiceSpec {
-  name: ManagedServiceName;
-  entrypoint: string;
-  workspaceRoot: string;
-  cwd: string;
-  args?: string[];
-  env?: NodeJS.ProcessEnv;
-  startupTimeoutMs?: number;
-}
-
+import type { ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
+export type { ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
 
 export interface ManagedProcessRecord extends ProcessIdentity {
   version: 1;

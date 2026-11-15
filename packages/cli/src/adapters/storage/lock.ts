@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
-import type { BrcPaths } from '../config/paths.js';
-import { DEFAULT_SETTINGS } from '../config/settings.js';
-import { inspectProcess, type ProcessIdentity } from './identity.js';
+import type { BrcPaths } from '../../config/paths.js';
+import { DEFAULT_SETTINGS } from '../../config/settings.js';
+import { inspectProcess, type ProcessIdentity } from '../process/identity.js';
 import { LockStore, type LockOwner } from './lock-store.js';
 
 export interface LockWaitOptions { waitMs?: number; pollMs?: number }

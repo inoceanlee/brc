@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { ManagedServiceSpec } from './processes.js';
+import type { ManagedServiceSpec } from '../process/controller.js';
 
 export class RelayDatabase {
   constructor(

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import type { BrcPaths } from '../config/paths.js';
-import { removeBrcData, type CleanupReport } from './cleanup.js';
+import { removeBrcData, type CleanupReport } from '../adapters/storage/cleanup.js';
 import { GlobalPackageRemoval, type GlobalPackageManager, BRC_PACKAGE_NAME as PACKAGE_NAME } from './global-package.js';
 
 // Global shims preserve the launch path; pnpm can resolve imported modules into its content store.

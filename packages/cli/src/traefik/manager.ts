@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
 import type { BrcSettings } from '../config/settings.js';
-import type { LockedServiceOperations, ServiceManager } from '../lifecycle/services.js';
+import type { LockedServiceOperations, ServiceManager } from '../core/lifecycle/workflow.js';
 import { processArchive, readChecksum, renderConfig, type TraefikRelease, type VersionManifest } from './core.js';
 import { readManifest, TraefikInput, type TraefikInputOptions } from './input.js';
 import { ensureSafeDirectory, TraefikOutput } from './output.js';

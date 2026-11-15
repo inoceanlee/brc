@@ -15,6 +15,7 @@ export interface BrcPaths {
   data: string;
   runtime: string;
   logs: string;
+  diagnostics: string;
   tmp: string;
 }
 
@@ -75,6 +76,7 @@ export class PlatformEnvironment {
       data: p.join(root, 'data'),
       runtime: p.join(root, 'runtime'),
       logs: p.join(root, 'logs'),
+      diagnostics: p.join(root, 'diagnostics'),
       tmp: p.join(root, 'tmp'),
     };
   }
