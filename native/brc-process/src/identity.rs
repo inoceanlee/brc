@@ -22,14 +22,19 @@ pub fn positive_pids(args: &[String]) -> Result<Vec<u32>, &'static str> {
 }
 
 pub fn row(pid: u32, result: Result<Option<Identity>, &'static str>) -> Value {
-    match result {
+    let started = std::time::Instant::now();
+    let value = match result {
         Ok(Some(i)) => json!({
             "pid": pid, "status": "found", "createdAt": i.created_at,
             "executablePath": i.executable_path, "commandLine": i.command_line,
         }),
         Ok(None) => json!({ "pid": pid, "status": "not_found" }),
         Err(code) => json!({ "pid": pid, "status": "error", "code": code }),
+    };
+    if crate::diagnostics::enabled() {
+        crate::diagnostics::record("row", started.elapsed().as_micros());
     }
+    value
 }
 
 #[cfg(test)]
