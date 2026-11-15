@@ -108,3 +108,35 @@ test('unsafe instance identifiers are rejected before touching disk', async (t) 
   await assert.rejects(snapshots.write(snapshot({ instanceId: '../escape' })), /not safe/);
   await assert.rejects(snapshots.write(snapshot({ service: 'other' })), /Unknown diagnostic snapshot service/);
 });
+
+test('session failure notes stay bounded when sampling keeps failing', async () => {
+  const { DiagnosticSession } = await import('../packages/shared/dist/diagnostics/core/session.js');
+  const { FunctionTiming } = await import('../packages/shared/dist/diagnostics/core/functions.js');
+  const recorded = [];
+  const store = {
+    write: async (value) => { recorded.push(value); },
+    read: async () => ({ state: 'missing', snapshot: null }),
+    list: async () => [],
+    prune: async () => 0,
+  };
+  let failures = 0;
+  const resources = {
+    sample: async () => {
+      failures += 1;
+      throw Object.assign(new Error('sample ' + failures), { code: 'E' + failures });
+    },
+  };
+  const session = new DiagnosticSession({
+    service: 'relay', instanceId: 'bounded', store, functions: new FunctionTiming(), resources,
+  });
+  for (let index = 0; index < 40; index += 1) await session.capture('running');
+  assert.equal(recorded.length, 0, 'failed sampling must not fabricate snapshots');
+  resources.sample = async () => ({
+    schema: 1, capturedAt: new Date().toISOString(), source: 'node', windowMs: 0,
+    cpuUserMs: 0, cpuSystemMs: 0, cpuPercent: null, rssBytes: 1, heapUsedBytes: 1, peak: null,
+  });
+  await session.capture('running');
+  const snapshot = recorded.at(-1);
+  assert.ok(snapshot.partialFailures.length <= 8);
+  assert.equal(new Set(snapshot.partialFailures).size, snapshot.partialFailures.length);
+});

@@ -583,16 +583,19 @@ async function cleanDiagnosticSnapshots(
     return;
   }
   const store = new FileSnapshotStore({ directory });
-  for (const result of await store.list()) {
-    if (result.state === 'current') continue;
+  const files = await readdir(directory);
+  for (const file of files) {
+    const match = /^(cli|relay|agent|traefik)-([A-Za-z0-9_.-]{1,128})\.json$/.exec(file);
+    if (!match) continue;
+    const target = path.join(directory, file);
+    const result = await store.read(match[1] as 'cli' | 'relay' | 'agent' | 'traefik', match[2]);
     const snapshot = result.snapshot;
-    const age = snapshot ? Date.parse(snapshot.capturedAt) : Number.NaN;
-    if (Number.isFinite(age) && age > cutoff) continue;
-    const target = snapshot
-      ? path.join(directory, `${snapshot.service}-${snapshot.instanceId}.json`)
-      : null;
-    if (!target) {
-      issue(report.preserved, directory, `Unreadable snapshot (${snapshotStateLabel(result.state)}).`);
+    let deadline = snapshot ? Date.parse(snapshot.capturedAt) : Number.NaN;
+    if (!Number.isFinite(deadline)) {
+      try { deadline = (await lstat(target)).mtimeMs; } catch { continue; }
+    }
+    if (deadline > cutoff) {
+      if (result.state === 'corrupt') issue(report.preserved, target, `Unreadable snapshot (${snapshotStateLabel(result.state)}).`);
       continue;
     }
     try {

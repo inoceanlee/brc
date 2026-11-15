@@ -122,7 +122,7 @@ export async function startDiagnostics(options: DiagnosticsRuntimeOptions): Prom
   });
   const session = new DiagnosticSession({
     service: options.component === 'native' ? 'cli' : options.component,
-    instanceId: options.instanceId ?? `${options.component}-${process.pid}`,
+    instanceId: options.instanceId ?? String(process.pid),
     store,
     functions,
     resources,
@@ -142,7 +142,7 @@ export async function startDiagnostics(options: DiagnosticsRuntimeOptions): Prom
         component: options.component,
         source: logOptions.source ?? { file: path.basename(process.argv[1] ?? 'unknown') },
         message,
-        instanceId: options.instanceId ?? `${options.component}-${process.pid}`,
+        instanceId: options.instanceId ?? String(process.pid),
         ...(logOptions.errorCode ? { errorCode: logOptions.errorCode } : {}),
         ...(logOptions.error ? { stack: errorText(logOptions.error) } : {}),
         ...(logOptions.data ? { data: logOptions.data } : {}),

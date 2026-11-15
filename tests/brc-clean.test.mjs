@@ -500,3 +500,14 @@ test('cleanup removes expired diagnostic snapshots and keeps live ones', async (
   assert.equal((await store.read('relay', 'expired')).state, 'missing');
   assert.equal((await store.read('relay', 'fresh')).state, 'current');
 });
+
+test('cleanup removes corrupt diagnostic snapshots once they age out', async (t) => {
+  const { root, paths: brcPaths } = await makeRoot(t);
+  const broken = path.join(brcPaths.diagnostics, 'relay-broken.json');
+  await writeFile(broken, '{not json');
+  const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  await utimes(broken, old, old);
+  const report = await cleanRuntime(brcPaths);
+  assert.ok(report.removed >= 1);
+  assert.equal(await exists(broken), false);
+});

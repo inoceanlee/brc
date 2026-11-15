@@ -122,9 +122,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'uninstall',
-    usage: 'brc uninstall --yes',
+    usage: 'brc uninstall [--yes]',
     summary: 'Stop services and remove BRC data and the global package.',
-    examples: ['brc uninstall --yes'],
+    examples: ['brc uninstall', 'brc uninstall --yes'],
   },
   {
     name: 'diagnose',
@@ -262,8 +262,9 @@ export function parseCommand(argv: string[]): ParsedCommand {
       if (rest.length !== 1 || rest[0] !== 'traefik') throw new UsageError(`Usage: ${specFor('update').usage}`);
       return { ...base, name, args: rest };
     case 'uninstall':
-      if (rest.length === 0) throw new UsageError('Non-interactive uninstall requires --yes: brc uninstall --yes');
-      if (rest.length !== 1 || rest[0] !== '--yes') throw new UsageError(`Usage: ${specFor('uninstall').usage}`);
+      if (rest.length > 1 || (rest.length === 1 && rest[0] !== '--yes')) {
+        throw new UsageError(`Usage: ${specFor('uninstall').usage}`);
+      }
       return { ...base, name, args: rest };
     case 'diagnose': {
       const values = rest.filter((value) => value !== '--json');

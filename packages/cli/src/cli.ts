@@ -225,7 +225,7 @@ async function main(): Promise<void> {
   lifecycleLock.updateWaitSettings({ waitMs: settings.runtime.lockWaitMs, pollMs: settings.runtime.lockPollMs });
   const diagnostics = await startDiagnostics({
     component: 'cli',
-    instanceId: `cli-${process.pid}`,
+    instanceId: String(process.pid),
     env: { ...process.env, ...diagnosticEnvironment(settings, paths) },
     manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
     logFile: path.join(paths.logs, 'cli-diagnostics.log'),
@@ -392,7 +392,7 @@ if (isMainModule()) {
     const { settings } = await readSettings(paths, process.env);
     const diagnostics = await startDiagnostics({
       component: 'traefik',
-      instanceId: `traefik-${process.pid}`,
+      instanceId: String(process.pid),
       env: { ...process.env, ...diagnosticEnvironment(settings, paths) },
       manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
       logFile: path.join(paths.logs, 'traefik-diagnostics.log'),

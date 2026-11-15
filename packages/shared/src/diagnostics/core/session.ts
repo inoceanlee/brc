@@ -25,7 +25,8 @@ export class DiagnosticSession {
   private timer: NodeJS.Timeout | undefined;
   private readonly intervalMs: number;
   private readonly now: () => Date;
-  private readonly partialFailures: string[] = [];
+  private readonly partialFailures = new Set<string>();
+  private static readonly MAX_PARTIAL_FAILURES = 8;
 
   constructor(private readonly options: DiagnosticSessionOptions) {
     this.intervalMs = options.snapshotIntervalMs ?? 10_000;
@@ -55,7 +56,7 @@ export class DiagnosticSession {
       status,
       functions: this.options.functions.snapshot(),
       resources,
-      ...(this.partialFailures.length ? { partialFailures: [...new Set(this.partialFailures)] } : {}),
+      ...(this.partialFailures.size ? { partialFailures: [...this.partialFailures] } : {}),
     };
     try {
       await this.options.store.write(snapshot);
@@ -71,7 +72,8 @@ export class DiagnosticSession {
     const message = typeof candidate?.code === 'string'
       ? candidate.code
       : String(candidate?.message ?? error);
-    this.partialFailures.push(message.slice(0, 128));
+    if (this.partialFailures.size >= DiagnosticSession.MAX_PARTIAL_FAILURES) return;
+    this.partialFailures.add(message.slice(0, 128));
   }
 
   async stop(): Promise<void> {

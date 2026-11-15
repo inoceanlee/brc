@@ -49,12 +49,14 @@ pub fn record(name: &'static str, elapsed_us: u128) {
 #[macro_export]
 macro_rules! brc_probe {
     ($name:expr, $body:block) => {{
-        let __brc_started = std::time::Instant::now();
-        let __brc_value = $body;
         if $crate::diagnostics::enabled() {
+            let __brc_started = std::time::Instant::now();
+            let __brc_value = $body;
             $crate::diagnostics::record($name, __brc_started.elapsed().as_micros());
+            __brc_value
+        } else {
+            $body
         }
-        __brc_value
     }};
 }
 
