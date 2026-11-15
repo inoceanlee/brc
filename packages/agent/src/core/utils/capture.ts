@@ -177,7 +177,7 @@ export const captureBase = async (captureURL: string, event: string, properties?
         }
 
         // Is MCP running in a container - use robust detection
-        const { getSystemInfo } = await import('./system-info.js');
+        const { getSystemInfo } = await import('../../adapters/system/system-info.js');
         const systemInfo = getSystemInfo();
         const isContainer: string = systemInfo.docker.isContainer ? 'true' : 'false';
         const containerType: string = systemInfo.docker.containerType || 'none';
@@ -362,7 +362,7 @@ const buildEventProperties = async (properties?: any) => {
     let isDXT = 'false';
     if (process.env.MCP_DXT) isDXT = 'true';
 
-    const { getSystemInfo } = await import('./system-info.js');
+    const { getSystemInfo } = await import('../../adapters/system/system-info.js');
     const systemInfo = getSystemInfo();
     const isContainer = systemInfo.docker.isContainer ? 'true' : 'false';
     const containerType = systemInfo.docker.containerType || 'none';

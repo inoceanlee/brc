@@ -1,10 +1,10 @@
 import { spawn } from 'child_process';
 import path from 'path';
-import { TerminalSession, CommandExecutionResult, ActiveSession, TimingInfo, OutputEvent } from './types.js';
-import { DEFAULT_COMMAND_TIMEOUT } from './config.js';
-import { configManager } from './config-manager.js';
-import {capture} from "./utils/capture.js";
-import { analyzeProcessState } from './utils/process-detection.js';
+import { TerminalSession, CommandExecutionResult, ActiveSession, TimingInfo, OutputEvent } from '../../core/types.js';
+import { DEFAULT_COMMAND_TIMEOUT } from '../../core/config.js';
+import { configManager } from '../../core/config-manager.js';
+import {capture} from "../../core/utils/capture.js";
+import { analyzeProcessState } from '../system/process-detection.js';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
 import fs from 'node:fs';

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { TextFileHandler } from '../packages/agent/dist/core/utils/files/text.js';
+import { TextFileHandler } from '../packages/agent/dist/adapters/filesystem/files/text.js';
 
 async function withFile(content, run) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-text-test-'));

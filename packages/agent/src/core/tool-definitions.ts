@@ -4,7 +4,7 @@
  * UI-preview _meta entries removed; descriptions otherwise unchanged.
  */
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { getSystemInfo, getOSSpecificGuidance, getPathGuidance } from './utils/system-info.js';
+import { getSystemInfo, getOSSpecificGuidance, getPathGuidance } from '../adapters/system/system-info.js';
 import {
   StartProcessArgsSchema, ReadProcessOutputArgsSchema, InteractWithProcessArgsSchema,
   ForceTerminateArgsSchema, ListSessionsArgsSchema, KillProcessArgsSchema,

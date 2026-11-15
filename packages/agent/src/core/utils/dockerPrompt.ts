@@ -1,5 +1,5 @@
 import { configManager } from '../config-manager.js';
-import { usageTracker } from './usageTracker.js';
+import { usageTracker } from '../../adapters/telemetry/usageTracker.js';
 
 /**
  * Docker MCP Gateway prompt utilities

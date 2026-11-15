@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { resolveAgentHome } from '../config.js';
+import { resolveAgentHome } from '../../core/config.js';
 import { appendRotatingLog } from 'brc-shared';
 
 export interface FuzzySearchLogEntry {

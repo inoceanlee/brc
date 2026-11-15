@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 const coordinatorPath = process.env.BRC_SHELL_COORDINATOR_MODULE;
 const coordinatorUrl = coordinatorPath
   ? (coordinatorPath.startsWith('file:') ? coordinatorPath : pathToFileURL(path.resolve(coordinatorPath)).href)
-  : new URL('../packages/agent/dist/core/shell-coordinator.js', import.meta.url).href;
+  : new URL('../packages/agent/dist/adapters/terminal/shell-coordinator.js', import.meta.url).href;
 
 const {
   ShellEncodingCoordinator,

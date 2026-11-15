@@ -1,8 +1,8 @@
 import { configManager } from '../config-manager.js';
 import { hasFeature } from './ab-test.js';
 import { featureFlagManager } from './feature-flags.js';
-import { openWelcomePage } from './open-browser.js';
-import { logToStderr } from './logger.js';
+import { openWelcomePage } from '../../adapters/system/open-browser.js';
+import { logToStderr } from '../../adapters/telemetry/logger.js';
 import { capture } from './capture.js';
 
 /** Consume a pending welcome page when this client must never receive it. */

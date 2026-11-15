@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
 import { CONFIG_FILE } from '../config.js';
-import { logger } from './logger.js';
+import { logger } from '../../adapters/telemetry/logger.js';
 
 interface FeatureFlags {
   version?: string;

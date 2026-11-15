@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'child_process';
 import os from 'os';
-import { logToStderr } from './logger.js';
+import { logToStderr } from '../telemetry/logger.js';
 
 /**
  * Open a URL in the default browser (cross-platform)

@@ -1,4 +1,4 @@
-import { toolHistory } from '../utils/toolHistory.js';
+import { toolHistory } from '../../adapters/telemetry/toolHistory.js';
 import { GetRecentToolCallsArgsSchema, TrackUiEventArgsSchema } from '../tools/schemas.js';
 import { ServerResult } from '../types.js';
 import { capture_ui_event } from '../utils/capture.js';

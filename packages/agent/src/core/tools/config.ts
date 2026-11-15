@@ -1,6 +1,6 @@
 import { configManager, ServerConfig } from '../config-manager.js';
 import { SetConfigValueArgsSchema } from './schemas.js';
-import { getSystemInfo } from '../utils/system-info.js';
+import { getSystemInfo } from '../../adapters/system/system-info.js';
 import { currentClient } from '../../context.js';
 import { featureFlagManager } from '../utils/feature-flags.js';
 import { access, readFile } from 'node:fs/promises';

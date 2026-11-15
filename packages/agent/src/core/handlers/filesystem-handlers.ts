@@ -11,7 +11,7 @@ import {
     type FileResult,
     type MultiFileResult
 } from '../tools/filesystem.js';
-import type { ReadOptions } from '../utils/files/base.js';
+import type { ReadOptions } from '../../adapters/filesystem/files/base.js';
 
 import { ServerResult } from '../types.js';
 import { withTimeout } from '../utils/withTimeout.js';

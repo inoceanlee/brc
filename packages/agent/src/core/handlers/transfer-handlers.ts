@@ -7,7 +7,7 @@ import {
   prepareFileReceive,
   receiveFileTransfer,
   sendFileTransfer,
-} from '../file-transfer.js';
+} from '../../adapters/filesystem/file-transfer.js';
 import type { ServerResult } from '../types.js';
 
 function errorResult(message: string): ServerResult {

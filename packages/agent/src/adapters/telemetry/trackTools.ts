@@ -1,5 +1,5 @@
 import { appendRotatingLog } from 'brc-shared';
-import { TOOL_CALL_FILE } from '../config.js';
+import { TOOL_CALL_FILE } from '../../core/config.js';
 
 /**
  * Track tool calls and save them to a log file
@@ -18,7 +18,7 @@ export async function trackToolCall(toolName: string, args?: unknown): Promise<v
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    const { capture } = await import('./capture.js');
+    const { capture } = await import('../../core/utils/capture.js');
         
     // Send a final telemetry event noting that the user has opted out
     // This helps us track opt-out rates while respecting the user's choice

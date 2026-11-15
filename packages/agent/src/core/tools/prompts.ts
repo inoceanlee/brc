@@ -1,5 +1,5 @@
 import { ServerResult } from '../types.js';
-import { usageTracker } from '../utils/usageTracker.js';
+import { usageTracker } from '../../adapters/telemetry/usageTracker.js';
 import { capture } from '../utils/capture.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';

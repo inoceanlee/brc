@@ -6,7 +6,7 @@ import * as handlers from './core/handlers/index.js';
 import { getConfig, setConfigValue } from './core/tools/config.js';
 import { getUsageStats } from './core/tools/usage.js';
 import { buildToolDefinitions, EXCLUDED_TOOLS, type ToolDefinition } from './core/tool-definitions.js';
-import { usageTracker } from './core/utils/usageTracker.js';
+import { usageTracker } from './adapters/telemetry/usageTracker.js';
 import type { ToolResult } from 'brc-shared';
 
 type Args = Record<string, unknown>;

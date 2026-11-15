@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 const modulePath = process.env.BRC_TERMINAL_ENCODING_MODULE;
 const moduleUrl = modulePath
   ? (modulePath.startsWith('file:') ? modulePath : pathToFileURL(path.resolve(modulePath)).href)
-  : new URL('../packages/agent/dist/core/terminal-encoding.js', import.meta.url).href;
+  : new URL('../packages/agent/dist/adapters/terminal/terminal-encoding.js', import.meta.url).href;
 const {
   ShellEncodingProbe,
   createShellEncodingDecoder,
@@ -20,7 +20,7 @@ const {
   buildPosixShellProbeCommand,
   normalizeEncoding,
 } = await import(moduleUrl);
-const terminalManagerUrl = new URL('../packages/agent/dist/core/terminal-manager.js', import.meta.url).href;
+const terminalManagerUrl = new URL('../packages/agent/dist/adapters/terminal/terminal-manager.js', import.meta.url).href;
 
 test('Windows shell probe preserves supported stdin/stdout/stderr encodings and exit codes', { skip: process.platform !== 'win32' }, async () => {
   const { TerminalManager } = await import(terminalManagerUrl);

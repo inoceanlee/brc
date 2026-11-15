@@ -18,8 +18,8 @@ import {
   ShellEncodingCoordinator,
   DefaultShellEncodingSession,
   ShellProbeFeedResult,
-} from '../packages/agent/dist/core/shell-coordinator.js';
-import { resolveDynamicShellPath } from '../packages/agent/dist/core/terminal-manager.js';
+} from '../packages/agent/dist/adapters/terminal/shell-coordinator.js';
+import { resolveDynamicShellPath } from '../packages/agent/dist/adapters/terminal/terminal-manager.js';
 
 /* -------------------------------------------------------------------------- */
 /*                               Archive Helpers                              */

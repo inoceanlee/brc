@@ -26,7 +26,7 @@ import path from 'path';
 import { detectLineEnding, normalizeLineEndings } from '../utils/lineEndingHandler.js';
 import { configManager } from '../config-manager.js';
 import { AGENT_DEFAULTS } from '../config.js';
-import { fuzzySearchLogger, type FuzzySearchLogEntry } from '../utils/fuzzySearchLogger.js';
+import { fuzzySearchLogger, type FuzzySearchLogEntry } from '../../adapters/telemetry/fuzzySearchLogger.js';
 import { resolvePreviewFileType } from '../ui/file-preview/shared/preview-file-types.js';
 import { resolveAbsolutePath } from '../handlers/filesystem-handlers.js';
 
@@ -421,10 +421,10 @@ export async function handleEditBlock(args: unknown): Promise<ServerResult> {
 
     // Validate path and resolve handler once — used by both dispatch paths below
     let validatedPath: string;
-    let handler: Awaited<ReturnType<typeof import('../utils/files/factory.js').getFileHandler>>;
+    let handler: Awaited<ReturnType<typeof import('../../adapters/filesystem/files/factory.js').getFileHandler>>;
     try {
         validatedPath = await validatePath(parsed.file_path);
-        const { getFileHandler } = await import('../utils/files/factory.js');
+        const { getFileHandler } = await import('../../adapters/filesystem/files/factory.js');
         handler = await getFileHandler(validatedPath);
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);

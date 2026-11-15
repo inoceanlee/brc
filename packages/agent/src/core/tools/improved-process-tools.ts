@@ -1,9 +1,9 @@
-import { terminalManager, MAX_BUFFERED_OUTPUT_CHARS } from '../terminal-manager.js';
+import { terminalManager, MAX_BUFFERED_OUTPUT_CHARS } from '../../adapters/terminal/terminal-manager.js';
 import { commandManager } from '../command-manager.js';
 import { StartProcessArgsSchema, ReadProcessOutputArgsSchema, InteractWithProcessArgsSchema, ForceTerminateArgsSchema, ListSessionsArgsSchema } from './schemas.js';
 import { capture } from "../utils/capture.js";
 import { ServerResult } from '../types.js';
-import { analyzeProcessState, cleanProcessOutput, formatProcessStateMessage, ProcessState } from '../utils/process-detection.js';
+import { analyzeProcessState, cleanProcessOutput, formatProcessStateMessage, ProcessState } from '../../adapters/system/process-detection.js';
 import * as os from 'os';
 import { configManager } from '../config-manager.js';
 import { AGENT_DEFAULTS } from '../config.js';

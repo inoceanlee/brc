@@ -1,5 +1,5 @@
 import { ServerResult } from '../types.js';
-import { usageTracker } from '../utils/usageTracker.js';
+import { usageTracker } from '../../adapters/telemetry/usageTracker.js';
 import { capture } from '../utils/capture.js';
 import { configManager } from '../config-manager.js';
 import { exec } from 'child_process';

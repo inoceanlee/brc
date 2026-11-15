@@ -1,5 +1,5 @@
-import { ServerResult } from '../types.js';
-import { resolveAgentHome } from '../config.js';
+import { ServerResult } from '../../core/types.js';
+import { resolveAgentHome } from '../../core/config.js';
 import { ToolHistoryStorage } from './toolHistoryStorage.js';
 
 export interface ToolCallRecord {

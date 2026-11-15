@@ -8,8 +8,8 @@ import { capture } from '../utils/capture.js';
 import { withTimeout, runWithAbortableTimeout } from '../utils/withTimeout.js';
 import { configManager } from '../config-manager.js';
 import { AGENT_DEFAULTS } from '../config.js';
-import { getFileHandler, TextFileHandler } from '../utils/files/index.js';
-import type { ReadOptions, FileResult, PdfPageItem } from '../utils/files/base.js';
+import { getFileHandler, TextFileHandler } from '../../adapters/filesystem/files/index.js';
+import type { ReadOptions, FileResult, PdfPageItem } from '../../adapters/filesystem/files/base.js';
 import { isPdfFile } from "./mime-types.js";
 import { parsePdfToMarkdown, editPdf, PdfOperations, PdfMetadata, parseMarkdownToPdf } from './pdf/index.js';
 import { isBinaryFile } from 'isbinaryfile';
@@ -336,7 +336,7 @@ export async function validatePath(requestedPath: string): Promise<string> {
 }
 
 // Re-export FileResult from base for consumers
-export type { FileResult } from '../utils/files/base.js';
+export type { FileResult } from '../../adapters/filesystem/files/base.js';
 
 type PdfPayload = {
     metadata: PdfMetadata;

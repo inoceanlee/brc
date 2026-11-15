@@ -11,10 +11,10 @@ import { pathToFileURL } from 'node:url';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'brc-history-'));
 process.env.BRC_HOME = path.join(root, 'home');
-const { toolHistory } = await import('../packages/agent/dist/core/utils/toolHistory.js');
-const { fuzzySearchLogger } = await import('../packages/agent/dist/core/utils/fuzzySearchLogger.js');
+const { toolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
+const { fuzzySearchLogger } = await import('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js');
 const { resolveAgentHome } = await import('../packages/agent/dist/core/config.js');
-const { ToolHistoryStorage } = await import('../packages/agent/dist/core/utils/toolHistoryStorage.js');
+const { ToolHistoryStorage } = await import('../packages/agent/dist/adapters/telemetry/toolHistoryStorage.js');
 const file = path.join(resolveAgentHome(process.env), 'tool-history.jsonl');
 const output = { content: [{ type: 'text', text: 'ok' }] };
 
@@ -79,7 +79,7 @@ test('simultaneous additions retain their order in the persisted queue', async (
 test('history initialization reports lock contention instead of exposing an empty cache', () => {
   const directory = path.join(root, 'locked-startup');
   const storage = new ToolHistoryStorage(directory);
-  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/core/utils/toolHistory.js')).href;
+  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/adapters/telemetry/toolHistory.js')).href;
   storage.withLock(() => {
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(moduleUrl)})`], {
       env: { ...process.env, BRC_HOME: directory },
@@ -203,7 +203,7 @@ test('another process appends after compaction without losing its record', async
   const directory = path.join(root, 'concurrent');
   const storage = new ToolHistoryStorage(directory);
   storage.withLock(() => storage.rewriteText('old\nkeep\n'));
-  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/core/utils/toolHistoryStorage.js')).href;
+  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/adapters/telemetry/toolHistoryStorage.js')).href;
   const compact = `
     import { ToolHistoryStorage } from ${JSON.stringify(moduleUrl)};
     const storage = new ToolHistoryStorage(process.argv[1]);

@@ -1,5 +1,5 @@
-import { configManager } from '../config-manager.js';
-import { capture } from './capture.js';
+import { configManager } from '../../core/config-manager.js';
+import { capture } from '../../core/utils/capture.js';
 
 export interface ToolUsageStats {
   // Tool category counters
@@ -198,7 +198,7 @@ class UsageTracker {
    */
   async shouldPromptForFeedback(): Promise<boolean> {
     // Check feature flag first
-    const { featureFlagManager } = await import('./feature-flags.js');
+    const { featureFlagManager } = await import('../../core/utils/feature-flags.js');
     const feedbackEnabled = featureFlagManager.get('user_surveys', false);
     if (!feedbackEnabled) {
       return false;
@@ -405,7 +405,7 @@ class UsageTracker {
    */
   async shouldShowOnboarding(): Promise<boolean> {
     // Check feature flag first (remote kill switch)
-    const { featureFlagManager } = await import('./feature-flags.js');
+    const { featureFlagManager } = await import('../../core/utils/feature-flags.js');
 
     // Default false: on cold starts (no flag cache yet, e.g. ephemeral Docker
     // containers) this can run before the background flag fetch completes.

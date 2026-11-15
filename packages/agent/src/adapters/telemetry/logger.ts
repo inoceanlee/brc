@@ -3,7 +3,7 @@
  * Ensures all logging goes through proper channels based on initialization state
  */
 
-import type { FilteredStdioServerTransport } from '../custom-stdio.js';
+import type { FilteredStdioServerTransport } from '../../core/custom-stdio.js';
 
 // Global reference to the MCP transport (set in index.ts)
 declare global {

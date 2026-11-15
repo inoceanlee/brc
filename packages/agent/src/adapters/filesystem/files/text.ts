@@ -20,7 +20,7 @@ import {
     FileResult,
     FileInfo
 } from './base.js';
-import { AGENT_DEFAULTS } from '../../config.js';
+import { AGENT_DEFAULTS } from '../../../core/config.js';
 import { TextReader } from './text-reader.js';
 
 // TODO: Centralize these constants with filesystem.ts to avoid silent drift

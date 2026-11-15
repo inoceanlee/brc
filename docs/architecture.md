@@ -34,8 +34,8 @@ Relay 只信任一个 loopback 代理跳点（`TRUST_PROXY=loopback`）。Traefi
   - `src/adapters/storage/`：生命周期锁、运行记录、清理与 Relay 数据库。
   - `src/config/`：配置类型、默认值、校验与平台路径（唯一来源）。
   - `src/traefik/`：代理专属逻辑、模板与二进制管理。
-- `packages/relay/`：HTTP 服务、用户及设备、SQLite、OAuth、MCP、审计记录。
-- `packages/agent/`：配对和持久凭据、出站 WebSocket、文件和终端等工具。
+- `packages/relay/`：`core/auth` 保存登录限流与会话规则；`adapters/http` 承载 Express、MCP 与页面；`adapters/storage` 独占 SQLite；`device-hub` 管理连接。
+- `packages/agent/`：`adapters/{filesystem,terminal,system,telemetry}` 对接文件、终端、系统探测与工具日志；`core` 保留与 I/O 无关的规则；`transport` 负责配对与出站 WebSocket。
 - `packages/shared/`：通信协议、受管控制接口与共享诊断模块。
 - `native/brc-process/`：Rust 进程身份查询器，含自有函数与资源探针。
 - `deploy/traefik/`：统一代理的静态和动态配置模板。

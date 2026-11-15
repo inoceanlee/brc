@@ -416,8 +416,8 @@ test('managed console captures stdout and stderr in its rotating log', async (t)
 
 test('Agent activity logs stay bounded during continuous writes', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
-  const trackToolsUrl = JSON.stringify(new URL('../packages/agent/dist/core/utils/trackTools.js', import.meta.url).href);
-  const fuzzyLoggerUrl = JSON.stringify(new URL('../packages/agent/dist/core/utils/fuzzySearchLogger.js', import.meta.url).href);
+  const trackToolsUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/trackTools.js', import.meta.url).href);
+  const fuzzyLoggerUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js', import.meta.url).href);
   const source = `
 import { trackToolCall } from ${trackToolsUrl};
 import { fuzzySearchLogger } from ${fuzzyLoggerUrl};
