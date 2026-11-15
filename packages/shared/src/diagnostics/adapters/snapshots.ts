@@ -12,6 +12,7 @@ export interface FileSnapshotStoreOptions {
   staleAfterMs?: number;
   maxBytes?: number;
   isAlive?: (pid: number) => boolean;
+  isSameProcess?: (snapshot: DiagnosticSnapshot) => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -88,6 +89,7 @@ export class FileSnapshotStore implements DiagnosticSnapshotPort {
   private readonly staleAfterMs: number;
   private readonly maxBytes: number;
   private readonly isAlive: (pid: number) => boolean;
+  private readonly isSameProcess?: (snapshot: DiagnosticSnapshot) => Promise<boolean>;
   private readonly now: () => Date;
 
   constructor(options: FileSnapshotStoreOptions) {
@@ -95,6 +97,7 @@ export class FileSnapshotStore implements DiagnosticSnapshotPort {
     this.staleAfterMs = options.staleAfterMs ?? 60_000;
     this.maxBytes = options.maxBytes ?? 256 * 1024;
     this.isAlive = options.isAlive ?? defaultIsAlive;
+    this.isSameProcess = options.isSameProcess;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -187,6 +190,9 @@ export class FileSnapshotStore implements DiagnosticSnapshotPort {
     const age = this.now().getTime() - Date.parse(snapshot.capturedAt);
     if (!Number.isFinite(age)) return { state: 'corrupt', snapshot: null, reason: 'invalid-time' };
     if (age > this.staleAfterMs) return { state: 'stale', snapshot, reason: 'outdated' };
+    if (this.isSameProcess && !await this.isSameProcess(snapshot)) {
+      return { state: 'exited', snapshot, reason: 'process-identity-changed' };
+    }
     return { state: 'current', snapshot };
   }
 

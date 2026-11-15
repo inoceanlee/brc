@@ -21,7 +21,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "node ../../scripts/build-package.mjs ."
+    "build": "node ../../scripts/script-diagnostics.mjs ../../scripts/build-package.mjs ."
   },
   "dependencies": {
     "brc-shared": "workspace:*",

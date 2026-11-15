@@ -20,7 +20,6 @@ const withNextPatch = options.has('--with-next-patch');
 const packageDir = path.join(workspaceRoot, 'packages');
 const workDir = await mkdtemp(path.join(os.tmpdir(), 'brc-pack-'));
 const stageDir = path.join(workDir, 'package');
-const isolatedPnpmHome = path.join(workDir, 'pnpm-home');
 const isolatedStore = path.join(workDir, 'pnpm-store');
 const isolatedCache = path.join(workDir, 'pnpm-cache');
 const isolatedState = path.join(workDir, 'pnpm-state');
@@ -41,7 +40,6 @@ function resolvePnpmCommand() {
 const pnpmCommand = resolvePnpmCommand();
 
 const pnpmIsolationEnv = {
-  PNPM_HOME: isolatedPnpmHome,
   PNPM_CONFIG_STORE_DIR: isolatedStore,
   PNPM_CONFIG_STATE_DIR: isolatedState,
   PNPM_CONFIG_CACHE_DIR: isolatedCache,
@@ -139,7 +137,7 @@ try {
   process.stdout.write('BRC_DETAIL:构建工作区包\n');
   runPnpm(['-r', '--filter', './packages/*', 'build'], workspaceRoot);
   process.stdout.write('BRC_DETAIL:校验 Windows 原生进程查询器\n');
-  const native = spawnSync(process.execPath, [path.join(workspaceRoot, 'scripts', 'build-native.mjs')], {
+  const native = spawnSync(process.execPath, [path.join(workspaceRoot, 'scripts', 'script-diagnostics.mjs'), path.join(workspaceRoot, 'scripts', 'build-native.mjs')], {
     cwd: workspaceRoot, stdio: 'inherit', windowsHide: true, timeout: 240_000,
   });
   if (native.error) throw native.error;
@@ -219,5 +217,5 @@ try {
     await maximizeGzipCompression(nextPatchDir, packageManifest.version);
   }
 } finally {
-  await rm(workDir, { recursive: true, force: true });
+  await rm(workDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
 }

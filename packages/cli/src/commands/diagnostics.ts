@@ -1,6 +1,10 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
+import { readSettings } from '../config/reader.js';
+import { inspectProcess } from '../adapters/process/identity.js';
 import { readManagedLog } from '../maintenance/logs.js';
-import { FileSnapshotStore, snapshotStateLabel, type SnapshotReadResult } from 'brc-shared';
+import { FileSnapshotStore, snapshotStateLabel, type DiagnosticSnapshot, type SnapshotReadResult } from 'brc-shared';
 
 export interface StartupDiagnosticResult {
   state: 'missing' | 'recorded';
@@ -38,9 +42,29 @@ export interface ResourceDiagnosticRow {
   peakWindowMs: number | null;
 }
 
-function snapshotStore(paths: BrcPaths): FileSnapshotStore {
-  const directory = paths.diagnostics ?? `${paths.root}/diagnostics`;
-  return new FileSnapshotStore({ directory, staleAfterMs: 60_000 });
+async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
+  const { settings } = await readSettings(paths, process.env);
+  const directory = paths.diagnostics ?? path.join(paths.root, 'diagnostics');
+  return new FileSnapshotStore({
+    directory,
+    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+    isSameProcess: async (snapshot: DiagnosticSnapshot) => {
+      if (snapshot.service === 'cli') return snapshot.pid === process.pid;
+      let record: { id?: string; pid?: number; createdAt?: string };
+      try {
+        record = JSON.parse(await readFile(path.join(paths.runtime, `${snapshot.service}.json`), 'utf8'));
+      } catch {
+        return false;
+      }
+      if (record.id !== snapshot.instanceId || record.pid !== snapshot.pid || !record.createdAt) return false;
+      try {
+        const current = await inspectProcess(snapshot.pid);
+        return current?.createdAt === record.createdAt;
+      } catch {
+        return false;
+      }
+    },
+  });
 }
 
 export async function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnosticResult> {
@@ -59,7 +83,7 @@ export async function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnos
 }
 
 export async function readFunctionDiagnostics(paths: BrcPaths): Promise<FunctionDiagnosticRow[]> {
-  const results = await snapshotStore(paths).list();
+  const results = await (await snapshotStore(paths)).list();
   const rows: FunctionDiagnosticRow[] = [];
   for (const result of results) {
     if (!result.snapshot) continue;
@@ -86,7 +110,7 @@ export async function readFunctionDiagnostics(paths: BrcPaths): Promise<Function
 }
 
 export async function readResourceDiagnostics(paths: BrcPaths): Promise<ResourceDiagnosticRow[]> {
-  const results: SnapshotReadResult[] = await snapshotStore(paths).list();
+  const results: SnapshotReadResult[] = await (await snapshotStore(paths)).list();
   return results.flatMap((result) => {
     if (!result.snapshot) return [];
     const { snapshot } = result;

@@ -246,7 +246,7 @@ test('single package tarball is complete, self-contained, and globally installab
     const cliMode = (await stat(path.join(extractedPackage, 'dist/cli.js'))).mode;
     assert.notEqual(cliMode & 0o111, 0, 'CLI bin must retain executable permissions');
   }
-  const servicesUrl = pathToFileURL(path.join(extractedPackage, 'dist', 'lifecycle', 'services.js')).href;
+  const servicesUrl = pathToFileURL(path.join(extractedPackage, 'dist', 'adapters', 'process', 'specs.js')).href;
   const settingsUrl = pathToFileURL(path.join(extractedPackage, 'dist', 'config', 'settings.js')).href;
   const dataRoot = path.join(root, 'brc-data');
   const serviceEntries = JSON.parse(run(process.execPath, [
@@ -268,7 +268,6 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
     { name: 'agent', entrypoint: path.join(extractedPackage, 'dist', 'services', 'agent', 'cli.js'), cwd: extractedPackage, productVersion: manifest.version },
   ]);
 
-  const isolatedHome = path.join(root, 'pnpm-home');
   const isolatedStore = path.join(root, 'pnpm-store');
   const isolatedCache = path.join(root, 'pnpm-cache');
   const isolatedState = path.join(root, 'pnpm-state');
@@ -278,7 +277,6 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
   const installDir = path.join(root, 'global-install');
   const env = {
     ...cleanEnv,
-    PNPM_HOME: isolatedHome,
     PNPM_CONFIG_STORE_DIR: isolatedStore,
     PNPM_CONFIG_STATE_DIR: isolatedState,
     PNPM_CONFIG_CACHE_DIR: isolatedCache,
@@ -295,7 +293,7 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
     BRC_TRAEFIK_HEALTH_PORT: String(healthPort),
     PATH: `${isolatedPath}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`,
   };
-  await Promise.all([isolatedHome, isolatedStore, isolatedCache, isolatedState, isolatedPath, installDir].map((directory) => mkdir(directory, { recursive: true })));
+  await Promise.all([isolatedStore, isolatedCache, isolatedState, isolatedPath, installDir].map((directory) => mkdir(directory, { recursive: true })));
   for (const [setting, expected] of [
     ['global-dir', installDir],
     ['global-bin-dir', isolatedPath],

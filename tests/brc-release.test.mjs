@@ -158,5 +158,5 @@ test('registry verification rejects a same-version archive with different integr
 
 test('release automation is exposed only as a dedicated package command', () => {
   const manifest = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8'));
-  assert.equal(manifest.scripts['release:brc'], 'node scripts/release-brc.mjs');
+  assert.equal(manifest.scripts['release:brc'], 'node scripts/script-diagnostics.mjs scripts/release-brc.mjs');
 });

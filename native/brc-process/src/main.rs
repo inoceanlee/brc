@@ -13,7 +13,7 @@ fn main() -> ExitCode {
         eprintln!("usage: brc-process inspect <pid> [pid...]");
         return ExitCode::FAILURE;
     }
-    let pids = match brc_probe!("positive_pids", { identity::positive_pids(&args[1..]) }) {
+    let pids = match identity::positive_pids(&args[1..]) {
         Ok(pids) => pids,
         Err(message) => {
             eprintln!("{message}");
@@ -21,11 +21,12 @@ fn main() -> ExitCode {
         }
     };
     #[cfg(windows)]
-    let processes = brc_probe!("inspect", { windows::inspect(&pids) });
+    let processes = windows::inspect(&pids);
     #[cfg(not(windows))]
     let processes = pids.iter().map(|&pid| identity::row(pid, Err("UNSUPPORTED_PLATFORM"))).collect::<Vec<_>>();
     let mut payload = json!({ "processes": processes });
     if diagnostics::enabled() {
+        diagnostics::record("main", started.elapsed().as_micros());
         payload["diagnostics"] = diagnostics::summary(started);
     }
     println!("{}", payload);

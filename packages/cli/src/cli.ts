@@ -223,10 +223,12 @@ async function main(): Promise<void> {
   });
   const settings = settingsManager.snapshot();
   lifecycleLock.updateWaitSettings({ waitMs: settings.runtime.lockWaitMs, pollMs: settings.runtime.lockPollMs });
+  const diagnosticEnv = { ...process.env, ...diagnosticEnvironment(settings, paths) };
+  if (parsed?.name === 'uninstall') diagnosticEnv.BRC_DIAGNOSTICS_ENABLED = 'false';
   const diagnostics = await startDiagnostics({
     component: 'cli',
     instanceId: String(process.pid),
-    env: { ...process.env, ...diagnosticEnvironment(settings, paths) },
+    env: diagnosticEnv,
     manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
     logFile: path.join(paths.logs, 'cli-diagnostics.log'),
   });
@@ -392,7 +394,7 @@ if (isMainModule()) {
     const { settings } = await readSettings(paths, process.env);
     const diagnostics = await startDiagnostics({
       component: 'traefik',
-      instanceId: String(process.pid),
+      instanceId: process.env.BRC_MANAGED_ID ?? String(process.pid),
       env: { ...process.env, ...diagnosticEnvironment(settings, paths) },
       manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
       logFile: path.join(paths.logs, 'traefik-diagnostics.log'),

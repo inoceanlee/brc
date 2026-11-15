@@ -73,23 +73,21 @@ export class FunctionTiming {
     this.describe = options.describe;
   }
 
-  begin(id: string, kind: FunctionKind = 'sync'): FunctionTimingToken {
-    const tokens = this.active.get(id) ?? new Set<FunctionTimingToken>();
-    const root = tokens.size === 0;
-    const token: FunctionTimingToken = { id, root, started: this.clock(), kind };
-    tokens.add(token);
-    this.active.set(id, tokens);
-    this.totalCalls += 1;
+  begin(id: string, kind: FunctionKind = 'sync'): FunctionTimingToken | undefined {
     let aggregate = this.aggregates.get(id);
     if (!aggregate) {
       if (this.aggregates.size >= this.maxEntries) {
         this.droppedIds += 1;
-        this.totalCalls -= 1;
-        return { ...token, root: false };
+        return undefined;
       }
       aggregate = { calls: 0, totalMs: 0, maxMs: 0, asyncWallMs: 0, errors: 0 };
       this.aggregates.set(id, aggregate);
     }
+    const tokens = this.active.get(id) ?? new Set<FunctionTimingToken>();
+    const token: FunctionTimingToken = { id, root: tokens.size === 0, started: this.clock(), kind };
+    tokens.add(token);
+    this.active.set(id, tokens);
+    this.totalCalls += 1;
     aggregate.calls += 1;
     return token;
   }

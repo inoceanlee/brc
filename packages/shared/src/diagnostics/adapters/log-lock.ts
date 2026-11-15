@@ -42,8 +42,10 @@ export async function withDiagnosticLogLock<T>(filename: string, operation: () =
     let handle;
     try { handle = await open(lock, 'wx', 0o600); }
     catch (error) {
-      if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'EEXIST') throw error;
-      await recoverAbandoned(lock);
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      const windowsContention = process.platform === 'win32' && (code === 'EPERM' || code === 'EACCES');
+      if (code !== 'EEXIST' && !windowsContention) throw error;
+      if (code === 'EEXIST') await recoverAbandoned(lock);
       if (Date.now() - started >= WAIT_MS) throw new Error('Diagnostic log lock timed out.');
       await sleep(POLL_MS);
       continue;

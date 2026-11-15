@@ -30,7 +30,7 @@ try {
   let updated = process.env.BRC_PACKAGE_UPDATED_TARBALL;
   if (!tarball) {
     await runStage('Build release and upgrade archives', [
-      path.join(root, 'scripts', 'pack-brc.mjs'), output, '--with-next-patch',
+      path.join(root, 'scripts', 'script-diagnostics.mjs'), path.join(root, 'scripts', 'pack-brc.mjs'), output, '--with-next-patch',
     ], process.env);
     const manifest = JSON.parse(await readFile(path.join(root, 'packages', 'cli', 'package.json'), 'utf8'));
     const [major, minor, patch] = manifest.version.split('.').map(Number);

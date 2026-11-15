@@ -404,3 +404,20 @@ test('diagnostic settings validate bool, bounds, provenance and service propagat
     await assert.rejects(manager.set(key, value), /diagnostics/i);
   }
 });
+
+test('CLI accepts boolean diagnostic configuration values', async (t) => {
+  const { manager, paths } = await createFixture(t);
+  const output = [];
+  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', 'false'], commandDependencies(manager, paths, output)), 0);
+  assert.equal(manager.get('diagnostics.enabled').value, false);
+  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', 'true'], commandDependencies(manager, paths, output)), 0);
+  assert.equal(manager.get('diagnostics.enabled').value, true);
+  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', '0'], commandDependencies(manager, paths, output)), 0);
+  assert.equal(manager.get('diagnostics.enabled').value, false);
+  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', '1'], commandDependencies(manager, paths, output)), 0);
+  assert.equal(manager.get('diagnostics.enabled').value, true);
+  await assert.rejects(
+    runConfigCommand(['set', 'diagnostics.enabled', 'enabled'], commandDependencies(manager, paths, output)),
+    /diagnostics.enabled/,
+  );
+});

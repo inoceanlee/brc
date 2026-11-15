@@ -327,6 +327,10 @@ export function resolveSettings(document: unknown, env: NodeJS.ProcessEnv): Reso
 }
 
 export function parseSettingArgument<K extends BrcSettingKey>(key: K, value: string): BrcSettingValues[K] {
+  if (key === 'diagnostics.enabled') {
+    if (!/^(true|false|1|0)$/i.test(value)) throw new Error('diagnostics.enabled must be true or false.');
+    return validateSettingValue(key, value.toLowerCase() === 'true' || value === '1') as BrcSettingValues[K];
+  }
   if (key !== 'proxy.rate.period' && key !== 'services.publicUrl' && !/^-?(?:\d+)(?:\.\d+)?$/.test(value)) {
     throw new Error(`${key} must be a number.`);
   }

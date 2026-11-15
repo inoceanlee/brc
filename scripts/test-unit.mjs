@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const excluded = new Set(['brc-package.test.mjs']);
-const TEST_CONCURRENCY = '4';
+const TEST_CONCURRENCY = '2';
 
 /**
  * Unit suites are discovered by filename convention so a new

@@ -93,7 +93,21 @@ export function createInstrumentation(ts, options) {
     const previousKind = currentKind;
     currentId = id;
     currentKind = kind;
-    const statements = guardedBlock(bodyStatements, token);
+    const measuredBody = kind === 'async'
+      ? [ts.factory.createReturnStatement(ts.factory.createAwaitExpression(
+        ts.factory.createCallExpression(ts.factory.createParenthesizedExpression(
+          ts.factory.createArrowFunction(
+            [ts.factory.createModifier(ts.SyntaxKind.AsyncKeyword)],
+            undefined,
+            [],
+            undefined,
+            ts.factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
+            ts.factory.createBlock(bodyStatements, true),
+          ),
+        ), undefined, []),
+      ))]
+      : bodyStatements;
+    const statements = guardedBlock(measuredBody, token);
     currentId = previousId;
     currentKind = previousKind;
     return update(statements);

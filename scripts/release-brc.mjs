@@ -187,7 +187,7 @@ async function release() {
     if (!existsSync(traefik)) throw new Error('Traefik test binary missing: ' + traefik);
     progress.print('Release: ' + manifest.name + '@' + version);
     artifact = await withReleaseWorkspace(async (output) => {
-      await runStage('Build package', () => command(process.execPath, [path.join(root, 'scripts/pack-brc.mjs'), output, '--with-next-patch']));
+      await runStage('Build package', () => command(process.execPath, [path.join(root, 'scripts/script-diagnostics.mjs'), path.join(root, 'scripts/pack-brc.mjs'), output, '--with-next-patch']));
       const archives = readdirSync(output).filter((file) => file.endsWith('.tgz'));
       const filename = 'inoceanlee-brc-' + version + '.tgz';
       if (archives.length !== 1 || archives[0] !== filename) throw new Error('Unexpected package archives.');

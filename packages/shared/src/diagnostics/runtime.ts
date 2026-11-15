@@ -102,6 +102,7 @@ const NOOP_RUNTIME: DiagnosticsRuntime = {
 export async function startDiagnostics(options: DiagnosticsRuntimeOptions): Promise<DiagnosticsRuntime> {
   const env = options.env ?? process.env;
   const settings = resolveDiagnosticsSettings(env);
+  const instanceId = options.instanceId ?? env.BRC_MANAGED_ID ?? String(process.pid);
   const directory = options.snapshotDirectory ?? settings.directory;
   if (!settings.enabled || !directory) return NOOP_RUNTIME;
 
@@ -122,7 +123,7 @@ export async function startDiagnostics(options: DiagnosticsRuntimeOptions): Prom
   });
   const session = new DiagnosticSession({
     service: options.component === 'native' ? 'cli' : options.component,
-    instanceId: options.instanceId ?? String(process.pid),
+    instanceId,
     store,
     functions,
     resources,
@@ -142,7 +143,7 @@ export async function startDiagnostics(options: DiagnosticsRuntimeOptions): Prom
         component: options.component,
         source: logOptions.source ?? { file: path.basename(process.argv[1] ?? 'unknown') },
         message,
-        instanceId: options.instanceId ?? String(process.pid),
+        instanceId,
         ...(logOptions.errorCode ? { errorCode: logOptions.errorCode } : {}),
         ...(logOptions.error ? { stack: errorText(logOptions.error) } : {}),
         ...(logOptions.data ? { data: logOptions.data } : {}),

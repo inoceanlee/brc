@@ -6,9 +6,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SqliteStore, sha256, verifyPassword, hashPassword } from '../dist/store/sqlite.js';
-import { RelayOAuthProvider } from '../dist/auth/provider.js';
-import { LoginLimiter } from '../dist/auth/rate-limit.js';
+import { SqliteStore, sha256, verifyPassword, hashPassword } from '../dist/adapters/storage/sqlite.js';
+import { RelayOAuthProvider } from '../dist/core/auth/provider.js';
+import { LoginLimiter } from '../dist/core/auth/rate-limit.js';
 import { DeviceHub } from '../dist/device-hub.js';
 
 test('password hashing round-trips and rejects wrong password', () => {

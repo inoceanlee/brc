@@ -140,3 +140,29 @@ test('session failure notes stay bounded when sampling keeps failing', async () 
   assert.ok(snapshot.partialFailures.length <= 8);
   assert.equal(new Set(snapshot.partialFailures).size, snapshot.partialFailures.length);
 });
+
+test('identity changes mark a live reused PID as exited', async (t) => {
+  let currentInstance = 'active-id';
+  const { store: snapshots } = await store(t, {
+    isAlive: () => true,
+    isSameProcess: async (value) => value.instanceId === currentInstance,
+  });
+  await snapshots.write(snapshot({ instanceId: 'active-id', pid: process.pid }));
+  assert.equal((await snapshots.read('relay', 'active-id')).state, 'current');
+  currentInstance = 'replacement-id';
+  const result = await snapshots.read('relay', 'active-id');
+  assert.equal(result.state, 'exited');
+  assert.equal(result.reason, 'process-identity-changed');
+});
+
+test('long configured snapshot intervals keep matching service data current', async (t) => {
+  const now = new Date('2026-11-15T12:00:00Z');
+  const { store: snapshots } = await store(t, {
+    isAlive: () => true,
+    isSameProcess: async () => true,
+    staleAfterMs: 2 * 60 * 60 * 1000,
+    now: () => now,
+  });
+  await snapshots.write(snapshot({ capturedAt: new Date(now.getTime() - 70_000).toISOString() }));
+  assert.equal((await snapshots.read('relay', 'instance-1')).state, 'current');
+});

@@ -26,6 +26,25 @@ pub fn enabled() -> bool {
     )
 }
 
+pub struct ScopeTimer {
+    name: &'static str,
+    started: Option<Instant>,
+}
+
+impl ScopeTimer {
+    pub fn new(name: &'static str) -> Self {
+        Self { name, started: enabled().then(Instant::now) }
+    }
+}
+
+impl Drop for ScopeTimer {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            record(self.name, started.elapsed().as_micros());
+        }
+    }
+}
+
 pub fn record(name: &'static str, elapsed_us: u128) {
     ENTRIES.with(|entries| {
         let mut entries = entries.borrow_mut();

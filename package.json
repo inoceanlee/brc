@@ -6,22 +6,22 @@
  "license": "MIT",
  "packageManager": "pnpm@11.24.0",
  "engines": {
-  "node": "\u003e=20"
+  "node": "\u003e=22.15.0"
  },
  "scripts": {
-  "build": "pnpm -r --filter \"./packages/*\" build && node scripts/build-native.mjs",
+  "build": "pnpm -r --filter \"./packages/*\" build && node scripts/script-diagnostics.mjs scripts/build-native.mjs",
   "clean": "pnpm -r --filter \"./packages/*\" exec rimraf dist",
   "typecheck": "pnpm -r --filter \"./packages/*\" exec tsc --noEmit",
   "agent": "pnpm --filter brc-agent start",
   "relay": "pnpm --filter brc-relay start",
   "dev:relay": "pnpm --filter brc-relay build \u0026\u0026 node packages/relay/dist/cli.js",
   "dev:agent": "pnpm --filter brc-agent build \u0026\u0026 node packages/agent/dist/cli.js",
-  "extract-tools": "node scripts/extract-tools.mjs",
-  "release:brc": "node scripts/release-brc.mjs",
-  "test:unit": "node scripts/test-unit.mjs",
+  "extract-tools": "node scripts/script-diagnostics.mjs scripts/extract-tools.mjs",
+  "release:brc": "node scripts/script-diagnostics.mjs scripts/release-brc.mjs",
+  "test:unit": "node scripts/script-diagnostics.mjs scripts/test-unit.mjs",
   "test:cli": "node --test tests/brc-cli.test.mjs",
-  "test:e2e": "node scripts/e2e-all.mjs",
-  "test:package": "node scripts/test-brc-package.mjs",
+  "test:e2e": "node scripts/script-diagnostics.mjs scripts/e2e-all.mjs",
+  "test:package": "node scripts/script-diagnostics.mjs scripts/test-brc-package.mjs",
   "test": "pnpm test:unit \u0026\u0026 pnpm test:package \u0026\u0026 pnpm test:e2e"
  },
  "devDependencies": {

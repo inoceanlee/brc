@@ -8,6 +8,7 @@ pub struct Identity {
 }
 
 pub fn positive_pids(args: &[String]) -> Result<Vec<u32>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("positive_pids");
     if args.is_empty() { return Err("provide at least one process ID"); }
     let mut values = Vec::new();
     for arg in args {
@@ -22,7 +23,7 @@ pub fn positive_pids(args: &[String]) -> Result<Vec<u32>, &'static str> {
 }
 
 pub fn row(pid: u32, result: Result<Option<Identity>, &'static str>) -> Value {
-    let started = std::time::Instant::now();
+    let _timer = crate::diagnostics::ScopeTimer::new("row");
     let value = match result {
         Ok(Some(i)) => json!({
             "pid": pid, "status": "found", "createdAt": i.created_at,
@@ -31,9 +32,6 @@ pub fn row(pid: u32, result: Result<Option<Identity>, &'static str>) -> Value {
         Ok(None) => json!({ "pid": pid, "status": "not_found" }),
         Err(code) => json!({ "pid": pid, "status": "error", "code": code }),
     };
-    if crate::diagnostics::enabled() {
-        crate::diagnostics::record("row", started.elapsed().as_micros());
-    }
     value
 }
 

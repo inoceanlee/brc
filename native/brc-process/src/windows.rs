@@ -21,22 +21,25 @@ use winapi::um::unknwnbase::IUnknown;
 
 struct OwnedHandle(HANDLE);
 impl Drop for OwnedHandle {
-    fn drop(&mut self) { unsafe { CloseHandle(self.0); } }
+    fn drop(&mut self) { let _timer = crate::diagnostics::ScopeTimer::new("windows::drop_handle"); unsafe { CloseHandle(self.0); } }
 }
 
 unsafe fn release<T>(ptr: *mut T) {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::release");
     if !ptr.is_null() {
         let object = ptr as *mut IUnknown;
         ((*(*object).lpVtbl).Release)(object);
     }
 }
-fn wide(text: &str) -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() }
-unsafe fn bstr(text: &str) -> *mut u16 { SysAllocString(wide(text).as_ptr()) }
+fn wide(text: &str) -> Vec<u16> { let _timer = crate::diagnostics::ScopeTimer::new("windows::wide"); text.encode_utf16().chain(std::iter::once(0)).collect() }
+unsafe fn bstr(text: &str) -> *mut u16 { let _timer = crate::diagnostics::ScopeTimer::new("windows::bstr"); SysAllocString(wide(text).as_ptr()) }
 fn filetime(value: &FILETIME) -> u64 {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::filetime");
     ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64
 }
 
 fn handle_identity(pid: u32) -> Result<Option<(OwnedHandle, String, String)>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::handle_identity");
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if handle.is_null() {
@@ -65,12 +68,14 @@ fn handle_identity(pid: u32) -> Result<Option<(OwnedHandle, String, String)>, &'
     }
 }
 fn terminated(handle: HANDLE) -> bool {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::terminated");
     unsafe {
         let mut code: DWORD = 0;
         GetExitCodeProcess(handle, &mut code) != 0 && code != 259
     }
 }
 fn alive_and_same(handle: HANDLE, expected: &str) -> Result<bool, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::alive_and_same");
     unsafe {
         let mut code: DWORD = 0;
         if GetExitCodeProcess(handle, &mut code) == 0 { return Err("PROCESS_STATE"); }
@@ -87,6 +92,7 @@ fn alive_and_same(handle: HANDLE, expected: &str) -> Result<bool, &'static str> 
     }
 }
 unsafe fn read_variant_text(object: *mut IWbemClassObject, field: &str) -> Result<Option<String>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::read_variant_text");
     let mut variant: VARIANT = std::mem::zeroed();
     let name = wide(field);
     let status = ((*(*object).lpVtbl).Get)(object, name.as_ptr(), 0, &mut variant, ptr::null_mut(), ptr::null_mut());
@@ -105,6 +111,7 @@ unsafe fn read_variant_text(object: *mut IWbemClassObject, field: &str) -> Resul
     Ok(result)
 }
 unsafe fn read_variant_pid(object: *mut IWbemClassObject) -> Result<u32, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::read_variant_pid");
     let mut variant: VARIANT = std::mem::zeroed();
     let name = wide("ProcessId");
     let status = ((*(*object).lpVtbl).Get)(object, name.as_ptr(), 0, &mut variant, ptr::null_mut(), ptr::null_mut());
@@ -119,6 +126,7 @@ unsafe fn read_variant_pid(object: *mut IWbemClassObject) -> Result<u32, &'stati
 
 // A single WMI query provides full Windows command lines for the whole PID batch.
 fn command_lines(pids: &[u32]) -> Result<HashMap<u32, String>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::command_lines");
     unsafe {
         let init = CoInitializeEx(ptr::null_mut(), COINIT_MULTITHREADED);
         if init < 0 { return Err("COM_INIT"); }
@@ -128,6 +136,7 @@ fn command_lines(pids: &[u32]) -> Result<HashMap<u32, String>, &'static str> {
     }
 }
 unsafe fn query_command_lines(pids: &[u32]) -> Result<HashMap<u32, String>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::query_command_lines");
     let mut locator: *mut IWbemLocator = ptr::null_mut();
     if CoCreateInstance(&CLSID_WbemLocator, ptr::null_mut(), CLSCTX_INPROC_SERVER, &IID_IWbemLocator, &mut locator as *mut _ as *mut *mut c_void) < 0 {
         return Err("WMI_LOCATOR");
@@ -137,6 +146,7 @@ unsafe fn query_command_lines(pids: &[u32]) -> Result<HashMap<u32, String>, &'st
     result
 }
 unsafe fn query_connected(locator: *mut IWbemLocator, pids: &[u32]) -> Result<HashMap<u32, String>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::query_connected");
     let namespace = bstr("ROOT\\CIMV2");
     let mut services: *mut IWbemServices = ptr::null_mut();
     let status = ((*(*locator).lpVtbl).ConnectServer)(
@@ -150,6 +160,7 @@ unsafe fn query_connected(locator: *mut IWbemLocator, pids: &[u32]) -> Result<Ha
     result
 }
 unsafe fn query_services(services: *mut IWbemServices, pids: &[u32]) -> Result<HashMap<u32, String>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::query_services");
     // Use the caller's Windows identity with local WMI impersonation.
     let status = CoSetProxyBlanket(services as *mut IUnknown, 10, 0, ptr::null_mut(), 3, 3, ptr::null_mut(), 0);
     if status < 0 { return Err("WMI_PROXY"); }
@@ -165,6 +176,7 @@ unsafe fn query_services(services: *mut IWbemServices, pids: &[u32]) -> Result<H
     result
 }
 unsafe fn collect_enumerator(enumerator: *mut IEnumWbemClassObject) -> Result<HashMap<u32, String>, &'static str> {
+    let _timer = crate::diagnostics::ScopeTimer::new("windows::collect_enumerator");
     let mut values = HashMap::new();
     loop {
         let mut object: *mut IWbemClassObject = ptr::null_mut();
@@ -188,6 +200,7 @@ unsafe fn collect_enumerator(enumerator: *mut IEnumWbemClassObject) -> Result<Ha
 }
 
 pub fn inspect(pids: &[u32]) -> Vec<Value> {
+    let _timer = crate::diagnostics::ScopeTimer::new("inspect");
     let entries = pids.iter().map(|pid| (*pid, handle_identity(*pid))).collect::<Vec<_>>();
     let eligible = entries.iter().filter_map(|(pid, identity)| {
         if matches!(identity, Ok(Some(_))) { Some(*pid) } else { None }

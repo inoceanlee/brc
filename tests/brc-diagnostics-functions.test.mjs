@@ -77,3 +77,15 @@ test('probe installation follows the disabled-by-default global hook contract', 
   installation.uninstall();
   assert.equal(host.__brcDiagBegin, undefined);
 });
+
+test('overflowed function ids release every invocation and keep memory bounded', () => {
+  const timing = new FunctionTiming({ maxEntries: 1, clock: () => 0 });
+  timing.end(timing.begin('tracked'));
+  for (let index = 0; index < 10_000; index += 1) {
+    timing.end(timing.begin('dropped'));
+  }
+  assert.equal(timing.active.size, 0);
+  assert.equal(timing.snapshot().entries.length, 1);
+  assert.equal(timing.snapshot().droppedIds, 10_000);
+  assert.equal(timing.snapshot().totalCalls, 1);
+});
