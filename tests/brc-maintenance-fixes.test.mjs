@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
-import { cleanRuntime } from '../packages/cli/dist/maintenance/cleanup.js';
+import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
 
 const api = 'https://api.github.com/repos/traefik/traefik/releases/latest';
 const release = (v) => ({ tag_name: 'v' + v, draft: false, prerelease: false, assets: [
@@ -44,7 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createDefaultServices } from '../packages/cli/dist/lifecycle/services.js';
+import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
 
 test('managed services inherit one release version from CLI package metadata', async () => {

@@ -6,10 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { test } from 'node:test';
-import { cleanRuntime } from '../packages/cli/dist/maintenance/cleanup.js';
-import { ProcessManager } from '../packages/cli/dist/lifecycle/processes.js';
-import { LifecycleLock } from '../packages/cli/dist/lifecycle/lock.js';
-import { inspectProcess } from '../packages/cli/dist/lifecycle/identity.js';
+import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
+import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { inspectProcess } from '../packages/cli/dist/adapters/process/identity.js';
 import { appendRotatingLog } from '../packages/shared/dist/managed-log.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -42,6 +42,7 @@ function paths(root) {
     data: path.join(root, 'data'),
     runtime: path.join(root, 'runtime'),
     logs: path.join(root, 'logs'),
+    diagnostics: path.join(root, 'diagnostics'),
     tmp: path.join(root, 'tmp'),
   };
 }
@@ -475,4 +476,27 @@ test('cleanup evicts stale ready records from previous boot without inspecting p
   const report = await cleanRuntime(brcPaths);
   assert.equal(await exists(staleReadyFile), false);
   assert.equal(report.preserved.some((item) => item.path === staleReadyFile), false);
+});
+
+test('cleanup removes expired diagnostic snapshots and keeps live ones', async (t) => {
+  const { root, paths: brcPaths } = await makeRoot(t);
+  const { FileSnapshotStore } = await import('../packages/shared/dist/diagnostics/adapters/snapshots.js');
+  const store = new FileSnapshotStore({ directory: brcPaths.diagnostics });
+  const base = {
+    schema: 1,
+    service: 'relay',
+    pid: process.pid,
+    status: 'running',
+    functions: { schema: 1, totalCalls: 0, entries: [], truncated: false, droppedIds: 0 },
+    resources: {
+      schema: 1, capturedAt: new Date().toISOString(), source: 'node', windowMs: 0,
+      cpuUserMs: 0, cpuSystemMs: 0, cpuPercent: null, rssBytes: 1, heapUsedBytes: 1, peak: null,
+    },
+  };
+  await store.write({ ...base, instanceId: 'expired', capturedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString() });
+  await store.write({ ...base, instanceId: 'fresh', capturedAt: new Date().toISOString() });
+  const report = await cleanRuntime(brcPaths);
+  assert.ok(report.removed >= 1);
+  assert.equal((await store.read('relay', 'expired')).state, 'missing');
+  assert.equal((await store.read('relay', 'fresh')).state, 'current');
 });

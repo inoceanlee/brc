@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { createDefaultServices } from '../packages/cli/dist/lifecycle/services.js';
+import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
-import { LifecycleLock } from '../packages/cli/dist/lifecycle/lock.js';
+import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
 import { loadConfig } from '../packages/relay/dist/app.js';
 import { runConfigCommand } from '../packages/cli/dist/commands/config.js';
@@ -43,6 +43,13 @@ test('central settings defaults match the public configuration contract', () => 
       retentionDays: 7,
       maxTotalMiB: 50,
       rotateMiB: 4,
+    },
+    diagnostics: {
+      enabled: true,
+      resourceSampleMs: 1000,
+      functionSnapshotMs: 10000,
+      maxRecordBytes: 65536,
+      retentionDays: 7,
     },
     audit: {
       retentionDays: 30,
@@ -363,4 +370,37 @@ test('setup initializes missing settings and records the last-good configuration
   assert.match(contents, /version: 1/);
   assert.equal(await readFile(path.join(paths.config, 'brc.yaml.last-good'), 'utf8'), contents);
   assert.deepEqual(manager.snapshot(), DEFAULT_SETTINGS);
+});
+
+test('diagnostic settings validate bool, bounds, provenance and service propagation', async (t) => {
+  const { manager, paths, lock, apply } = await createFixture(t);
+  assert.equal(manager.get('diagnostics.enabled').value, true);
+  assert.equal(manager.get('diagnostics.resourceSampleMs').value, 1000);
+  assert.equal(manager.get('diagnostics.functionSnapshotMs').value, 10000);
+  assert.equal(manager.get('diagnostics.maxRecordBytes').value, 65536);
+  assert.equal(manager.get('diagnostics.retentionDays').value, 7);
+  await manager.set('diagnostics.enabled', false);
+  await manager.set('diagnostics.resourceSampleMs', 2000);
+  const overridden = await SettingsManager.load(paths, {
+    BRC_DATA_ROOT: paths.root,
+    BRC_DIAGNOSTICS_ENABLED: 'true',
+    BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS: '5000',
+  }, { lock, apply });
+  assert.deepEqual(overridden.get('diagnostics.enabled'), { value: true, source: 'environment' });
+  assert.deepEqual(overridden.get('diagnostics.resourceSampleMs'), { value: 5000, source: 'environment' });
+  const services = createDefaultServices(paths, overridden.snapshot(), { BRC_DIAGNOSTICS_ENABLED: 'false' });
+  for (const service of services) {
+    assert.equal(service.env.BRC_DIAGNOSTICS_ENABLED, 'true');
+    assert.equal(service.env.BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS, '5000');
+    assert.equal(service.env.BRC_DIAGNOSTICS_MAX_RECORD_BYTES, '65536');
+  }
+  for (const [key, value] of [
+    ['diagnostics.resourceSampleMs', 5],
+    ['diagnostics.functionSnapshotMs', 0],
+    ['diagnostics.maxRecordBytes', 100],
+    ['diagnostics.retentionDays', -1],
+    ['diagnostics.enabled', 1],
+  ]) {
+    await assert.rejects(manager.set(key, value), /diagnostics/i);
+  }
 });

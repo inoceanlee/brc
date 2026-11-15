@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RelayDatabase } from '../packages/cli/dist/lifecycle/relay-database.js';
+import { RelayDatabase } from '../packages/cli/dist/adapters/storage/relay-database.js';
 import { buildRelay } from '../packages/relay/dist/app.js';
 import { SqliteStore, hashPassword, verifyPassword, sha256 } from '../packages/relay/dist/store/sqlite.js';
 

@@ -829,7 +829,7 @@ test('resolveDynamicShellPath resolves POSIX shell via standard fallback list', 
 });
 
 test('inspectProcesses handles Linux EACCES and EPERM gracefully without throwing', async () => {
-  const { inspectProcesses } = await import('../packages/cli/dist/lifecycle/identity.js');
+  const { inspectProcesses } = await import('../packages/cli/dist/adapters/process/identity.js');
   // On non-Linux, the Linux branch is not executed, but inspectProcesses should always resolve a Map
   const result = await inspectProcesses([process.pid]);
   assert.ok(result instanceof Map);

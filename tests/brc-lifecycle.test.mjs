@@ -7,11 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { test } from 'node:test';
-import { ProcessManager, inspectProcess } from '../packages/cli/dist/lifecycle/processes.js';
-import { inspectProcesses } from '../packages/cli/dist/lifecycle/identity.js';
-import { ServiceManager, createDefaultServices } from '../packages/cli/dist/lifecycle/services.js';
+import { ProcessManager, inspectProcess } from '../packages/cli/dist/adapters/process/controller.js';
+import { inspectProcesses } from '../packages/cli/dist/adapters/process/identity.js';
+import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
+import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { LifecycleLock } from '../packages/cli/dist/lifecycle/lock.js';
+import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
 import { startManagedControlServer } from '../packages/shared/dist/managed-control.js';
 
 const fakeService = `
@@ -404,8 +405,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { resolveBrcPaths } from ${JSON.stringify(new URL('../packages/cli/dist/config/paths.js', import.meta.url).href)};
 import { readSettings } from ${JSON.stringify(new URL('../packages/cli/dist/config/reader.js', import.meta.url).href)};
-import { createDefaultServices, ServiceManager } from ${JSON.stringify(new URL('../packages/cli/dist/lifecycle/services.js', import.meta.url).href)};
-import { LifecycleLock } from ${JSON.stringify(new URL('../packages/cli/dist/lifecycle/lock.js', import.meta.url).href)};
+import { ServiceManager } from ${JSON.stringify(new URL('../packages/cli/dist/core/lifecycle/workflow.js', import.meta.url).href)};
+import { createDefaultServices } from ${JSON.stringify(new URL('../packages/cli/dist/adapters/process/specs.js', import.meta.url).href)};
+import { LifecycleLock } from ${JSON.stringify(new URL('../packages/cli/dist/adapters/storage/lock.js', import.meta.url).href)};
 const paths = resolveBrcPaths(process.env);
 const initial = await readSettings(paths, process.env);
 if (initial.settings.services.relayPort !== 13000) throw new Error('initial settings were not loaded');
@@ -560,7 +562,7 @@ test('prevents a second CLI process from acquiring an active lifecycle lock', as
       }
     }
 
-    const lockUrl = new URL('../packages/cli/dist/lifecycle/lock.js', import.meta.url).href;
+    const lockUrl = new URL('../packages/cli/dist/adapters/storage/lock.js', import.meta.url).href;
     const source = `
       import { LifecycleLock } from ${JSON.stringify(lockUrl)};
       await new LifecycleLock(${JSON.stringify(runtimePaths)}).runExclusive(async () => {});
@@ -607,7 +609,7 @@ test('persists identity and allows another CLI instance to inspect and stop the 
 
 test('lets the CLI process exit while the managed service keeps running', async (t) => {
   const harness = await makeHarness(t);
-  const processManagerUrl = JSON.stringify(new URL('../packages/cli/dist/lifecycle/processes.js', import.meta.url).href);
+  const processManagerUrl = JSON.stringify(new URL('../packages/cli/dist/adapters/process/controller.js', import.meta.url).href);
   const source = `import { ProcessManager } from ${processManagerUrl};
 await new ProcessManager(${JSON.stringify(harness.paths)}, { startupTimeoutMs: 3000, shutdownTimeoutMs: 300, pollIntervalMs: 25 }).start(${JSON.stringify(harness.spec)});`;
   const child = spawn(process.execPath, ['--input-type=module', '-e', source], {
@@ -815,12 +817,12 @@ test('start automatically evicts record belonging to another workspace and recov
   assert.equal(statusAfter[0].state, 'running');
 });
 
-test('createDefaultServices configures TRUST_PROXY to true for relay', () => {
+test('createDefaultServices trusts one loopback proxy hop for relay', () => {
   const dummyPaths = paths(os.tmpdir());
   const services = createDefaultServices(dummyPaths, DEFAULT_SETTINGS);
   const relay = services.find((s) => s.name === 'relay');
   assert.ok(relay, 'relay service must exist');
-  assert.equal(relay.env.TRUST_PROXY, 'true');
+  assert.equal(relay.env.TRUST_PROXY, 'loopback');
 });
 
 test('reused PID belonging to foreign inaccessible system process is evicted and starts cleanly', async (t) => {

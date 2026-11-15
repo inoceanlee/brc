@@ -8,10 +8,11 @@ import { test } from 'node:test';
 import { uninstallBrc } from '../packages/cli/dist/maintenance/uninstall.js';
 import { identifyGlobalPackageManager, packageRemovalArguments, BRC_PACKAGE_NAME } from '../packages/cli/dist/maintenance/global-package.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { LifecycleLock } from '../packages/cli/dist/lifecycle/lock.js';
-import { inspectProcess, ProcessManager } from '../packages/cli/dist/lifecycle/processes.js';
-import { createDefaultServices, ServiceManager } from '../packages/cli/dist/lifecycle/services.js';
-import { cleanRuntime } from '../packages/cli/dist/maintenance/cleanup.js';
+import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { inspectProcess, ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
+import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
+import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
+import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
 
 function paths(root) {
   return {

@@ -200,7 +200,8 @@ test('brc clean removes expired files and reports the cleanup result', async (t)
 
   assert.equal(result.status, 0, result.stderr);
   assert.equal(existsSync(fixture.expiredLog), false);
-  assert.match(result.stdout, /BRC cleanup: removed 1 items/);
+  assert.match(result.stderr, /BRC cleanup: removed 1 items/);
+  assert.doesNotMatch(result.stdout, /BRC cleanup:/);
 });
 
 test('automatic cleanup runs after help, invalid commands, and startup failure', async (t) => {
@@ -255,6 +256,7 @@ console.log(JSON.stringify(paths));
     data: path.join(root, 'data'),
     runtime: path.join(root, 'runtime'),
     logs: path.join(root, 'logs'),
+    diagnostics: path.join(root, 'diagnostics'),
     tmp: path.join(root, 'tmp'),
   });
   for (const value of Object.values(result)) assert.equal(path.isAbsolute(value), true);

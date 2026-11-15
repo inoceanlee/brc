@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { LifecycleLock } from '../packages/cli/dist/lifecycle/lock.js';
-import { inspectProcess } from '../packages/cli/dist/lifecycle/identity.js';
+import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { inspectProcess } from '../packages/cli/dist/adapters/process/identity.js';
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 async function sandbox(t) {
@@ -65,7 +65,7 @@ test('reclaims a lock whose owner PID has been reused across reboots', async (t)
   await writeFile(path.join(paths.runtime, 'lifecycle.lock', 'owner.json'), JSON.stringify({
     ...owner, createdAt: '0', workspaceRoot: paths.root, token: '12345678-1234-4234-8234-123456789abc', version: 1,
   }));
-  const store = new (await import('../packages/cli/dist/lifecycle/lock-store.js')).LockStore(paths);
+  const store = new (await import('../packages/cli/dist/adapters/storage/lock-store.js')).LockStore(paths);
   // Must reclaim the stale lock because identity does not match the live process identity
   assert.equal(await store.reclaimExpired(inspectProcess), true);
   assert.equal((await readdir(paths.runtime)).filter((x) => x === 'lifecycle.lock').length, 0);
@@ -141,7 +141,7 @@ test('reclaims an abandoned directory lock only after its owner exits', async (t
     ...identity, version: 1, workspaceRoot: paths.root,
     token: '11111111-2222-3333-4444-555555555555',
   }));
-  const store = new (await import('../packages/cli/dist/lifecycle/lock-store.js')).LockStore(paths);
+  const store = new (await import('../packages/cli/dist/adapters/storage/lock-store.js')).LockStore(paths);
   assert.equal(await store.reclaimExpired(inspectProcess), false);
   child.kill();
   await new Promise((resolve) => child.once('close', resolve));
