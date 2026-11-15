@@ -65,7 +65,12 @@ export class LockStore {
       } catch (error) {
         if (code(error) !== 'EEXIST' && code(error) !== 'EPERM' && code(error) !== 'EACCES') throw error;
         try { await lstat(this.lockPath); return false; }
-        catch (probe) { if (code(probe) === 'ENOENT') throw error; throw probe; }
+        catch (probe) {
+          // The competing owner can release the lock between the failed mkdir and
+          // this probe. That is not an acquisition error: the caller simply retries.
+          if (code(probe) === 'ENOENT') return false;
+          throw probe;
+        }
       }
       await rename(path.join(stage, 'owner.json'), path.join(this.lockPath, 'owner.json'));
       return true;
