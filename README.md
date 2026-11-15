@@ -97,7 +97,11 @@ In an AI chat client that supports remote MCP servers, add `https://your-domain.
 | `brc stop`                         | Stop all managed services                      |
 | `brc restart`                      | Restart all managed services                   |
 | `brc status`                       | Check service health and running status        |
-| `brc logs [relay\|agent\|traefik]` | View service logs                              |
+| `brc status --json`                | Print service status as JSON                   |
+| `brc logs [relay\|agent\|traefik\|cli]` | View service or CLI logs                  |
+| `brc diagnose startup`             | Show the latest startup stage timings          |
+| `brc diagnose functions`           | Show own-function call counts and durations    |
+| `brc diagnose resources`           | Show per-process CPU, memory, and peaks        |
 | `brc config show`                  | View effective configuration                   |
 | `brc config get <key>`             | Read a specific configuration setting          |
 | `brc config set <key> <value>`     | Update a setting and save atomically           |
@@ -123,6 +127,8 @@ BRC keeps its configuration and private data in platform-specific locations:
 - macOS: `~/Library/Application Support/brc`
 
 Set `BRC_DATA_ROOT` to override the data root, or run `brc config path` to find the configuration file.
+
+Logs live in `logs/` and diagnostic snapshots in `diagnostics/`; both follow configured retention and capacity limits. `brc start --timing` prints stage timings to stderr, and `brc diagnose ... --json` emits stable JSON for scripts. Async function durations include awaiting, and every resource peak states whether it came from the system counter or from sampling.
 
 ## Troubleshooting
 

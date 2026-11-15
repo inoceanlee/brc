@@ -97,7 +97,11 @@ brc logs agent
 | `brc stop`                         | 停止所有受管服务                 |
 | `brc restart`                      | 重启所有受管服务                 |
 | `brc status`                       | 查看各服务运行与健康状态         |
-| `brc logs [relay\|agent\|traefik]` | 查看指定服务运行日志             |
+| `brc status --json`                | 以 JSON 输出服务状态             |
+| `brc logs [relay\|agent\|traefik\|cli]` | 查看指定服务或 CLI 日志      |
+| `brc diagnose startup`             | 查看最近一次启动的分阶段耗时     |
+| `brc diagnose functions`           | 查看自有函数调用次数与耗时       |
+| `brc diagnose resources`           | 查看各进程 CPU、内存与峰值       |
 | `brc config show`                  | 查看当前生效配置                 |
 | `brc config get <key>`             | 读取指定配置项                   |
 | `brc config set <key> <value>`     | 修改配置项并原子保存             |
@@ -123,6 +127,8 @@ BRC 默认将配置及私有数据保存在以下位置：
 - macOS：`~/Library/Application Support/brc`
 
 使用环境变量 `BRC_DATA_ROOT` 可以修改数据根目录。执行 `brc config path` 可查看配置文件位置。
+
+日志位于 `logs/`，诊断快照位于 `diagnostics/`，两者都受保留期和容量上限管理。`brc start --timing` 可在启动后于 stderr 查看阶段耗时；`brc diagnose ... --json` 输出稳定 JSON，便于脚本读取。异步函数的耗时包含等待时间，资源峰值会标明来源是系统计数器还是采样值。
 
 ## 常见问题
 
