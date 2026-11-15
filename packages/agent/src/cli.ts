@@ -42,6 +42,7 @@ const debug = flag('debug') || process.env.BRC_DEBUG === '1';
 const ts = () => new Date().toISOString();
 const log = (level: 'info' | 'warn' | 'error' | 'debug', msg: string) => {
   if (level === 'debug' && !debug) return;
+  diagnostics.log(msg, { level, source: { file: 'agent/cli.ts', function: 'log' } });
   (level === 'error' ? console.error : console.log)(`[${ts()}] [${level}] ${msg}`);
 };
 

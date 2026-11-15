@@ -30,10 +30,8 @@ Relay 只信任一个 loopback 代理跳点（`TRUST_PROXY=loopback`）。Traefi
   - `src/cli.ts`：运行入口与对象组装。
   - `src/commands/`：命令树、参数与帮助（`parser.ts`）、配置与诊断命令、取消信号。
   - `src/core/lifecycle/`：无 I/O 的启停规则、依赖接口与编排。
-  - `src/core/maintenance/`：数据回收规则。
-  - `src/adapters/process/`：进程启动、身份核验与启动规格。
+  - `src/adapters/process/`：进程启动、身份核验、就绪与健康请求、启动规格。
   - `src/adapters/storage/`：生命周期锁、运行记录、清理与 Relay 数据库。
-  - `src/adapters/network/`：就绪与健康请求。
   - `src/config/`：配置类型、默认值、校验与平台路径（唯一来源）。
   - `src/traefik/`：代理专属逻辑、模板与二进制管理。
 - `packages/relay/`：HTTP 服务、用户及设备、SQLite、OAuth、MCP、审计记录。

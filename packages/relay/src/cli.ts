@@ -45,6 +45,10 @@ if (process.argv.includes('--initialize')) {
 
 const log = (level: string, msg: string) => {
   const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
+  diagnostics.log(msg, {
+    level: level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info',
+    source: { file: 'relay/cli.ts', function: 'log' },
+  });
   (level === 'error' || level === 'warn' ? console.error : console.log)(line);
 };
 

@@ -7,7 +7,7 @@ import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { appendRotatingLog, installManagedLog, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import { appendRotatingLog, installManagedLog, startManagedControlServer, type DiagnosticsRuntime, type ManagedControlServer } from 'brc-shared';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../config/settings.js';
 import type { BrcPaths } from '../config/paths.js';
 import { renderConfig, errorMessage, type TraefikTemplates } from './core.js';
@@ -200,7 +200,10 @@ function environmentPort(name: string): number {
   return port;
 }
 
-export async function runManagedTraefikService(settings: Readonly<BrcSettings> = DEFAULT_SETTINGS): Promise<void> {
+export async function runManagedTraefikService(
+  settings: Readonly<BrcSettings> = DEFAULT_SETTINGS,
+  diagnostics?: Pick<DiagnosticsRuntime, 'log'>,
+): Promise<void> {
   const managedLog = installManagedLog();
   let control: ManagedControlServer | undefined;
   let child: ChildProcess | undefined;
@@ -248,6 +251,7 @@ export async function runManagedTraefikService(settings: Readonly<BrcSettings> =
       child?.once('error', reject);
     });
     await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => logFailure?.message ?? 'Traefik did not answer on its local health endpoint.');
+    diagnostics?.log(`Traefik ${manifest.current} is healthy.`, { source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' } });
 
     control = await startManagedControlServer({
       health: async () => {
@@ -274,6 +278,11 @@ export async function runManagedTraefikService(settings: Readonly<BrcSettings> =
     }
   } catch (error) {
     process.exitCode = 1;
+    diagnostics?.log(`Traefik service failed: ${errorMessage(error)}`, {
+      level: 'error',
+      error,
+      source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' },
+    });
     console.error(`Traefik service failed: ${errorMessage(error)}`);
     if (child && child.exitCode === null && child.signalCode === null) {
       child.kill();

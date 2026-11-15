@@ -390,7 +390,18 @@ if (isMainModule()) {
   if (process.env.BRC_MANAGED_SERVICE === 'traefik' && process.argv.includes('--run-traefik')) {
     const paths = resolveBrcPaths(process.env);
     const { settings } = await readSettings(paths, process.env);
-    await runManagedTraefikService(settings);
+    const diagnostics = await startDiagnostics({
+      component: 'traefik',
+      instanceId: `traefik-${process.pid}`,
+      env: { ...process.env, ...diagnosticEnvironment(settings, paths) },
+      manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
+      logFile: path.join(paths.logs, 'traefik-diagnostics.log'),
+    });
+    try {
+      await runManagedTraefikService(settings, diagnostics);
+    } finally {
+      await diagnostics.stop();
+    }
   } else {
     await main();
   }
