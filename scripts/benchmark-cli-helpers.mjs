@@ -22,6 +22,7 @@ export function isolatedEnvironment(source, root, ports) {
     TEMP: path.join(root, 'tmp'),
     TMP: path.join(root, 'tmp'),
     BRC_DATA_ROOT: root,
+    BRC_NO_BROWSER: '1',
     BRC_RELAY_PORT: String(ports[0]),
     BRC_TRAEFIK_PORT: String(ports[1]),
     BRC_TRAEFIK_HEALTH_PORT: String(ports[2]),

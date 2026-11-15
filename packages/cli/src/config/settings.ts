@@ -1,3 +1,5 @@
+import { DEFAULT_MANAGED_LOG_MAX_BYTES } from 'brc-shared';
+
 export interface BrcSettings {
   version: 1;
   proxy: {
@@ -109,7 +111,7 @@ export const DEFAULT_SETTINGS: Readonly<BrcSettings> = Object.freeze({
     concurrent: 16,
   }),
   services: Object.freeze({ relayPort: 3000, proxyPort: 13001, healthPort: 13002, publicUrl: '' }),
-  logs: Object.freeze({ retentionDays: 7, maxTotalMiB: 50, rotateMiB: 4 }),
+  logs: Object.freeze({ retentionDays: 7, maxTotalMiB: 50, rotateMiB: DEFAULT_MANAGED_LOG_MAX_BYTES / (1024 * 1024) }),
   audit: Object.freeze({ retentionDays: 30, maxEntries: 50_000 }),
   runtime: Object.freeze({ startupTimeoutMs: 15_000, shutdownTimeoutMs: 3_000, lockWaitMs: 3_000, lockPollMs: 50 }),
 });

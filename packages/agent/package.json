@@ -11,7 +11,7 @@
                   "dist"
               ],
     "scripts":  {
-                    "build":  "tsc -p tsconfig.json",
+                    "build": "node ../../scripts/build-package.mjs .",
                     "start":  "node dist/cli.js",
                     "dev":  "tsc -p tsconfig.json --watch"
                 },

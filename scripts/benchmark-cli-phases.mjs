@@ -1,9 +1,9 @@
 // Loaded only for the separate diagnostic cycle, not the five benchmark samples.
 import { appendFileSync } from 'node:fs';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
-import { LifecycleLock } from '../packages/cli/dist/lifecycle/lock.js';
-import { ProcessManager } from '../packages/cli/dist/lifecycle/processes.js';
-import { ServiceManager } from '../packages/cli/dist/lifecycle/services.js';
+import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
+import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 
 const output = process.env.BENCHMARK_PHASE_FILE;
 if (!output) throw new Error('BENCHMARK_PHASE_FILE is required.');

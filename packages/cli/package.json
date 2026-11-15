@@ -21,7 +21,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "node ../../scripts/build-package.mjs ."
   },
   "dependencies": {
     "brc-shared": "workspace:*",
