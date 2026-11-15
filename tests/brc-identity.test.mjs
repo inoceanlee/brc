@@ -8,8 +8,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RelayDatabase } from '../packages/cli/dist/adapters/storage/relay-database.js';
-import { buildRelay } from '../packages/relay/dist/app.js';
-import { SqliteStore, hashPassword, verifyPassword, sha256 } from '../packages/relay/dist/store/sqlite.js';
+import { buildRelay } from '../packages/relay/dist/adapters/http/app.js';
+import { SqliteStore, hashPassword, verifyPassword, sha256 } from '../packages/relay/dist/adapters/storage/sqlite.js';
 
 const legacySchema = `
 CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);

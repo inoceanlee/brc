@@ -5,8 +5,8 @@ import path from 'node:path';
 import { applyLegacyEnv, installManagedLog, startDiagnostics, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
 applyLegacyEnv();
 const managedLog = installManagedLog();
-import { buildRelay, loadConfig } from './app.js';
-import { SqliteStore } from './store/sqlite.js';
+import { buildRelay, loadConfig } from './adapters/http/app.js';
+import { SqliteStore } from './adapters/storage/sqlite.js';
 
 const cfg = loadConfig();
 const diagnostics = await startDiagnostics({

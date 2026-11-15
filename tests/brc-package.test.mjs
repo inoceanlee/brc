@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { SqliteStore } from '../packages/relay/dist/store/sqlite.js';
+import { SqliteStore } from '../packages/relay/dist/adapters/storage/sqlite.js';
 import os from 'node:os';
 import { createServer } from 'node:net';
 import path from 'node:path';

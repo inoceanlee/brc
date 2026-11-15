@@ -17,14 +17,14 @@ import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { DeviceHub } from './device-hub.js';
-import { SqliteStore, verifyPassword, type AuditRetentionPolicy } from './store/sqlite.js';
-import { RelayOAuthProvider, SCOPES } from './auth/provider.js';
-import { Sessions } from './auth/sessions.js';
+import { DeviceHub } from '../../device-hub.js';
+import { SqliteStore, verifyPassword, type AuditRetentionPolicy } from '../storage/sqlite.js';
+import { RelayOAuthProvider, SCOPES } from '../../core/auth/provider.js';
+import { Sessions } from '../../core/auth/sessions.js';
 import { createMcpServer } from './mcp/server.js';
 import * as pages from './pages/html.js';
 import * as adminPages from './pages/admin.js';
-import { LoginLimiter } from './auth/rate-limit.js';
+import { LoginLimiter } from '../../core/auth/rate-limit.js';
 
 export interface RelayConfig {
   port: number;

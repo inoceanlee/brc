@@ -2,8 +2,8 @@
  * Tool-invocation path for /mcp: device resolution, pause check, and audit.
  */
 import { createHash } from 'node:crypto';
-import type { DeviceHub } from '../device-hub.js';
-import type { SqliteStore } from '../store/sqlite.js';
+import type { DeviceHub } from '../../../device-hub.js';
+import type { SqliteStore } from '../../storage/sqlite.js';
 import type { ToolResult } from 'brc-shared';
 
 export interface InvokeContext { userId: string; clientId: string }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseTrustProxy } from '../packages/relay/dist/app.js';
+import { parseTrustProxy } from '../packages/relay/dist/adapters/http/app.js';
 
 test('trusted proxy policy never trusts every proxy implicitly', () => {
   assert.equal(parseTrustProxy(undefined), false);
@@ -16,7 +16,7 @@ test('trusted proxy policy never trusts every proxy implicitly', () => {
 
 test('spoofed forwarding headers cannot change the parsed client identity', async () => {
   const { createRequire } = await import('node:module');
-  const require = createRequire(new URL('../packages/relay/dist/app.js', import.meta.url));
+  const require = createRequire(new URL('../packages/relay/dist/adapters/http/app.js', import.meta.url));
   const express = require('express');
   const server = express();
   server.set('trust proxy', parseTrustProxy('true'));

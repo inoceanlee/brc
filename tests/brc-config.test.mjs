@@ -8,7 +8,7 @@ import { createDefaultServices } from '../packages/cli/dist/adapters/process/spe
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
 import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
-import { loadConfig } from '../packages/relay/dist/app.js';
+import { loadConfig } from '../packages/relay/dist/adapters/http/app.js';
 import { runConfigCommand } from '../packages/cli/dist/commands/config.js';
 
 async function createFixture(t, options = {}) {

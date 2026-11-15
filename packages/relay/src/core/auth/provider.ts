@@ -9,7 +9,7 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidRequestError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import { SqliteStore, randomToken, sha256 } from '../store/sqlite.js';
+import { SqliteStore, randomToken, sha256 } from '../../adapters/storage/sqlite.js';
 
 export const SCOPES = ['mcp:tools'];
 const AUTH_CODE_TTL_MS = 10 * 60_000;

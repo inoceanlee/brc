@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { SqliteStore } from '../packages/relay/dist/store/sqlite.js';
+import { SqliteStore } from '../packages/relay/dist/adapters/storage/sqlite.js';
 
 const cliEntry = fileURLToPath(new URL('../packages/cli/dist/cli.js', import.meta.url));
 const cliUrl = JSON.stringify(pathToFileURL(cliEntry).href);
