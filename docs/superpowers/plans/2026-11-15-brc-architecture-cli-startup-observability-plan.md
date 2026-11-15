@@ -14,7 +14,7 @@
 
 ### 推进顺序
 
-- 先建立统一的运行诊断：日志、全函数计时、持续 CPU/内存监测。在此基础上记录启动各阶段耗时，确定瓶颈后再加速。
+- 先建立统一的运行诊断：日志、全函数计时、持续 CPU/内存监测。在此基础上记录启动各阶段耗时，确定瓶颈后再加速。代理限流安全测试可以同步开展。
 - 先处理 CLI 外部行为：统一命令帮助、机器可读结果、诊断显示、错误与取消。保持简单的日常操作。
 - 然后整理核心业务与外部对接结构，在真实需要的地方消除重复实现，不为重构而重构。
 - 将日志发现的代理安全警告独立复现并修复，确保限流不会被伪造的转发头绕过。
@@ -26,8 +26,8 @@
       shared/src/
         managed-log.ts                     现有共享日志文件轮转
         diagnostics/
-          core/                            共享诊断模型与函数/阶段计时
-          adapters/                        日志写入与 Node CPU/内存采样
+          core/                            共享诊断模型、函数和阶段计时接口
+          adapters/                        日志锁、原子快照及 Node 资源采样
       cli/src/
         cli.ts                               唯一入口与对象连接
         commands/                            命令解析、状态展示、诊断查询
@@ -37,7 +37,7 @@
         adapters/storage/                    状态记录与磁盘清理
         adapters/network/                    就绪和健康请求
         diagnostics/                         诊断日志、函数和资源结果查询
-        config/                              现有统一设置来源
+        config/settings.ts                   唯一诊断参数来源与校验
         traefik/                             代理业务及专有适配
       relay/src/
         core/auth/                           身份与限流规则
@@ -51,6 +51,8 @@
         adapters/telemetry/                  工具记录
     native/brc-process/src/diagnostics.rs    Rust 自有函数探针
     scripts/instrument-functions.mjs          TS/JS 函数的构建期统一插桩
+    scripts/build-native.mjs                  交给 Cargo 增量依赖跟踪
+    scripts/test-unit.mjs                     自动发现单元测试并统一调用
     scripts/benchmark-cli*.mjs                隔离性能验证
     tests/brc-*.test.mjs                     接口、性能、安全回归
     docs/architecture.md                     更新现行跨平台架构
@@ -58,7 +60,7 @@
 ### 交付与验收
 
 - 可直接看到一次启动的总耗时、服务耗时和最慢阶段；失败、取消也能追溯。
-- 可查询项目自有函数调用次数及耗时、各服务 CPU 与内存变化及峰值；能区分测量不到的外部组件。
+- 可查询项目自有函数调用次数及耗时、各服务 CPU 与内存变化及峰值；区分同步执行与异步等待、系统峰值与采样峰值，并标出过期或不可用的诊断数据。
 - CLI 对人易读，对脚本可解析；常规启动不增加多余操作。
 - 既有服务身份和进程保护逻辑不退化；未知归属仍拒绝干预。
 - 以同等条件对比启动耗时，不用日志时间差替代基准成绩。
@@ -72,35 +74,20 @@
 - 首先从已有源码和隔离基准验证现状，禁止使用生产数据根或生产端口。基线包含冷启动、重复启动、status、help、stop，每项至少五次测量；保留各次结果和环境参数，不修改现有服务。
 - 实施阶段共同应用 code-rules（含「运行诊断」）、cli-rules；结构调整使用 structure-design 并检查诊断基础设施的目录、接口与接线；未知慢因与安全问题使用 superpowers:systematic-debugging；每项修改使用 superpowers:test-driven-development。文档使用 ste-zh，阶段收束使用 project-context。
 
-### 前置批次：统一诊断基础设施
+### 并行前置批次：共享诊断基础设施与反代安全
 
 **任务：共享诊断接口与日志管理**
 
-- [ ] 复用 packages/shared/src/managed-log.ts，新增 packages/shared/src/diagnostics/core/{event,ports,recorder,functions}.ts 和 adapters/{logging,resources-node}.ts。纯统计核心定义日志、计时和采样接口；文件写入、系统资源读取由外部适配实现，具体对象仅在各服务入口创建并连接。
-- [ ] 统一结构化日志：level、timestamp、component、run_id、source、message、error_code、stack。只在异常时提取可用堆栈；禁止将令牌、密码、cookie、敏感原始命令、检索正文和文件 diff 写入常规诊断日志。
-- [ ] 保留现有日志轮转/总容量/过期策略；改造为受控的组件日志文件，不为每次 CLI 运行永久新建文件。多 CLI 并发追加与轮转需安全，写入有界且不争抢生命周期锁；新记录统一 run_id 便于检索。
-- [ ] 先添加 tests/brc-diagnostics-logging.test.mjs：正常/异常来源、敏感数据脱敏、并发写入和轮转、满额回收、活跃日志保护、写入失败隔离。确认旧功能仍能读取。
+- [ ] 复用 packages/shared/src/managed-log.ts，新增 packages/shared/src/diagnostics/core/{event,ports,recorder,functions}.ts 与 adapters/{logging,log-lock,snapshots,resources-node}.ts。纯统计核心定义日志、计时、快照及采样接口；文件写入、互斥与系统资源读取由适配器实现。各服务入口负责创建对象及连接依赖。
+- [ ] 统一结构化日志：level、timestamp、component、run_id、instance_id、source、message、error_code、stack。只在异常时提取可用堆栈；禁止将令牌、密码、cookie、敏感命令、检索正文和文件 diff 写入常规诊断日志。
+- [ ] 在 packages/cli/src/config/settings.ts 中一次性定义 diagnostics 组的启用策略、资源采样间隔、函数统计快照间隔、最大记录容量及保留期，维护 BrcSettings、默认值、合法范围、copy/merge、BRC_SETTING_KEYS、环境映射及 config get/set/show。通过 packages/cli/src/lifecycle/services.ts 现有子进程环境白名单传递到 Relay、Agent 和 Traefik 管理进程；子服务不重复设默认值。增加 tests/brc-config.test.mjs 的优先级、错误输入和端到端传递测试。
+- [ ] 日志由组件轮转文件保存，不为每条 CLI 命令单独建日志。现有 managed-log.ts 的 writeQueues 只管理单进程；为 cli.log 追加/轮转增加独立跨进程锁，以原子建锁、归属核验、有限等待与安全崩溃回收管理。锁与生命周期锁分离，写盘失败只降级诊断。JSONL 超长事件写脱敏摘要，禁止截断半条 JSON 记录。
+- [ ] 先添加 tests/brc-diagnostics-logging.test.mjs：从多个独立 Node 进程同时写 cli.log，触发轮转、模拟持锁进程崩溃/等待超时并检查 JSONL 逐行解析；覆盖路径替换、敏感数据、满额回收、活跃文件保护及写入失败。确认旧日志可读，主命令结果不受诊断损坏影响。
 - [ ] 将已定位的 agent/src/core/utils/{logger,fuzzySearchLogger,trackTools}.ts、Relay/Agent console 输出及 Traefik 代理写入器接入统一诊断入口，原有 MCP 日志/控制台展示仅作为对外适配；常规日志不保留原始检索内容或 diff，工具原有对外结果与内部运行日志分开。
-- [ ] 验证新增单元测试、tests/brc-logs.test.mjs、tests/brc-clean.test.mjs；完成后固定接口，允许后续独立工作树并行。
-
-### 并行批次：函数计时、资源监测与反代安全
-
-**任务：覆盖项目全部自有函数**
-
-- [ ] 在 scripts/instrument-functions.mjs 集中实现构建期插桩，覆盖 packages/{cli,relay,agent,shared}/src 中自有同步/异步函数、类方法、回调、生成器和访问器；产出函数 ID 与源码映射清单。正式构建/发布 JS 脚本纳入相同机制，第三方依赖和生成文件不作为自有函数。
-- [ ] 在 shared/diagnostics/core/functions.ts 按函数 ID 聚合调用次数、累计及最大耗时，使用单调时钟。普通调用只更新内存计数，定期批量写入；异常记录来源与可获取堆栈，采集器自调用不得无限递归。
-- [ ] 在 native/brc-process/src/diagnostics.rs 对自有 Rust 函数复用统一探针，向 CLI 诊断适配输出计数和耗时，保留 Windows 原生身份查询的 stdout JSON 契约。短时原生进程同时记录 CPU、内存的启动/退出资源摘要。Traefik 第三方二进制仅记录进程资源和调用边界，不声明其内部函数覆盖。
-- [ ] 先编写 tests/brc-diagnostics-functions.test.mjs：对照源码函数清单检查覆盖；断言同步/异步/抛错/递归/闭包/生成器、调用次数、累计及最大耗时；分别检查 TS/JS 与 Rust 输出。增加诊断关闭/启用语义对照及开销基准，保护定时器、Promise 和异常传播。
-- [ ] 修改现有构建/打包脚本接入插桩及源码映射，测试正式发行包中的探针有效；禁止仅用采样型 profiler 的估算次数替代实际调用次数。应用 code-rules、structure-design、superpowers:test-driven-development。
-
-**任务：持续监测各进程 CPU 与内存**
-
-- [ ] 通过 shared/diagnostics/adapters/resources-node.ts 采样 CLI、Relay、Agent 以及正式构建/发布脚本自身的 CPU 时间、CPU 使用变化、RSS 与堆内存。长驻进程持续采样，短命进程记录至少入口与退出；采样器由入口创建，周期和保留容量从 config/settings.ts 唯一定义，记录实测可得的峰值和采样盲区。
-- [ ] 扩展 cli/adapters/process/resources.ts 及现有原生/跨平台查询，监测 Traefik 子进程。每条资源记录标识进程身份、测量来源、采样窗口和峰值，异常退出、权限不足或平台不支持时显示缺测状态。
-- [ ] 先编写 tests/brc-diagnostics-resources.test.mjs：持续采样、CPU/内存上升及回落、峰值、PID 复用、进程结束后的最终统计、不可读状态、定时器退出与日志容量。记录采样对启动耗时和内存的影响。
-- [ ] 确保日志、函数统计、资源采样由同一个诊断模块协调，并通过统一接口供 CLI、Relay、Agent 复用；不得在业务模块复制监测循环。应用 code-rules「运行诊断」、structure-design 和 superpowers:test-driven-development。
-
-**并发分工**：共享诊断接口与日志任务先串行确定；其后函数计时、资源监测和反代安全各用独立工作树并行，不能同时修改 shared/diagnostics 的同一文件；主 Agent 负责合入接口与验收。
+- [ ] 定义并实现 DiagnosticSnapshotPort：Relay、Agent 和 Traefik 管理进程按 service、instance_id 原子更新最新函数/资源快照，记录进程身份、采集时间、数据版本及部分失败。停止时有界 flush，异常退出时保留最后完整快照。CLI 查询不读取其他进程内存，以权限和归属校验读取快照；按过期时间区分当前/退出/过期/缺测。短时 CLI 结果按 run_id 保留在组件轮转日志。
+- [ ] 先添加 tests/brc-diagnostics-snapshots.test.mjs，覆盖多进程写读、原子替换、服务重启、旧快照过期、损坏记录、活跃文件保护、数据容量与清理，禁止把失效文件误当当前状态。
+- [ ] 在 scripts/test-unit.mjs 使用 Node 文件枚举按约定发现 tests/brc-*.test.mjs 与 packages/relay/test/unit.test.mjs；不依赖 Windows Shell 展开通配符。根 package.json 的 test:unit 只调用这一入口。新增测试必须自动进入单元测试清单，同时排除 E2E、打包脚本和非测试文件。增加枚举与执行结果自检。
+- [ ] 验证新增单元测试、tests/brc-logs.test.mjs、tests/brc-clean.test.mjs，并确认自动发现包含全部现有和新增单元测试；完成后固定接口，允许函数与资源任务独立工作树并行。
 
 **任务：反向代理信任边界**
 
@@ -108,7 +95,28 @@
 - [ ] 增加 tests/brc-proxy-trust.test.mjs 和必要的隔离 Traefik→Relay 端到端测试：未经信任的客户端伪造 X-Forwarded-For 不改变实际限流身份；同一来源无法通过改头规避连续失败限制；正常访问、OAuth、设备连接仍可用。
 - [ ] 修改单一可信代理入口适配，限定允许的代理来源或跳数；受控链路有可信客户端地址，直连/意外拓扑采取安全行为。配置来源及可调项均纳入现有 settings.ts，不在多处硬编码。
 - [ ] 完成后执行新增安全测试、tests/brc-traefik.test.mjs 及隔离 E2E；保留安全风险修复依据，不把日志警告本身等同于已被利用。
-- [ ] 本任务与函数计时、资源监测可并行；接口冲突由主 Agent 协调，涉及 cli.ts、services.ts 的变更在合入时串行。
+- [ ] 与共享诊断基础设施使用独立工作树并行验证和修复。配置传播及 cli.ts/services.ts 的变更由主 Agent 在合并阶段协调。
+
+### 并行批次：函数计时与资源监测
+
+**任务：覆盖项目全部自有函数**
+
+- [ ] 在 scripts/instrument-functions.mjs 集中实现构建期插桩，覆盖 packages/{cli,relay,agent,shared}/src 中自有同步/异步函数、类方法、回调、生成器和访问器；构建/发布 JS 脚本纳入同一覆盖清单。输出函数 ID 与源码映射，统计可测函数总数及不可测原因；保持原函数调用、this、Promise、异常及生成器语义。第三方依赖与生成文件不计入自有函数。
+- [ ] 在 shared/diagnostics/core/functions.ts 按函数 ID 聚合调用次数、累计及最大耗时，使用单调时钟。同步函数记录调用执行时长；异步函数记录调用到 Promise 完成的墙钟时间并标注包含 await 等待；生成器按每次 next/throw/return 的执行片段计时，不累计 yield 挂起间隔。普通调用只更新内存；异常记录来源和可得堆栈，采集器递归受控。
+- [ ] 在 native/brc-process/src/diagnostics.rs 对自有 Rust 函数复用统一探针，向 CLI 诊断适配输出计数和耗时，保持 Windows 原生身份查询 stdout JSON 契约。短时原生进程记录资源摘要及可靠峰值来源；无法测出的值标记缺测。Traefik 第三方二进制仅统计资源和调用边界。
+- [ ] 修正 scripts/build-native.mjs 固定五个输入文件的时间戳判断：每次走 cargo build --release --locked，由 Cargo 的增量依赖跟踪判断是否重编译；编译输出仍须检验 PE 格式并仅在产物变化时复制。添加修改/新增 Rust 模块触发重编译的隔离测试，并测量未改动时的构建开销。
+- [ ] 先编写 tests/brc-diagnostics-functions.test.mjs：对照源码函数清单检查覆盖；断言同步/异步/抛错/递归/闭包/生成器、调用次数、累计及最大耗时；分别检查 TS/JS 与 Rust 输出。增加诊断关闭/启用语义对照及开销基准，保护定时器、Promise 和异常传播。
+- [ ] 将现有构建与打包脚本接入插桩和源码映射，验证正式发行包的函数覆盖表与实际调用一致；禁止将采样型 profiler 的估算值当作真实调用次数。应用 code-rules、structure-design、superpowers:test-driven-development。
+
+**任务：持续监测各进程 CPU 与内存**
+
+- [ ] 通过 shared/diagnostics/adapters/resources-node.ts 采样 CLI、Relay、Agent 及构建/发布脚本的 CPU 时间、CPU 使用变化、RSS 与堆内存。长驻进程持续采样，短命进程启动及退出时补充平台资源计数器；优先使用可靠系统峰值，缺少时将最大采样值标为 sampled_peak 并附采样窗口，不声称真实峰值。
+- [ ] 扩展 cli/adapters/process/resources.ts 及现有原生/跨平台查询，监测 Traefik 子进程。每条资源记录标识进程身份、测量来源、采样窗口和峰值，异常退出、权限不足或平台不支持时显示缺测状态。
+- [ ] 先编写 tests/brc-diagnostics-resources.test.mjs：持续采样、CPU/内存上升及回落、真实系统峰值与 sampled_peak 的区分、短命进程采样盲区、PID 复用、进程退出、不可读状态、定时器回收及日志容量。对照有无监测的启动耗时与内存开销。
+- [ ] 确保日志、函数统计、资源采样由同一个诊断模块协调，并通过统一接口供 CLI、Relay、Agent 复用；不得在业务模块复制监测循环。应用 code-rules「运行诊断」、structure-design 和 superpowers:test-driven-development。
+
+**并发分工**：共享诊断与代理安全分别在独立工作树同步开始，互不修改相同源文件；共享诊断接口验收后再并行执行函数计时与资源监测，涉及 shared/diagnostics 相同文件由主 Agent 串行整合。测试与安全验收由主 Agent 汇总。
+
 
 ### 依赖批次：启动耗时记录
 
@@ -134,8 +142,8 @@
 
 **任务：启动诊断与日志管理**
 
-- [ ] 创建 packages/cli/src/commands/diagnostics.ts，支持 brc diagnose startup、brc diagnose functions、brc diagnose resources（各可 --json）和 brc start --timing；最近一次完整或失败的记录均可查看，保留未归属时长、资源采样窗口及缺测区间；首次无数据返回明确空结果。
-- [ ] 扩展 packages/cli/src/maintenance/logs.ts 识别 cli 组件与统一诊断事件。保持组件日志的同一套路径校验、容量/过期回收；并发追加和滚动使用共享写入器，保护正在写入的文件。
+- [ ] 创建 packages/cli/src/commands/diagnostics.ts，支持 brc diagnose startup、brc diagnose functions、brc diagnose resources（各可 --json）和 brc start --timing。读取共享组件日志和服务实例原子快照，显示各进程身份、采集时间、当前/已退出/过期/缺测状态，区分异步等待和 CPU 时间、真实峰值和采样峰值；首次无数据返回明确空结果。
+- [ ] 扩展 packages/cli/src/maintenance/logs.ts 识别 CLI 日志和服务诊断快照。按现有保留期/容量上限清理过期记录，校验文件归属、符号链接和活跃实例；多进程轮转使用独立诊断锁，清理不能移除正在写的文件。
 - [ ] 依据 CLI extension，保留每次命令启动自身数据清理这一明确项目例外；仅回收 BRC 的失效数据，绝不触碰用户配置和生产服务；从 stderr 报告清理并在同一结果模型中记录耗时、失败、保留条目。
 - [ ] 更新 tests/brc-logs.test.mjs、tests/brc-clean.test.mjs、tests/brc-cli.test.mjs：并行写入、轮转与保留、安全路径、只读输出、自动清理一次、日志写入失败、缺失日志，以及函数/资源查询的机器输出。
 - [ ] 执行受影响测试、pnpm build，再执行完整 pnpm test:unit。
@@ -160,8 +168,8 @@
 
 ### 集成批次：说明、全面验收与合并
 
-- [ ] 修订 docs/architecture.md 的实际跨平台范围，README.md / README_zh.md 的帮助、诊断命令、日志路径和输出约定；更新本次实施涉及的用例到测试映射，维持配置和版本唯一来源。
-- [ ] 执行 pnpm build、pnpm test:unit、受影响的隔离 E2E、pnpm test:package；验证正式发行包对全部自有函数的计数覆盖、CPU/内存连续采样与峰值、来源与堆栈、日志统一及轮转；执行无 TTY、PowerShell 7/5.1、CMD 的输出/中断检查；Linux 和 macOS 以可验证 CI 或独立机器测试为准。
+- [ ] 修订 docs/architecture.md 的已验证跨平台范围，README.md / README_zh.md 的诊断命令、数据新鲜度、异步计时口径、系统峰值/采样峰值、日志位置和错误约定；维持配置与版本唯一来源。
+- [ ] 执行 pnpm build、pnpm test:unit、受影响的隔离 E2E、pnpm test:package；确认新单元测试自动进入全量运行，Rust 新文件触发构建。验证真实多 CLI 日志轮转、原子快照重启/过期、函数计时语义、CPU/内存峰值来源、诊断配置端到端生效；验证发行包与无 TTY、PowerShell 7/5.1、CMD。Linux/macOS 仅报告实际 CI 或隔离机器结果。
 - [ ] 安全复核：伪造代理头、损坏/陈旧 PID、并行启停/清理、信号中断、日志满额、只读命令污染；记录每项结果和未验证内容。
 - [ ] 使用 auto-git-commit 每个可独立验收模块提交，完成后按项目要求合并 main、清理临时工作树并按 project-context 全量同步 CONTEXT.md；新版本发布、GitHub 推送及生产升级须另获授权。
 - [ ] 当本设计和计划全部实施、验收完毕后，依项目规则删除完成稿件，历史保留于 Git。
