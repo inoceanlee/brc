@@ -7,9 +7,17 @@
  * Env: BRC_RELAY, BRC_NAME, BRC_TOKEN, BRC_DEVICE_ID, BRC_HOME, BRC_DEBUG
  */
 import os from 'node:os';
-import { applyLegacyEnv, installManagedLog, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import path from 'node:path';
+import { applyLegacyEnv, installManagedLog, startDiagnostics, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
 applyLegacyEnv();
 const managedLog = installManagedLog();
+const diagnostics = await startDiagnostics({
+  component: 'agent',
+  manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
+  logFile: process.env.BRC_LOG_FILE
+    ? path.join(path.dirname(process.env.BRC_LOG_FILE), 'agent-diagnostics.log')
+    : undefined,
+});
 import { WsClient } from './transport/ws-client.js';
 import { pairDevice, loadCredentials, clearCredentials, type DeviceCredentials } from './transport/pairing.js';
 import { callTool, listTools } from './dispatcher.js';
@@ -25,6 +33,7 @@ function arg(name: string, env?: string, def?: string): string | undefined {
 const flag = (name: string) => process.argv.includes(`--${name}`);
 
 async function exitWithCode(code: number): Promise<never> {
+  await diagnostics.stop();
   await managedLog?.close();
   process.exit(code);
 }
@@ -117,7 +126,8 @@ async function resolveCredentials(): Promise<DeviceCredentials> {
   }
   awaitingPairing = true;
   try {
-    return await pairDevice({ relayUrl: relayArg, name, deviceId, openBrowser: !flag('no-browser'), log: (m) => console.log(m) });
+    const browserAllowed = !flag('no-browser') && process.env.BRC_NO_BROWSER !== '1';
+    return await pairDevice({ relayUrl: relayArg, name, deviceId, openBrowser: browserAllowed, log: (m) => console.log(m) });
   } finally {
     awaitingPairing = false;
   }

@@ -30,13 +30,25 @@ export interface RelayConfig {
   port: number;
   host: string;
   publicUrl: string;
-  trustProxy: boolean;
+  trustProxy: boolean | number | string;
   dbFile: string;
   sessionSecret: string;
   adminUser: string;
   adminPassword: string;
   relayVersion: string;
  audit: AuditRetentionPolicy | undefined;
+}
+
+/**
+ * Trusted proxy policy. Legacy `true`/`1` values trust one loopback proxy hop
+ * instead of every proxy, so a client cannot reset its rate-limit identity by
+ * sending its own X-Forwarded-For header.
+ */
+export function parseTrustProxy(value: string | undefined): RelayConfig['trustProxy'] {
+  if (value === undefined || value === '' || value === 'false' || value === '0') return false;
+  if (value === 'true' || value === '1' || value === 'loopback') return 'loopback';
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
@@ -59,7 +71,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
     port,
     host: env.HOST ?? '0.0.0.0',
     publicUrl: (env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, ''),
-    trustProxy: env.TRUST_PROXY === 'true' || env.TRUST_PROXY === '1',
+    trustProxy: parseTrustProxy(env.TRUST_PROXY),
     dbFile: env.BRC_DB ?? 'data/relay.sqlite',
     sessionSecret: env.BRC_SESSION_SECRET ?? '',
     adminUser: env.BRC_ADMIN_USER ?? 'admin',

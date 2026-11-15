@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
-import { applyLegacyEnv, installManagedLog, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import path from 'node:path';
+import { applyLegacyEnv, installManagedLog, startDiagnostics, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
 applyLegacyEnv();
 const managedLog = installManagedLog();
 import { buildRelay, loadConfig } from './app.js';
 import { SqliteStore } from './store/sqlite.js';
 
 const cfg = loadConfig();
+const diagnostics = await startDiagnostics({
+  component: 'relay',
+  manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
+  logFile: process.env.BRC_LOG_FILE
+    ? path.join(path.dirname(process.env.BRC_LOG_FILE), 'relay-diagnostics.log')
+    : undefined,
+});
 if (process.argv.includes('--initialize')) {
   try {
     const input = process.stdin.isTTY ? '' : readFileSync(0, 'utf8').trim();
@@ -62,6 +70,7 @@ const stop = async (sig?: string) => {
   if (sig) log('info', `${sig} received, shutting down`);
   await control?.close();
   await relay.close();
+  await diagnostics.stop();
   await managedLog?.close();
 };
 process.on('SIGINT', () => { void stop('SIGINT').catch((error: unknown) => log('error', String(error))); });

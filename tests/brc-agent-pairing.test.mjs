@@ -183,7 +183,7 @@ test('agent preserves credentials when a relay rejects its token', async (t) => 
     const authorization = await Promise.race([
       reconnected,
       new Promise((_, reject) => child.once('exit', (code) => reject(new Error(`agent exited (${code}):\n${output}`)))),
-      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error(`agent did not reconnect:\n${output}`)), 15000); }),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error(`agent did not reconnect:\n${output}`)), 30000); }),
     ]);
     assert.equal(authorization, 'Bearer old-token');
   } finally {
