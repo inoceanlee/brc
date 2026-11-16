@@ -46,6 +46,7 @@ export function createDiagnosticsRuntime(options: InjectedDiagnosticsOptions): I
   options.resources?.start();
   options.session?.start();
   let pending = Promise.resolve();
+  let logFailure: Error | undefined;
   return {
     enabled: true,
     functions: options.functions,
@@ -62,7 +63,9 @@ export function createDiagnosticsRuntime(options: InjectedDiagnosticsOptions): I
         ...(error === undefined ? {} : { stack: error instanceof Error ? (error.stack ?? error.message) : String(error) }),
         ...(logOptions.data ? { data: logOptions.data } : {}),
       };
-      pending = pending.then(() => options.log!.write(input)).catch(() => undefined);
+      pending = pending.then(() => options.log!.write(input)).catch((error: unknown) => {
+        logFailure ??= error instanceof Error ? error : new Error(String(error));
+      });
     },
     async captureSnapshot(status = 'running') {
       await pending;
@@ -73,6 +76,7 @@ export function createDiagnosticsRuntime(options: InjectedDiagnosticsOptions): I
       await options.session?.stop();
       await pending;
       await options.log?.flush();
+      if (logFailure) throw logFailure;
     },
   };
 }

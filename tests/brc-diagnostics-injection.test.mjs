@@ -66,3 +66,27 @@ test('diagnostics flushes queued records before a snapshot and on shutdown', asy
   assert.match(events[0].stack, /sample/);
   assert.deepEqual(events.slice(1), ['running', 'stopped', 'flushed']);
 });
+
+test('diagnostics reports a failed log write after later writes succeed', async () => {
+  const failure = new Error('diagnostic log unavailable');
+  let writes = 0;
+  let stopped = false;
+  const runtime = createDiagnosticsRuntime({
+    enabled: true,
+    component: 'agent',
+    log: {
+      async write() { if (++writes === 1) throw failure; },
+      async flush() {},
+    },
+    session: {
+      start() {},
+      async capture() {},
+      async stop() { stopped = true; },
+    },
+  });
+  runtime.log('first');
+  runtime.log('second');
+  await assert.rejects(runtime.stop(), failure);
+  assert.equal(writes, 2);
+  assert.equal(stopped, true);
+});
