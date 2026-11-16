@@ -71,29 +71,9 @@ const repository = fileURLToPath(new URL('../', import.meta.url));
 const PACKAGE_NAMES = ['cli', 'relay', 'agent', 'shared'];
 const EXTERNAL_IO = /^(?:node:)?(?:fs(?:\/promises)?|net|http|https|child_process|dgram|os|worker_threads|tty|readline|console|stream|process)(?:\/.*)?$/;
 const EXTERNAL_SDK = /^(?:express|ws|better-sqlite3|sqlite3|proper-lockfile|@modelcontextprotocol\/|@sqlite\/)/;
-const SERVICE_TYPES = /(?:Manager|Store|Storage|Lock|Service|Server|Sampler|Session|Controller|Provider|Tracker|History|Hub|Transport|Client|Dispatcher|Recorder|Logger)$/;
-const LEGACY_ARCHITECTURE_VIOLATIONS = [
-  'agent/adapters/network/feature-flags.ts: exported mutable service featureFlagManager',
-  'agent/adapters/storage/config-manager.ts: exported mutable service configManager',
-  'agent/adapters/storage/config-manager.ts: nested service construction YamlSettingsStore@87',
-  'agent/adapters/storage/config-manager.ts: nested service construction FileSettingsLock@90',
-  'agent/adapters/storage/config-manager.ts: nested service construction ConfigStorage@94',
-  'agent/adapters/storage/config-manager.ts: nested service construction ConfigStorage@95',
-  'agent/adapters/system/search-manager.ts: exported mutable service searchManager',
-  'agent/adapters/telemetry/fuzzySearchLogger.ts: exported mutable service fuzzySearchLogger',
-  'agent/adapters/telemetry/logger.ts: module service object logger',
-  'agent/adapters/telemetry/toolHistory.ts: nested service construction ToolHistoryStorage@59',
-  'agent/adapters/telemetry/toolHistory.ts: exported mutable service toolHistory',
-  'agent/adapters/telemetry/usageTracker.ts: exported mutable service usageTracker',
-  'agent/adapters/terminal/command-manager.ts: exported mutable service commandManager',
-  'agent/adapters/terminal/terminal-manager.ts: exported mutable service terminalManager',
-  'cli/adapters/storage/lock.ts: nested service construction LockStore@50',
-  'shared/diagnostics/adapters/legacy-runtime.ts: nested service construction NodeResourceSampler@118',
-  'shared/diagnostics/adapters/legacy-runtime.ts: nested service construction FileSnapshotStore@120',
-  'shared/diagnostics/adapters/legacy-runtime.ts: nested service construction DiagnosticSession@124',
-];
+const SERVICE_TYPES = /(?:Manager|Store|Storage|Lock|Service|Server|Sampler|Session|Controller|Provider|Tracker|History|Hub|Transport|Client|Dispatcher|Recorder|Logger|Handler)$/;
 
-const ENTRY_FILES = new Set(['cli.ts', 'main.ts', 'composition.ts']);
+const ENTRY_FILES = new Set(['cli.ts', 'main.ts']);
 
 function inCore(relative) {
   return /(?:^|\/)core\//.test(relative);
@@ -117,11 +97,55 @@ function importNames(source) {
   return imports;
 }
 
-// Type references and retained constructions are candidates, not client data.
-// Line numbers distinguish separate legacy instances in the same file.
-function ownershipViolations(source, prefix, relative) {
+// Findings use the enclosing declaration and target rather than source lines.
+function constructionIdentity(node, source) {
+  let owner = '<module>';
+  let target = '<return>';
+  for (let parent = node.parent; parent && parent !== source; parent = parent.parent) {
+    if (target === '<return>' && ts.isVariableDeclaration(parent)) target = parent.name.getText(source);
+    if (target === '<return>' && ts.isPropertyDeclaration(parent)) target = parent.name.getText(source);
+    if (target === '<return>' && ts.isBinaryExpression(parent)
+      && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      target = parent.left.getText(source);
+    }
+    if (ts.isConstructorDeclaration(parent)) owner = 'constructor';
+    else if ((ts.isFunctionDeclaration(parent) || ts.isMethodDeclaration(parent)) && parent.name) owner = parent.name.getText(source);
+    else if ((ts.isClassDeclaration(parent) || ts.isClassExpression(parent)) && parent.name) {
+      owner = parent.name.text + '.' + owner;
+      break;
+    }
+  }
+  return owner + ':' + target;
+}
+
+function isControlledSelfConstruction(node) {
+  if (!ts.isIdentifier(node.expression)) return false;
+  let method = node.parent;
+  while (method && !ts.isMethodDeclaration(method)) method = method.parent;
+  if (!method || !method.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)
+    || !ts.isClassDeclaration(method.parent) || method.parent.name?.text !== node.expression.text) return false;
+  const methodName = method.name.getText(node.getSourceFile());
+  if (methodName === 'open' && ts.isReturnStatement(node.parent)) return true;
+  if (methodName !== 'initialize' || !ts.isVariableDeclaration(node.parent)
+    || !ts.isIdentifier(node.parent.name)) return false;
+  const list = node.parent.parent;
+  const statement = list.parent;
+  if (!ts.isVariableStatement(statement) || list.declarations.length !== 1
+    || !ts.isBlock(statement.parent)) return false;
+  const statements = statement.parent.statements;
+  const next = statements[statements.indexOf(statement) + 1];
+  if (!next || !ts.isExpressionStatement(next) || !ts.isCallExpression(next.expression)
+    || next.expression.arguments.length !== 0 || !ts.isPropertyAccessExpression(next.expression.expression)) return false;
+  const access = next.expression.expression;
+  return ts.isIdentifier(access.expression) && access.expression.text === node.parent.name.text && access.name.text === 'close';
+}
+
+function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
   const violations = [];
   if (ENTRY_FILES.has(relative)) return violations;
+  for (const statement of source.statements) {
+    if (ts.isInterfaceDeclaration(statement) && statement.members.every(ts.isPropertySignature)) dataTypes.add(statement.name.text);
+  }
   const exported = new Set();
   for (const statement of source.statements) {
     if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier
@@ -131,7 +155,10 @@ function ownershipViolations(source, prefix, relative) {
   }
   function serviceType(node) {
     if (!node) return false;
-    if (ts.isTypeReferenceNode(node)) return SERVICE_TYPES.test(node.typeName.getText(source));
+    if (ts.isTypeReferenceNode(node)) {
+      const name = node.typeName.getText(source);
+      return !dataTypes.has(name) && SERVICE_TYPES.test(name);
+    }
     return Boolean(ts.forEachChild(node, serviceType));
   }
   for (const statement of source.statements) {
@@ -185,27 +212,43 @@ function ownershipViolations(source, prefix, relative) {
     }
     return retainedByAnother(scope.body);
   }
+  const logFactories = new Set();
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
+      && statement.moduleSpecifier.text === 'brc-shared'
+      && statement.importClause?.namedBindings && ts.isNamedImports(statement.importClause.namedBindings)) {
+      for (const item of statement.importClause.namedBindings.elements) {
+        if ((item.propertyName ?? item.name).text === 'createManagedLog') logFactories.add(item.name.text);
+      }
+    }
+  }
   function visit(node) {
     if (ts.isNewExpression(node)) {
       const className = serviceConstructionName(node);
-      if (className) {
+      if (className && !isControlledSelfConstruction(node)) {
         let parent = node.parent;
-        let retained = false;
+        let retained = /(?:Store|Storage|Lock)$/.test(className);
         while (parent && parent !== source) {
           if (ts.isPropertyDeclaration(parent)) retained = true;
           if (ts.isBinaryExpression(parent)
             && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
             && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
             && ts.isPropertyAccessExpression(parent.left) && parent.left.expression.kind === ts.SyntaxKind.ThisKeyword) retained = true;
+          if (ts.isBinaryExpression(parent) && ts.isIdentifier(parent.left)
+            && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+            retained = true;
+          }
           if (ts.isVariableDeclaration(parent) && capturedByReturnedClosure(parent)) retained = true;
           if (ts.isFunctionLike(parent)) break;
           parent = parent.parent;
         }
         if (retained && !inCore(relative)) {
-          const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-          violations.push(prefix + ': nested service construction ' + className + '@' + line);
+          violations.push(prefix + ': nested service construction ' + className + '@' + constructionIdentity(node, source));
         }
       }
+    }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && logFactories.has(node.expression.text)) {
+      violations.push(prefix + ': service factory createManagedLog@' + constructionIdentity(node, source));
     }
     ts.forEachChild(node, visit);
   }
@@ -228,38 +271,87 @@ function crossPackageInternal(specifier, filename, root, pkg) {
 
 async function sharedAdapterExports() {
   const root = path.join(repository, 'packages', 'shared', 'src');
-  const names = new Set();
-  for (const filename of await sourceFiles(root)) {
+  async function exported(filename, seen) {
+    if (seen.has(filename)) return new Map();
+    const nextSeen = new Set(seen).add(filename);
     const relative = path.relative(root, filename).replaceAll('\\', '/');
-    if (!relative.includes('/adapters/') && !/^managed-(?:control|log)\.ts$/.test(relative)) continue;
+    const adapter = /(?:^|\/)adapters\//.test(relative);
     const source = ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true);
+    const names = new Map();
     for (const statement of source.statements) {
-      if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue;
-      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) names.add(statement.name.text);
-      if (ts.isVariableStatement(statement)) {
-        for (const declaration of statement.declarationList.declarations) {
-          if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
+      if (ts.isExportDeclaration(statement) && !statement.isTypeOnly && statement.moduleSpecifier
+        && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text.startsWith('.')) {
+        const target = path.resolve(path.dirname(filename), statement.moduleSpecifier.text.replace(/\.js$/, '.ts'));
+        const child = await exported(target, nextSeen);
+        if (!statement.exportClause) {
+          for (const [name, isAdapter] of child) names.set(name, isAdapter);
+        } else if (ts.isNamedExports(statement.exportClause)) {
+          for (const element of statement.exportClause.elements) {
+            if (!element.isTypeOnly) {
+              const original = (element.propertyName ?? element.name).text;
+              if (child.has(original)) names.set(element.name.text, child.get(original));
+            }
+          }
+        }
+      } else if (statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
+        if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) names.set(statement.name.text, adapter);
+        if (ts.isVariableStatement(statement)) {
+          for (const declaration of statement.declarationList.declarations) {
+            if (ts.isIdentifier(declaration.name)) names.set(declaration.name.text, adapter);
+          }
         }
       }
     }
+    return names;
   }
-  return names;
+  const all = await exported(path.join(root, 'index.ts'), new Set());
+  return new Set([...all].filter(([, adapter]) => adapter).map(([name]) => name));
 }
 
 function sharedAdapterImports(source, adapterNames) {
   const found = [];
+  const namespaces = new Set();
   for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)
-      || statement.moduleSpecifier.text !== 'brc-shared' || !statement.importClause || statement.importClause.isTypeOnly) continue;
-    const bindings = statement.importClause.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) found.push('*');
-    if (bindings && ts.isNamedImports(bindings)) {
-      for (const element of bindings.elements) {
-        const name = (element.propertyName ?? element.name).text;
-        if (!element.isTypeOnly && adapterNames.has(name)) found.push(name);
-      }
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
+      && statement.moduleSpecifier.text === 'brc-shared' && !statement.importClause?.isTypeOnly
+      && statement.importClause?.namedBindings && ts.isNamespaceImport(statement.importClause.namedBindings)) {
+      namespaces.add(statement.importClause.namedBindings.name.text);
     }
   }
+  function visit(node) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
+      && node.moduleSpecifier.text === 'brc-shared' && node.importClause && !node.importClause.isTypeOnly) {
+      const bindings = node.importClause.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) return;
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          const name = (element.propertyName ?? element.name).text;
+          if (!element.isTypeOnly && adapterNames.has(name)) found.push(name);
+        }
+      }
+    }
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)
+      && namespaces.has(node.expression.text) && adapterNames.has(node.name.text)) found.push(node.name.text);
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)
+      && namespaces.has(node.expression.text) && node.argumentExpression && ts.isStringLiteral(node.argumentExpression)
+      && adapterNames.has(node.argumentExpression.text)) found.push(node.argumentExpression.text);
+    if (ts.isExportDeclaration(node) && !node.isTypeOnly && node.moduleSpecifier
+      && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'brc-shared') {
+      if (!node.exportClause || ts.isNamespaceExport(node.exportClause)) found.push('*');
+      else if (ts.isNamedExports(node.exportClause)) {
+        for (const element of node.exportClause.elements) {
+          const name = (element.propertyName ?? element.name).text;
+          if (!element.isTypeOnly && adapterNames.has(name)) found.push(name);
+        }
+      }
+    }
+    if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])
+      && node.arguments[0].text === 'brc-shared'
+      && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) found.push('*');
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
   return found;
 }
 
@@ -291,11 +383,20 @@ async function architectureViolations() {
   const adapterNames = await sharedAdapterExports();
   for (const pkg of PACKAGE_NAMES) {
     const root = path.join(repository, 'packages', pkg, 'src');
-    for (const filename of await sourceFiles(root)) {
+    const dataTypes = new Set();
+    const files = await sourceFiles(root);
+    for (const filename of files) {
+      if (!inCore(path.relative(root, filename).replaceAll('\\', '/'))) continue;
+      const core = ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true);
+      for (const statement of core.statements) {
+        if (ts.isInterfaceDeclaration(statement) && statement.members.every(ts.isPropertySignature)) dataTypes.add(statement.name.text);
+      }
+    }
+    for (const filename of files) {
       const relative = path.relative(root, filename).replaceAll('\\', '/');
       const source = ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true);
       const prefix = pkg + '/' + relative;
-      violations.push(...ownershipViolations(source, prefix, relative));
+      violations.push(...ownershipViolations(source, prefix, relative, new Set(dataTypes)));
       if (inCore(relative)) {
         for (const name of sharedAdapterImports(source, adapterNames)) {
           violations.push(prefix + ': core imports shared adapter ' + name);
@@ -322,8 +423,7 @@ async function architectureViolations() {
             && ts.isVariableDeclarationList(node.parent.parent)
             && node.parent.parent.parent && ts.isVariableStatement(node.parent.parent.parent)
             && node.parent.parent.parent.parent === source && !['cli.ts', 'index.ts', 'main.ts'].includes(relative)) {
-            const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-            violations.push(prefix + ': module-level service singleton ' + className + '@' + line);
+            violations.push(prefix + ': module-level service singleton ' + className + '@' + constructionIdentity(node, source));
           }
         }
         ts.forEachChild(node, visit);
@@ -353,6 +453,8 @@ export let tracker: UsageTracker | undefined;
 let hidden: SearchManager;
 export let currentClient: { name: string; version: string };
 export let currentRemoteClient: { name?: string } | null = null;
+interface ActiveSession { pid: number; isBlocked: boolean; runtime: number }
+let active: ActiveSession | undefined;
 export const logger = { info: () => {} };
 class Adapter {
   store = new CacheStore();
@@ -373,18 +475,63 @@ function factory() {
     'agent/adapters/sample.ts: exported mutable service tracker',
     'agent/adapters/sample.ts: module service object logger',
     'agent/adapters/sample.ts: module service reference hidden',
-    'agent/adapters/sample.ts: nested service construction CacheStore@10',
-    'agent/adapters/sample.ts: nested service construction DiagnosticLogger@11',
-    'agent/adapters/sample.ts: nested service construction DiagnosticSession@18',
-    'agent/adapters/sample.ts: nested service construction FileSnapshotStore@16',
-    'agent/adapters/sample.ts: nested service construction NodeResourceSampler@17',
-    'agent/adapters/sample.ts: nested service construction SearchManager@12',
+    'agent/adapters/sample.ts: nested service construction CacheStore@Adapter.<module>:store',
+    'agent/adapters/sample.ts: nested service construction DiagnosticLogger@Adapter.constructor:this.logger',
+    'agent/adapters/sample.ts: nested service construction DiagnosticSession@factory:session',
+    'agent/adapters/sample.ts: nested service construction FileSnapshotStore@factory:store',
+    'agent/adapters/sample.ts: nested service construction NodeResourceSampler@factory:sampler',
+    'agent/adapters/sample.ts: nested service construction SearchManager@Adapter.refresh:this.manager',
   ]);
+  const shifted = ts.createSourceFile('sample.ts', '\n\n' + source.text, ts.ScriptTarget.Latest, true);
+  assert.deepEqual(ownershipViolations(shifted, 'agent/adapters/sample.ts', 'adapters/sample.ts').sort(), actual);
   assert.deepEqual(ownershipViolations(source, 'agent/cli.ts', 'cli.ts'), []);
   const baseline = ['x: nested service construction LockStore@1'];
   assert.deepEqual(unexpectedArchitectureViolations([baseline[0], baseline[0]], baseline), baseline);
   assert.deepEqual(unexpectedArchitectureViolations([baseline[0], 'x: nested service construction LockStore@2'], baseline),
     ['x: nested service construction LockStore@2']);
+});
+
+test('ownership detects file handlers, local storage, assigned clients and service factories', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    import { createManagedLog as makeLog } from 'brc-shared';
+    let handler: TextFileHandler | null = null;
+    function getHandler() { if (!handler) handler = new TextFileHandler(); return handler; }
+    function run() {
+      let client: WsClient | undefined;
+      const stop = () => client?.stop();
+      client = new WsClient();
+      const store = new FileSnapshotStore();
+      const log = makeLog('path', 1);
+      return { stop, store, log };
+    }
+  `, ts.ScriptTarget.Latest, true);
+  const actual = ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts');
+  assert.ok(actual.includes('agent/adapters/sample.ts: module service reference handler'));
+  assert.ok(actual.includes('agent/adapters/sample.ts: nested service construction TextFileHandler@getHandler:handler'));
+  assert.ok(actual.includes('agent/adapters/sample.ts: nested service construction WsClient@run:client'));
+  assert.ok(actual.includes('agent/adapters/sample.ts: nested service construction FileSnapshotStore@run:store'));
+  assert.ok(actual.includes('agent/adapters/sample.ts: service factory createManagedLog@run:log'));
+});
+
+test('self construction only permits controlled open and immediate initialization close', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    class SqliteStore {
+      static open() { return new SqliteStore(); }
+      static initialize() { const store = new SqliteStore(); store.close(); }
+      static other() { return new SqliteStore(); }
+      open() { return new SqliteStore(); }
+    }
+    class OtherStore {
+      static open() { return new SqliteStore(); }
+      static initialize() { const store = new OtherStore(); sideEffect(); store.close(); }
+    }
+  `, ts.ScriptTarget.Latest, true);
+  assert.deepEqual(ownershipViolations(source, 'relay/adapters/sample.ts', 'adapters/sample.ts').sort(), [
+    'relay/adapters/sample.ts: nested service construction OtherStore@OtherStore.initialize:store',
+    'relay/adapters/sample.ts: nested service construction SqliteStore@OtherStore.open:<return>',
+    'relay/adapters/sample.ts: nested service construction SqliteStore@SqliteStore.open:<return>',
+    'relay/adapters/sample.ts: nested service construction SqliteStore@SqliteStore.other:<return>',
+  ]);
 });
 
 test('core import gate detects actual package internals and permits public entry points', () => {
@@ -401,10 +548,17 @@ test('core import gate detects actual package internals and permits public entry
 
 test('shared public entry distinguishes adapter values and core contracts', async () => {
   const source = ts.createSourceFile('sample.ts', `
-    import { FileSnapshotStore, DEFAULT_SETTINGS } from 'brc-shared';
+    import { FileSnapshotStore, createManagedLog, DEFAULT_SETTINGS } from 'brc-shared';
+    import * as shared from 'brc-shared';
+    shared.DEFAULT_SETTINGS;
+    shared.createManagedLog;
+    export { readSettingsText } from 'brc-shared';
+    const dynamic = import('brc-shared');
+    const required = require('brc-shared');
     import type { DiagnosticLogPort } from 'brc-shared';
   `, ts.ScriptTarget.Latest, true);
-  assert.deepEqual(sharedAdapterImports(source, await sharedAdapterExports()), ['FileSnapshotStore']);
+  assert.deepEqual(sharedAdapterImports(source, await sharedAdapterExports()),
+    ['FileSnapshotStore', 'createManagedLog', 'createManagedLog', 'readSettingsText', '*', '*']);
 });
 test('node async context is not a long-lived external service', () => {
   const source = ts.createSourceFile('sample.ts', `
@@ -417,14 +571,14 @@ test('node async context is not a long-lived external service', () => {
     }
   `, ts.ScriptTarget.Latest, true);
   assert.deepEqual(ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts'), [
-    'agent/adapters/sample.ts: nested service construction FileSnapshotStore@7',
+    'agent/adapters/sample.ts: nested service construction FileSnapshotStore@Adapter.<module>:store',
   ]);
   const other = ts.createSourceFile('sample.ts', `
     import { AsyncLocalStorage } from './external.js';
     class Adapter { context = new AsyncLocalStorage(); }
   `, ts.ScriptTarget.Latest, true);
   assert.deepEqual(ownershipViolations(other, 'agent/adapters/sample.ts', 'adapters/sample.ts'), [
-    'agent/adapters/sample.ts: nested service construction AsyncLocalStorage@3',
+    'agent/adapters/sample.ts: nested service construction AsyncLocalStorage@Adapter.<module>:context',
   ]);
 });
 
@@ -442,12 +596,8 @@ test('core construction detects namespace-qualified services', () => {
 
 
 test('architecture gate rejects any violation when the baseline is empty', () => {
-  const removed = LEGACY_ARCHITECTURE_VIOLATIONS.slice(1);
-  assert.deepEqual(unexpectedArchitectureViolations(removed, LEGACY_ARCHITECTURE_VIOLATIONS), []);
-  assert.deepEqual(
-    unexpectedArchitectureViolations([...removed, 'relay/core/auth/unknown.ts: core imports external dependency fs'], LEGACY_ARCHITECTURE_VIOLATIONS),
-    ['relay/core/auth/unknown.ts: core imports external dependency fs'],
-  );
+  const violation = 'relay/core/auth/unknown.ts: core imports external dependency fs';
+  assert.deepEqual(unexpectedArchitectureViolations([violation], []), [violation]);
 });
 
 test('Core boundaries and long-lived object ownership reject new violations per file', async () => {
@@ -455,5 +605,5 @@ test('Core boundaries and long-lived object ownership reject new violations per 
   if (process.env.BRC_ARCHITECTURE_PRINT_BASELINE === '1') {
     process.stdout.write('ARCHITECTURE_BASELINE=' + JSON.stringify(actual) + '\n');
   }
-  assert.deepEqual(unexpectedArchitectureViolations(actual, LEGACY_ARCHITECTURE_VIOLATIONS), []);
+  assert.deepEqual(actual, []);
 });
