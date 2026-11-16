@@ -209,6 +209,26 @@ test('preserves PID-reused and corrupt records without stopping either process',
   await harness.manager.stop(harness.spec);
 });
 
+test('cleanup reclaims a previous-boot record with a reused PID without touching that process', async (t) => {
+  const { root, paths: brcPaths } = await makeRoot(t);
+  const filename = path.join(brcPaths.runtime, 'relay.json');
+  const identity = await inspectProcess(process.pid);
+  assert.ok(identity);
+  const id = '12345678-1234-4234-8234-123456789abc';
+  const entrypoint = path.join(root, 'service.js');
+  await writeFile(filename, JSON.stringify({
+    version: 1, service: 'relay', id, pid: process.pid, createdAt: 'prior-boot',
+    executablePath: process.execPath, commandLine: `node ${entrypoint} --brc-managed-id=${id}`,
+    workspaceRoot: root, entrypoint, controlPort: 12345,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  }));
+  const previousBoot = new Date(Date.now() - os.uptime() * 1000 - DAY);
+  await utimes(filename, previousBoot, previousBoot);
+  await cleanRuntime(brcPaths);
+  assert.equal(await exists(filename), false);
+  process.kill(process.pid, 0);
+});
+
 test('removes a valid process record only after its process exits', async (t) => {
   const harness = await makeManagedRelay(t);
   await harness.manager.start(harness.spec);
@@ -519,10 +539,12 @@ test('cleanup removes expired diagnostic snapshots and keeps live ones', async (
   };
   await store.write({ ...base, instanceId: 'active', capturedAt: new Date(Date.now() - 40 * DAY).toISOString() });
   await store.write({ ...base, instanceId: 'expired', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString() });
+  await store.write({ ...base, instanceId: 'invalid-pid', pid: 4294967296, capturedAt: new Date(Date.now() - 40 * DAY).toISOString() });
   await store.write({ ...base, instanceId: 'fresh', capturedAt: new Date().toISOString() });
   const report = await cleanRuntime(brcPaths);
   assert.ok(report.removed >= 1);
   assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-active.json')), true);
+  assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-invalid-pid.json')), true);
   assert.equal((await store.read('relay', 'expired')).state, 'missing');
   assert.equal((await store.read('relay', 'fresh')).state, 'current');
 });

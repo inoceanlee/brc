@@ -1,9 +1,8 @@
 import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../../config/paths.js';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../../config/settings.js';
-import { inspectProcess, isStaleFromPreviousBoot, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../process/controller.js';
+import { inspectProcess, isStaleFromPreviousBoot, processDefinitelyExited, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../process/controller.js';
 import { FileSnapshotStore, snapshotStateLabel } from 'brc-shared';
 import { inspectProcesses } from '../process/identity.js';
 import { LifecycleLock } from './lock.js';
@@ -216,15 +215,9 @@ async function removeUnchangedRecord(
     issue(report.preserved, filename, 'Process is live or its PID was reused during cleanup.');
     return false;
   }
-  try {
-    process.kill(pid, 0);
-    issue(report.preserved, filename, 'Process may still be active.');
+  if (!await processDefinitelyExited(pid)) {
+    issue(report.preserved, filename, 'Process may still be active or its state cannot be verified.');
     return false;
-  } catch (error) {
-    if (errorCode(error) !== 'ESRCH') {
-      issue(report.preserved, filename, 'Process state cannot be verified.');
-      return false;
-    }
   }
   if (!await safeDirectory(paths.root, path.dirname(filename), report)) return false;
   if ((await readRegularFile(filename)).contents !== contents) {
@@ -279,6 +272,17 @@ async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dry
           throw new Error('Process record has no valid PID.');
         }
         const removed = await removeUnchangedRecord(paths, filename, raw, value.pid, report, dryRun);
+        result.set(name, { state: removed ? 'inactive' : 'unknown', entrypoint: spec.entrypoint });
+      } else if (status.state === 'degraded' && status.detail.startsWith('Recorded PID was reused') && status.pid) {
+        const previous = snapshotIdentity(snapshot, status.pid);
+        const current = await inspectProcess(status.pid);
+        if (!previous || !current || previous.createdAt !== current.createdAt
+            || previous.commandLine !== current.commandLine || previous.executablePath !== current.executablePath
+            || !isStaleFromPreviousBoot((await lstat(filename)).mtimeMs)
+            || (await readRegularFile(filename)).contents !== raw) {
+          throw new Error('Reused process or record changed during cleanup.');
+        }
+        const removed = await removeFile(paths.root, filename, report, dryRun);
         result.set(name, { state: removed ? 'inactive' : 'unknown', entrypoint: spec.entrypoint });
       } else {
         if (status.state !== 'running' && status.state !== 'pairing') issue(report.preserved, filename, status.detail);
@@ -649,37 +653,45 @@ async function cleanDiagnosticSnapshots(
       if (result.state === 'corrupt') issue(report.preserved, target, `Unreadable snapshot (${snapshotStateLabel(result.state)}).`);
       continue;
     }
-    if (!snapshot || snapshot.pid <= 0) {
+    if (!snapshot || snapshot.pid <= 0 || snapshot.pid > 0xffffffff) {
       issue(report.preserved, target, 'Cannot determine the snapshot process identity.');
       continue;
     }
     candidates.push({ target, pid: snapshot.pid, contents });
   }
-  let identities: Map<number, ProcessIdentity | null>;
-  const timeout = sleep(1_000, undefined, { ref: false }).then((): never => { throw new Error('Snapshot process inspection timed out.'); });
-  try {
-    identities = await Promise.race([
-      inspectProcesses(candidates.map((candidate) => candidate.pid)),
-      timeout,
-    ]);
-  } catch (error) {
-    for (const candidate of candidates) issue(report.preserved, candidate.target, `Cannot inspect snapshot process: ${error instanceof Error ? error.message : String(error)}`);
-    return;
-  }
+  const identities = new Map<number, ProcessIdentity | null>();
+  const pids = [...new Set(candidates.map((candidate) => candidate.pid))].slice(0, 256);
+  const signal = AbortSignal.timeout(1_000);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < pids.length && !signal.aborted) {
+      const batch = pids.slice(next, next + 32);
+      next += batch.length;
+      try {
+        const found = await inspectProcesses(batch, signal);
+        for (const [pid, identity] of found) identities.set(pid, identity);
+      } catch {
+        for (const pid of batch) {
+          if (signal.aborted) break;
+          try {
+            const found = await inspectProcesses([pid], signal);
+            if (found.has(pid)) identities.set(pid, found.get(pid) ?? null);
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 4 }, () => worker()));
   for (const { target, pid, contents } of candidates) {
     if (!identities.has(pid) || identities.get(pid)) {
       issue(report.preserved, target, 'Snapshot process may still be active.');
       continue;
     }
-    try {
-      process.kill(pid, 0);
-      issue(report.preserved, target, 'Snapshot process may still be active.');
+    if (!await processDefinitelyExited(pid)) {
+      issue(report.preserved, target, 'Snapshot process may still be active or its state cannot be verified.');
       continue;
-    } catch (error) {
-      if (errorCode(error) !== 'ESRCH') {
-        issue(report.preserved, target, 'Cannot determine whether the snapshot process is active.');
-        continue;
-      }
     }
     try {
       if ((await readRegularFile(target)).contents !== contents) {
