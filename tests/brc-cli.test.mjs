@@ -293,6 +293,69 @@ console.log(JSON.stringify({ exitCode, errors }));
   assert.match(failure.cleanup.message, /cleanup failed/);
 });
 
+test('JSON preserves trace and cleanup failures without replacing command results', () => {
+  const results = probeResult(runProbe(`
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const trace = { span: async (_name, task) => task(), finish: () => ({ durationMs: 1, unaccountedMs: 0, stages: [] }) };
+const results = [];
+for (const outcome of ['success', 'failure', 'cancel']) {
+  const output = [];
+  const errors = [];
+  const exitCode = await runCli(['start', '--json'], {
+    paths, trace, timing: true,
+    commands: { start: async () => {
+      if (outcome === 'failure') throw Object.assign(new Error('service busy'), { exitCode: 5 });
+      if (outcome === 'cancel') throw Object.assign(new Error('interrupted'), { exitCode: 130 });
+      return 0;
+    } },
+    clean: async () => { throw new Error('cleanup failed'); },
+    onTrace: async () => { throw new Error('trace storage failed'); },
+    write: (message) => output.push(message), writeError: (message) => errors.push(message),
+  });
+  results.push({ exitCode, output, errors });
+}
+console.log(JSON.stringify(results));
+`));
+  for (const [index, exitCode] of [0, 5, 130].entries()) {
+    const result = results[index];
+    assert.equal(result.exitCode, exitCode);
+    const diagnostic = JSON.parse(result.errors.join('\n'));
+    assert.match(diagnostic.cleanup.message, /cleanup failed/);
+    assert.match(diagnostic.trace.message, /trace storage failed/);
+    assert.ok(diagnostic.diagnostics.some((line) => line.includes('Startup total')));
+    if (exitCode === 5) {
+      assert.equal(diagnostic.code, 'CONFLICT');
+      assert.equal(diagnostic.message, 'service busy');
+    } else {
+      assert.equal(diagnostic.command_exit_code, exitCode);
+    }
+  }
+  assert.equal(JSON.parse(results[0].output[0]).status, 'success');
+  assert.deepEqual(results[1].output, []);
+  assert.deepEqual(results[2].output, []);
+});
+
+test('JSON reports a trace write failure even when automatic cleanup succeeds', () => {
+  const result = probeResult(runProbe(`
+const errors = [];
+const output = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const trace = { span: async (_name, task) => task(), finish: () => ({ durationMs: 1, unaccountedMs: 0, stages: [] }) };
+const exitCode = await runCli(['start', '--json'], {
+  paths, trace, commands: { start: async () => 0 }, clean: async () => {},
+  onTrace: async () => { throw new Error('trace storage failed'); },
+  write: (message) => output.push(message), writeError: (message) => errors.push(message),
+});
+console.log(JSON.stringify({ exitCode, output, errors }));
+`));
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(result.output[0]).status, 'success');
+  const warning = JSON.parse(result.errors.join('\n'));
+  assert.equal(warning.code, 'TRACE_WRITE_FAILED');
+  assert.equal(warning.command_exit_code, 0);
+  assert.match(warning.trace.message, /trace storage failed/);
+});
+
 test('automatic cleanup reports do not corrupt JSON usage errors', async (t) => {
   const { root, expiredLog } = await makeCleanupFixture(t);
   const result = runCliProcess(['--json', '--not-real'], root);

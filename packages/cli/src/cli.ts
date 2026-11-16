@@ -226,6 +226,7 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
     || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json');
   const jsonErrors: string[] = [];
   let cleanupFailure: string | undefined;
+  let traceFailure: string | undefined;
   const outputDeps: CliDependencies = {
     ...deps,
     writeError: (message) => {
@@ -270,27 +271,38 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
       const traceStatus = exitCode === 130 || exitCode === 143 ? 'cancelled' : exitCode === 0 ? 'ok' : 'failed';
       const summary = deps.trace.finish(traceStatus, exitCode === 0 ? undefined : exitCode === 130 || exitCode === 143 ? 'INTERRUPTED' : 'COMMAND_FAILED');
       try { await deps.onTrace?.(summary); }
-      catch (error) { deps.writeError(`brc: diagnostic write failed: ${errorMessage(error)}`); }
-      reportTrace(deps, summary);
+      catch (error) {
+        if ((parsed?.output ?? (requestedJson ? 'json' : 'table')) === 'json') traceFailure = errorMessage(error);
+        else deps.writeError(`brc: diagnostic write failed: ${errorMessage(error)}`);
+      }
+      reportTrace(outputDeps, summary);
     }
   }
 
-  if (cleanupFailure !== undefined) {
-    const cleanup = { code: 'CLEANUP_FAILED', message: cleanupFailure };
-    if (jsonErrors.length === 1) {
+  if (jsonErrors.length || cleanupFailure !== undefined || traceFailure !== undefined) {
+    const cleanup = cleanupFailure === undefined ? undefined : { code: 'CLEANUP_FAILED', message: cleanupFailure };
+    const trace = traceFailure === undefined ? undefined : { code: 'TRACE_WRITE_FAILED', message: traceFailure };
+    let primary: Record<string, unknown> | undefined;
+    if (jsonErrors.length) {
       try {
-        const primary = JSON.parse(jsonErrors[0]) as unknown;
-        if (primary && typeof primary === 'object' && !Array.isArray(primary)) {
-          deps.writeError(JSON.stringify({ ...primary, cleanup }));
-          return exitCode;
+        const value = JSON.parse(jsonErrors[0]) as unknown;
+        if (value && typeof value === 'object' && !Array.isArray(value) && 'code' in value) {
+          primary = value as Record<string, unknown>;
+          jsonErrors.shift();
         }
       } catch {
-        // Preserve non-JSON diagnostics in the structured warning below.
+        // Non-JSON messages are retained as diagnostics.
       }
     }
-    deps.writeError(JSON.stringify({ ...cleanup, command_exit_code: exitCode, ...(jsonErrors.length ? { diagnostics: jsonErrors } : {}) }));
-  } else {
-    for (const message of jsonErrors) deps.writeError(message);
+    if (primary || cleanup || trace || jsonErrors.length) {
+      deps.writeError(JSON.stringify({
+        ...(primary ?? { code: cleanup?.code ?? trace?.code ?? 'COMMAND_DIAGNOSTICS', command_exit_code: exitCode,
+          ...(cleanup ? { message: cleanup.message } : trace ? { message: trace.message } : {}) }),
+        ...(cleanup ? { cleanup } : {}),
+        ...(trace ? { trace } : {}),
+        ...(jsonErrors.length ? { diagnostics: jsonErrors } : {}),
+      }));
+    }
   }
 
   return exitCode;
