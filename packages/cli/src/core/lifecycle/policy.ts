@@ -3,18 +3,9 @@ import type { ManagedServiceName, ServiceStatus } from './ports.js';
 /** Services start in dependency order and stop in reverse. */
 export const SERVICE_START_ORDER: readonly ManagedServiceName[] = ['relay', 'traefik', 'agent'];
 
-const STALE_DEGRADED_MARKERS = [
-  'Recorded PID was reused',
-] as const;
-
-/** Only a confirmed reused PID permits replacement of a degraded record. */
-export function isStaleDegraded(status: Pick<ServiceStatus, 'state' | 'detail'>): boolean {
-  return status.state === 'degraded'
-    && STALE_DEGRADED_MARKERS.some((marker) => status.detail.includes(marker));
-}
 
 export function isStartable(status: Pick<ServiceStatus, 'state' | 'detail'>): boolean {
-  return status.state === 'stopped' || isStaleDegraded(status);
+  return status.state === 'stopped';
 }
 
 export function isActive(status: Pick<ServiceStatus, 'state'>): boolean {

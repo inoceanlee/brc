@@ -455,18 +455,15 @@ test('failed release acquisition leaves installed executable and configuration u
 });
 
 
-test('configuration accepts confirmed PID reuse but rejects unknown ownership', async (t) => {
+test('configuration rejects degraded ownership even when PID reuse is claimed', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   let detail = 'Recorded PID was reused; process identity changed.';
   const lifecycle = makeLifecycle();
   lifecycle.status = async () => [{ name: 'traefik', state: 'degraded', pid: 123, detail }];
   const manager = makeManager(brcPaths, makeRelease('3.7.16'), { lifecycle });
-  await manager.writeConfig();
-  const filename = path.join(brcPaths.traefik, 'config', 'dynamic.yml');
-  const original = await readFile(filename, 'utf8');
+  await assert.rejects(manager.writeConfig(), /Cannot apply Traefik configuration/);
   detail = 'Cannot verify process identity; refusing process control.';
   await assert.rejects(manager.writeConfig(), /Cannot apply Traefik configuration/);
-  assert.equal(await readFile(filename, 'utf8'), original);
 });
 test('configuration uses BrcSettings and keeps a single public proxy router', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
