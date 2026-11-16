@@ -37,3 +37,32 @@ test('disabled diagnostics leave supplied adapters untouched', async () => {
   await runtime.stop();
   assert.equal(runtime.enabled, false);
 });
+
+test('diagnostics flushes queued records before a snapshot and on shutdown', async () => {
+  const events = [];
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const runtime = createDiagnosticsRuntime({
+    enabled: true,
+    component: 'agent',
+    instanceId: 'agent-test',
+    log: {
+      write: async (event) => { await pending; events.push(event); },
+      flush: async () => { events.push('flushed'); },
+    },
+    session: {
+      start() {},
+      capture: async (status) => { events.push(status); },
+      stop: async () => { events.push('stopped'); },
+    },
+  });
+  runtime.log('failure', { level: 'error', error: new Error('sample') });
+  const snapshot = runtime.captureSnapshot();
+  release();
+  await snapshot;
+  await runtime.stop();
+  assert.equal(events[0].component, 'agent');
+  assert.equal(events[0].instanceId, 'agent-test');
+  assert.match(events[0].stack, /sample/);
+  assert.deepEqual(events.slice(1), ['running', 'stopped', 'flushed']);
+});

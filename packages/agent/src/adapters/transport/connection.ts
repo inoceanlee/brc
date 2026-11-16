@@ -1,12 +1,11 @@
 import os from 'node:os';
-import path from 'node:path';
-import { startDiagnostics, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import type { Server } from 'node:http';
+import { startManagedControlServer, type InjectedDiagnosticsRuntime, type ManagedControlServer } from 'brc-shared';
 import { WsClient } from './ws-client.js';
 import { pairDevice, loadCredentials, type DeviceCredentials } from './pairing.js';
 import { callTool, listTools } from '../mcp/dispatcher.js';
 import { VERSION } from '../../core/version.js';
 import { setCurrentClient } from '../../context.js';
-import { resolveAgentPaths } from '../storage/agent-paths.js';
 import { installAgentLogSink, type LogLevel } from '../telemetry/logger.js';
 import type { AgentInvocation } from '../../commands/parser.js';
 import { AgentUsageError } from '../../commands/parser.js';
@@ -20,7 +19,12 @@ function validateRelay(input: string): string {
   return url.toString().replace(/\/$/, '');
 }
 
-export async function runAgentConnection(inv: AgentInvocation): Promise<void> {
+export async function runAgentConnection(
+  inv: AgentInvocation,
+  diagnostics: InjectedDiagnosticsRuntime,
+  controlServer: Server,
+  controlIdentity: { token?: string; readyFile?: string; id?: string; service?: string },
+): Promise<void> {
   if (inv.offline) throw new AgentUsageError('Connecting requires network access; remove --offline.');
   const relayArg = inv.relay || process.env.BRC_RELAY;
   const name = inv.name || process.env.BRC_NAME || os.hostname();
@@ -36,16 +40,10 @@ export async function runAgentConnection(inv: AgentInvocation): Promise<void> {
   const manual = token && relay && deviceId
     ? { relayUrl: relay, deviceId, deviceToken: token, name, pairedAt: 'manual' }
     : undefined;
-  const paths = resolveAgentPaths();
   if (inv.allowDirectories.length) {
     const { configManager } = await import('../storage/config-manager.js');
     await configManager.setUserSetting('allowedDirectories', inv.allowDirectories);
   }
-  const diagnostics = await startDiagnostics({
-    component: 'agent',
-    manifestUrl: new URL('../../diagnostics-manifest.json', import.meta.url),
-    logFile: path.join(paths.logsDirectory, 'agent-diagnostics.log'),
-  });
   const unbindLog = installAgentLogSink((level: LogLevel, message: string) => {
     const severity = level === 'warning' ? 'warn' : ['emergency', 'alert', 'critical', 'error'].includes(level) ? 'error' : level === 'debug' ? 'debug' : 'info';
     diagnostics.log(message, { level: severity, source: { file: 'agent/logger.ts', function: 'log' } });
@@ -77,6 +75,8 @@ export async function runAgentConnection(inv: AgentInvocation): Promise<void> {
   process.once('SIGTERM', () => { void stop('SIGTERM'); });
   try {
     control = await startManagedControlServer({
+      server: controlServer,
+      ...controlIdentity,
       health: () => awaitingPairing
         ? { state: 'pairing', detail: 'Agent awaits pairing approval.' }
         : client?.connected

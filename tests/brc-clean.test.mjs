@@ -397,15 +397,14 @@ test('rotates repeated service output to a bounded active file and one backup', 
   assert.equal((await readdir(brcPaths.logs)).length, 2);
 });
 
-test('managed console captures stdout and stderr in its rotating log', async (t) => {
+test('managed log writes explicitly without replacing console methods', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const logFile = path.join(brcPaths.logs, 'relay.log');
   const moduleUrl = JSON.stringify(new URL('../packages/shared/dist/managed-log.js', import.meta.url).href);
-  const source = `import { installManagedLog } from ${moduleUrl};\nconst log = installManagedLog({ maxBytes: 256 });\nconsole.log('relay standard output');\nconsole.error('relay standard error');\nawait log?.close();`;
+  const source = `import { createManagedLog } from ${moduleUrl};\nconst original = console.log;\nconst log = createManagedLog(${JSON.stringify(logFile)}, 256);\nlog.write('relay standard output\\n');\nlog.write('relay standard error\\n');\nif (console.log !== original) throw new Error('console changed');\nawait log.close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
     encoding: 'utf8',
     windowsHide: true,
-    env: { ...process.env, BRC_LOG_FILE: logFile },
   });
 
   assert.equal(result.status, 0, result.stderr);

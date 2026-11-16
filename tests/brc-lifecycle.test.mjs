@@ -349,6 +349,11 @@ test('protects managed control endpoints and runs shutdown once', async () => {
   const stops = [];
   try {
     control = await startManagedControlServer({
+      server: createServer(),
+      token: env.BRC_CONTROL_TOKEN,
+      readyFile: env.BRC_CONTROL_READY_FILE,
+      id: env.BRC_MANAGED_ID,
+      service: env.BRC_MANAGED_SERVICE,
       health: () => ({ state: 'running', detail: 'Relay ready.' }),
       stop: () => { stops.push('stop'); },
     });

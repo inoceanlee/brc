@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { appendTraceSummary, startDiagnostics, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type TraceSummary } from 'brc-shared';
+import { appendTraceSummary, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type TraceSummary } from 'brc-shared';
+import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
 import { readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
 import { COMMAND_SPECS, helpText, parseCommand, UsageError, type CliCommandName, type ParsedCommand } from './commands/parser.js';
@@ -21,7 +23,7 @@ import { ProcessManager } from './adapters/process/controller.js';
 import { inspectProcess } from './adapters/process/identity.js';
 import { ManagedProcessResourceSampler } from './adapters/process/resources.js';
 import { ServiceManager } from './core/lifecycle/workflow.js';
-import { createDefaultServices, diagnosticEnvironment } from './adapters/process/specs.js';
+import { createDefaultServices } from './adapters/process/specs.js';
 import { startRejection, shouldWriteTraefikConfig } from './core/lifecycle/policy.js';
 import { cleanRuntime } from './adapters/storage/cleanup.js';
 import { createMaintenanceCommands } from './commands/maintenance.js';
@@ -31,6 +33,50 @@ import { TraefikManager } from './traefik/manager.js';
 import { runManagedTraefikService } from './traefik/runtime.js';
 import { RelayDatabase } from './adapters/storage/relay-database.js';
 import { TraefikProgress } from './progress.js';
+
+async function createProcessDiagnostics(
+  component: 'cli' | 'traefik',
+  instanceId: string,
+  settings: Readonly<BrcSettings>,
+  paths: BrcPaths,
+  enabled = settings.diagnostics.enabled,
+) {
+  const functions = enabled ? new FunctionTiming() : undefined;
+  if (functions) {
+    for (const url of [
+      new URL('./diagnostics-manifest.json', import.meta.url),
+      new URL('./diagnostics-manifest.json', import.meta.resolve('brc-shared')),
+    ]) {
+      try {
+        const manifest = JSON.parse(await readFile(url, 'utf8')) as {
+          functions?: Array<{ id: string; name: string; file: string; line: number; kind: 'sync' | 'async' }>;
+        };
+        for (const entry of manifest.functions ?? []) functions.register(entry.id, entry);
+      } catch {}
+    }
+  }
+  const probe = functions ? installFunctionProbe(functions) : undefined;
+  const resources = functions ? new NodeResourceSampler({ intervalMs: settings.diagnostics.resourceSampleMs }) : undefined;
+  const store = functions ? new FileSnapshotStore({
+    directory: paths.diagnostics,
+    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+  }) : undefined;
+  const session = functions && resources && store ? new DiagnosticSession({
+    service: component, instanceId, store, functions, resources,
+    snapshotIntervalMs: settings.diagnostics.functionSnapshotMs,
+  }) : undefined;
+  const log = functions ? new FileDiagnosticLog(path.join(paths.logs, `${component}-diagnostics.log`), {
+    maxRecordBytes: settings.diagnostics.maxRecordBytes,
+    maxBytes: settings.logs.rotateMiB * 1024 * 1024,
+  }) : undefined;
+  const runtime = createDiagnosticsRuntime({ enabled, component, instanceId, functions, resources, session, log });
+  return {
+    ...runtime,
+    async stop() {
+      try { await runtime.stop(); } finally { probe?.uninstall(); }
+    },
+  };
+}
 
 export type CliLogComponent = 'relay' | 'agent' | 'traefik' | 'cli';
 type CommandResult = number | void | CliResult;
@@ -377,15 +423,9 @@ async function main(): Promise<void> {
   });
   const settings = settingsManager.snapshot();
   lifecycleLock.updateWaitSettings({ waitMs: settings.runtime.lockWaitMs, pollMs: settings.runtime.lockPollMs });
-  const diagnosticEnv = { ...process.env, ...diagnosticEnvironment(settings, paths) };
-  if (parsed?.name === 'uninstall') diagnosticEnv.BRC_DIAGNOSTICS_ENABLED = 'false';
-  const diagnostics = await startDiagnostics({
-    component: 'cli',
-    instanceId: String(process.pid),
-    env: diagnosticEnv,
-    manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
-    logFile: path.join(paths.logs, 'cli-diagnostics.log'),
-  });
+  const diagnostics = await createProcessDiagnostics(
+    'cli', String(process.pid), settings, paths, settings.diagnostics.enabled && parsed?.name !== 'uninstall',
+  );
   const processes = new ProcessManager(paths, {
     startupTimeoutMs: settings.runtime.startupTimeoutMs,
     shutdownTimeoutMs: settings.runtime.shutdownTimeoutMs,
@@ -573,13 +613,9 @@ if (isMainModule()) {
   if (process.env.BRC_MANAGED_SERVICE === 'traefik' && process.argv.includes('--run-traefik')) {
     const paths = resolveBrcPaths(process.env);
     const { settings } = await readSettings(paths, process.env);
-    const diagnostics = await startDiagnostics({
-      component: 'traefik',
-      instanceId: process.env.BRC_MANAGED_ID ?? String(process.pid),
-      env: { ...process.env, ...diagnosticEnvironment(settings, paths) },
-      manifestUrl: new URL('./diagnostics-manifest.json', import.meta.url),
-      logFile: path.join(paths.logs, 'traefik-diagnostics.log'),
-    });
+    const diagnostics = await createProcessDiagnostics(
+      'traefik', process.env.BRC_MANAGED_ID ?? String(process.pid), settings, paths,
+    );
     try {
       const snapshots = settings.diagnostics.enabled ? new FileSnapshotStore({ directory: paths.diagnostics }) : undefined;
       const createBinaryResourceMonitor = snapshots ? async (pid: number, instanceId: string) => {
@@ -598,7 +634,16 @@ if (isMainModule()) {
           }),
         });
       } : undefined;
-      await runManagedTraefikService(settings, diagnostics, { createBinaryResourceMonitor });
+      await runManagedTraefikService(settings, diagnostics, {
+        createBinaryResourceMonitor,
+        controlServer: createServer(),
+        controlIdentity: {
+          token: process.env.BRC_CONTROL_TOKEN,
+          readyFile: process.env.BRC_CONTROL_READY_FILE,
+          id: process.env.BRC_MANAGED_ID,
+          service: process.env.BRC_MANAGED_SERVICE,
+        },
+      });
     } finally {
       await diagnostics.stop();
     }
