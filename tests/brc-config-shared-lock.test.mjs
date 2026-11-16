@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -54,4 +54,21 @@ test('Agent writes update only Agent keys in the shared last-good snapshot', asy
   assert.deepEqual(saved.settings.agent.allowedDirectories, ['C:\\workspace']);
   const current = await store.read();
   assert.deepEqual(current.settings.agent.allowedDirectories, saved.settings.agent.allowedDirectories);
+});
+
+test('Agent backup update does not promote unrelated pending CLI edits', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-shared-pending-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'config');
+  const filename = path.join(directory, 'brc.yaml');
+  await mkdir(directory, { recursive: true });
+  await writeFile(filename, 'version: 1\nservices:\n  relayPort: 3100\n');
+  await writeFile(filename + '.last-good', 'version: 1\nservices:\n  relayPort: 3001\n');
+  const store = createStore(filename, directory);
+  await store.update((settings) => { settings.agent.fileReadLineLimit = 77; });
+  const current = yaml.safeLoad(await readFile(filename, 'utf8'));
+  const backup = yaml.safeLoad(await readFile(filename + '.last-good', 'utf8'));
+  assert.equal(current.services.relayPort, 3100);
+  assert.equal(backup.services.relayPort, 3001);
+  assert.equal(backup.agent.fileReadLineLimit, 77);
 });

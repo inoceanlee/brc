@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { removeSettingsFile, writeSettingsText } from 'brc-shared';
 import path from 'node:path';
 import type { BrcPaths } from './paths.js';
 import type { BrcSettings } from './settings.js';
@@ -16,31 +15,21 @@ export function serializeSettings(settings: Readonly<BrcSettings>): string {
   return yaml.safeDump(settings, { noRefs: true });
 }
 
-async function writeAtomically(filename: string, contents: string): Promise<void> {
-  const temporary = `${filename}.${randomUUID()}.tmp`;
-  await mkdir(path.dirname(filename), { recursive: true });
-  try {
-    await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    await rename(temporary, filename);
-  } finally {
-    await rm(temporary, { force: true });
-  }
-}
 
 export async function writeConfigText(paths: BrcPaths, contents: string): Promise<void> {
-  await writeAtomically(path.join(paths.config, 'brc.yaml'), contents);
+  await writeSettingsText(path.join(paths.config, 'brc.yaml'), contents);
 }
 
 export async function writeLastGoodText(paths: BrcPaths, contents: string): Promise<void> {
-  await writeAtomically(path.join(paths.config, 'brc.yaml.last-good'), contents);
+  await writeSettingsText(path.join(paths.config, 'brc.yaml.last-good'), contents);
 }
 
 export async function removeConfigFile(paths: BrcPaths): Promise<void> {
-  await rm(path.join(paths.config, 'brc.yaml'), { force: true });
+  await removeSettingsFile(path.join(paths.config, 'brc.yaml'));
 }
 
 export async function removeLastGoodFile(paths: BrcPaths): Promise<void> {
-  await rm(path.join(paths.config, 'brc.yaml.last-good'), { force: true });
+  await removeSettingsFile(path.join(paths.config, 'brc.yaml.last-good'));
 }
 
 export async function writeSettings(paths: BrcPaths, settings: Readonly<BrcSettings>): Promise<string> {
