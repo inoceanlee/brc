@@ -601,11 +601,7 @@ async function checkProtectedCleanupCandidates(
   }
 }
 
-/**
- * Diagnostic snapshots follow the configured retention window. Snapshots whose
- * process is still alive are preserved; corrupt files are only removed once
- * they are older than the cutoff, so a malformed record stays inspectable.
- */
+/** Preserve snapshots whenever their process may still be active. */
 async function cleanDiagnosticSnapshots(
   paths: BrcPaths,
   report: CleanupReport,
@@ -638,6 +634,29 @@ async function cleanDiagnosticSnapshots(
     if (deadline > cutoff) {
       if (result.state === 'corrupt') issue(report.preserved, target, `Unreadable snapshot (${snapshotStateLabel(result.state)}).`);
       continue;
+    }
+    if (!snapshot || snapshot.pid <= 0) {
+      issue(report.preserved, target, 'Cannot determine the snapshot process identity.');
+      continue;
+    }
+    try {
+      if (await inspectProcess(snapshot.pid)) {
+        issue(report.preserved, target, 'Snapshot process may still be active.');
+        continue;
+      }
+    } catch (error) {
+      issue(report.preserved, target, `Cannot inspect snapshot process: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    try {
+      process.kill(snapshot.pid, 0);
+      issue(report.preserved, target, 'Snapshot process may still be active.');
+      continue;
+    } catch (error) {
+      if (errorCode(error) !== 'ESRCH') {
+        issue(report.preserved, target, 'Cannot determine whether the snapshot process is active.');
+        continue;
+      }
     }
     try {
       const bytes = (await lstat(target)).size;

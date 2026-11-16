@@ -65,6 +65,7 @@ const control = createServer((req, res) => {
     return;
   }
   if (req.method === 'POST' && req.url === '/shutdown') {
+    if (process.env.BRC_TEST_SHUTDOWN_TRACE) appendFileSync(process.env.BRC_TEST_SHUTDOWN_TRACE, 'shutdown\\n');
     res.writeHead(202).end();
     if (mode !== 'hang') setTimeout(() => process.exit(0), 20);
     return;
@@ -151,6 +152,69 @@ test('statusMany isolates record errors and honors the injected inspector', asyn
   } finally {
     mismatch = false;
   }
+});
+
+test('start preserves a live record when ownership cannot be proved', async (t) => {
+  const harness = await makeHarness(t);
+  await harness.manager.start(harness.spec);
+  const filename = path.join(harness.paths.runtime, 'relay.json');
+  const original = await readFile(filename, 'utf8');
+  const changed = { ...JSON.parse(original), commandLine: 'unverifiable command' };
+  await writeFile(filename, JSON.stringify(changed));
+  try {
+    await assert.rejects(harness.manager.start(harness.spec), /identity|conflict/i);
+    assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), changed);
+    process.kill(changed.pid, 0);
+  } finally {
+    await writeFile(filename, original);
+  }
+});
+
+test('start preserves malformed records instead of replacing them', async (t) => {
+  const harness = await makeHarness(t);
+  const filename = path.join(harness.paths.runtime, 'relay.json');
+  await writeFile(filename, '{broken');
+  await assert.rejects(harness.manager.start(harness.spec), /malformed|JSON/i);
+  assert.equal(await readFile(filename, 'utf8'), '{broken');
+  await rm(filename);
+});
+
+test('cancelling shutdown preserves the record and does not force-stop the process', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-stop-cancel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const trace = path.join(root, 'shutdown');
+  const harness = await makeHarness(t, { mode: 'hang', shutdownTimeoutMs: 5000, env: { BRC_TEST_SHUTDOWN_TRACE: trace } });
+  await harness.manager.start(harness.spec);
+  const recordFile = path.join(harness.paths.runtime, 'relay.json');
+  const record = JSON.parse(await readFile(recordFile, 'utf8'));
+  const controller = new AbortController();
+  const stopping = harness.manager.stop(harness.spec, controller.signal);
+  for (let i = 0; i < 100; i++) {
+    try { await readFile(trace); break; } catch { await sleep(20); }
+  }
+  assert.equal(await readFile(trace, 'utf8'), 'shutdown\n');
+  controller.abort(new Error('stop cancelled'));
+  await assert.rejects(stopping, /stop cancelled|abort/i);
+  assert.deepEqual(JSON.parse(await readFile(recordFile, 'utf8')), record);
+  process.kill(record.pid, 0);
+  harness.manager.updateRuntimeSettings({ startupTimeoutMs: 3000, shutdownTimeoutMs: 300 });
+});
+
+test('service stop forwards cancellation and does not stop later services', async () => {
+  const controller = new AbortController();
+  const stopped = [];
+  const services = ['relay', 'agent'].map((name) => ({ name, entrypoint: '/test', workspaceRoot: '/', cwd: '/' }));
+  const processes = {
+    status: async (spec) => ({ name: spec.name, state: 'running', pid: 1, detail: '' }),
+    stop: async (spec, signal) => {
+      stopped.push(spec.name);
+      assert.equal(signal, controller.signal);
+      controller.abort(new Error('stop cancelled'));
+    },
+  };
+  const manager = new ServiceManager(paths(os.tmpdir()), services, processes, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (run) => run() });
+  await assert.rejects(manager.stop(controller.signal), /stop cancelled/);
+  assert.deepEqual(stopped, ['agent']);
 });
 
 test('status retries a transient process inspection error before reporting degraded', async (t) => {
@@ -781,23 +845,18 @@ test('start automatically evicts stale process record when PID identity does not
   assert.notEqual(statusAfter[0].pid, fakeForeignPid);
 });
 
-test('start automatically evicts corrupted process record JSON and recovers', async (t) => {
+test('service start preserves a corrupted process record', async (t) => {
   const harness = await makeHarness(t);
-  // Write corrupted JSON to simulate partial write during unexpected power loss
-  await writeFile(path.join(harness.paths.runtime, `${harness.spec.name}.json`), '{ "broken_json": true, ');
-
-  // Status reports degraded on corrupt file
-  const status = await harness.manager.status(harness.spec);
-  assert.equal(status.state, 'degraded');
-
-  // Start recovers cleanly
+  const filename = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  const contents = '{ "broken_json": true, ';
+  await writeFile(filename, contents);
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
-  await serviceManager.start();
-  const statusAfter = await serviceManager.status();
-  assert.equal(statusAfter[0].state, 'running');
+  await assert.rejects(serviceManager.start(), /Cannot start/);
+  assert.equal(await readFile(filename, 'utf8'), contents);
+  await rm(filename);
 });
 
-test('start automatically evicts record belonging to another workspace and recovers', async (t) => {
+test('service start preserves a record belonging to another workspace', async (t) => {
   const harness = await makeHarness(t);
   const foreignRecord = {
     version: 1,
@@ -819,9 +878,9 @@ test('start automatically evicts record belonging to another workspace and recov
   assert.match(status.detail, /workspace/i);
 
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
-  await serviceManager.start();
-  const statusAfter = await serviceManager.status();
-  assert.equal(statusAfter[0].state, 'running');
+  await assert.rejects(serviceManager.start(), /workspace/i);
+  assert.deepEqual(JSON.parse(await readFile(path.join(harness.paths.runtime, 'relay.json'), 'utf8')), foreignRecord);
+  await rm(path.join(harness.paths.runtime, 'relay.json'));
 });
 
 test('createDefaultServices trusts one loopback proxy hop for relay', () => {
@@ -832,16 +891,13 @@ test('createDefaultServices trusts one loopback proxy hop for relay', () => {
   assert.equal(relay.env.TRUST_PROXY, 'loopback');
 });
 
-test('reused PID belonging to foreign inaccessible system process is evicted and starts cleanly', async (t) => {
-  if (process.platform !== 'win32') return;
-  const harness = await makeHarness(t);
-  // On Windows, PID 4 is always System process.
-  // Simulate a leftover record from before reboot whose PID is now 4.
-  const foreignRecord = {
+test('start preserves a live process record when inspection returns no identity', async (t) => {
+  const harness = await makeHarness(t, { processOptions: { inspectProcess: async () => null } });
+  const record = {
     version: 1,
     id: '12345678-1234-4234-8234-123456789abc',
     service: harness.spec.name,
-    pid: 4,
+    pid: process.pid,
     createdAt: '123456789',
     executablePath: process.execPath,
     commandLine: 'node test',
@@ -850,18 +906,15 @@ test('reused PID belonging to foreign inaccessible system process is evicted and
     controlPort: 12345,
     controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   };
-  await writeFile(path.join(harness.paths.runtime, `${harness.spec.name}.json`), JSON.stringify(foreignRecord, null, 2));
-
-  // Inspecting status must not crash or degrade: PID 4 returned null from inspector, so status is stopped!
-  const status = await harness.manager.status(harness.spec);
-  assert.equal(status.state, 'stopped');
-
-  // Start must cleanly evict and start the actual service
+  const filename = path.join(harness.paths.runtime, 'relay.json');
+  await writeFile(filename, JSON.stringify(record));
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
-  await serviceManager.start();
-  const statusAfter = await serviceManager.status();
-  assert.equal(statusAfter[0].state, 'running');
-  assert.notEqual(statusAfter[0].pid, 4);
+  assert.equal((await harness.manager.status(harness.spec)).state, 'degraded');
+  await assert.rejects(harness.manager.start(harness.spec), /identity/i);
+  await assert.rejects(harness.manager.stop(harness.spec), /identity/i);
+  await assert.rejects(serviceManager.start(), /identity/i);
+  assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), record);
+  await rm(filename);
 });
 
 test('reboot stale record older than system boot time is evicted without health delay', async (t) => {

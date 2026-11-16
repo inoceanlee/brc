@@ -113,13 +113,17 @@ export class ServiceManager {
     signal?.throwIfAborted();
     const failures: Error[] = [];
     for (const service of [...this.services].reverse()) {
+      signal?.throwIfAborted();
       try {
         const current = await this.processes.status(service);
-        if (current.state !== 'stopped') await this.processes.stop(service);
+        signal?.throwIfAborted();
+        if (current.state !== 'stopped') await this.processes.stop(service, signal);
       } catch (error) {
+        signal?.throwIfAborted();
         failures.push(error instanceof Error ? error : new Error(String(error)));
       }
     }
+    signal?.throwIfAborted();
     if (failures.length) throw new AggregateError(failures, 'One or more managed services could not be stopped safely.');
   }
 }

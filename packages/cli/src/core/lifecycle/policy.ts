@@ -4,19 +4,10 @@ import type { ManagedServiceName, ServiceStatus } from './ports.js';
 export const SERVICE_START_ORDER: readonly ManagedServiceName[] = ['relay', 'traefik', 'agent'];
 
 const STALE_DEGRADED_MARKERS = [
-  'Process identity changed',
-  'malformed',
-  'incomplete',
-  'belongs to another workspace',
-  'JSON',
-  'Recorded process has exited',
+  'Recorded PID was reused',
 ] as const;
 
-/**
- * A degraded record left by a previous boot, a different workspace or a
- * corrupted file is treated as stopped, so a fresh start can safely rewrite
- * configuration instead of refusing to start.
- */
+/** Only a confirmed reused PID permits replacement of a degraded record. */
 export function isStaleDegraded(status: Pick<ServiceStatus, 'state' | 'detail'>): boolean {
   return status.state === 'degraded'
     && STALE_DEGRADED_MARKERS.some((marker) => status.detail.includes(marker));

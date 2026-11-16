@@ -501,23 +501,25 @@ test('cleanup removes expired diagnostic snapshots and keeps live ones', async (
       cpuUserMs: 0, cpuSystemMs: 0, cpuPercent: null, rssBytes: 1, heapUsedBytes: 1, peak: null,
     },
   };
-  await store.write({ ...base, instanceId: 'expired', capturedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString() });
+  await store.write({ ...base, instanceId: 'active', capturedAt: new Date(Date.now() - 40 * DAY).toISOString() });
+  await store.write({ ...base, instanceId: 'expired', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString() });
   await store.write({ ...base, instanceId: 'fresh', capturedAt: new Date().toISOString() });
   const report = await cleanRuntime(brcPaths);
   assert.ok(report.removed >= 1);
+  assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-active.json')), true);
   assert.equal((await store.read('relay', 'expired')).state, 'missing');
   assert.equal((await store.read('relay', 'fresh')).state, 'current');
 });
 
-test('cleanup removes corrupt diagnostic snapshots once they age out', async (t) => {
-  const { root, paths: brcPaths } = await makeRoot(t);
+test('cleanup preserves corrupt diagnostic snapshots when process identity is unknown', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
   const broken = path.join(brcPaths.diagnostics, 'relay-broken.json');
   await writeFile(broken, '{not json');
-  const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+  const old = new Date(Date.now() - 40 * DAY);
   await utimes(broken, old, old);
   const report = await cleanRuntime(brcPaths);
-  assert.ok(report.removed >= 1);
-  assert.equal(await exists(broken), false);
+  assert.equal(await exists(broken), true);
+  assert.ok(report.preserved.some((item) => item.path === broken));
 });
 
 test('cleanup preserves a live Traefik binary identity record', async (t) => {

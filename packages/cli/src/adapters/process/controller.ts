@@ -4,7 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import os from 'node:os';
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../../config/paths.js';
@@ -171,6 +171,15 @@ export function isStaleFromPreviousBoot(mtimeMs: number): boolean {
   const bootTimeMs = Date.now() - (os.uptime() * 1000);
   return mtimeMs < (bootTimeMs - 5000);
 }
+function processDefinitelyExited(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return errorCode(error) === 'ESRCH';
+  }
+}
+
 
 
 export class ProcessManager implements ControlHealthPort {
@@ -208,21 +217,16 @@ export class ProcessManager implements ControlHealthPort {
     try {
       await mkdir(this.paths.runtime, { recursive: true });
       signal?.throwIfAborted();
-      let current: ManagedProcessRecord | null = null;
-      try {
-        current = await this.readRecord(spec);
-      } catch {
-        // Corrupted or invalid process record from a previous crash: safely evict
-        await this.removeRecord(spec.name);
-      }
+      const current = await this.readRecord(spec);
       if (current) {
         const identity = await this.inspect(current.pid);
         if (!identity) {
+          if (!processDefinitelyExited(current.pid)) throw new Error(`${spec.name} process identity cannot be verified; refusing to start.`);
+          await this.removeRecord(spec.name);
+        } else if (identity.createdAt !== current.createdAt) {
           await this.removeRecord(spec.name);
         } else if (!sameIdentity(current, identity, spec)) {
-          // Stale record: PID was reused by another process or creation time does not match.
-          // Safely evict the stale record without killing the unrelated foreign process.
-          await this.removeRecord(spec.name);
+          throw new Error(`${spec.name} process identity cannot be verified; refusing to start.`);
         } else {
           const health = await this.readHealth(current, Infinity, signal);
           if ((health.state === 'running' && health.ok) || (spec.name === 'agent' && health.state === 'pairing')) return;
@@ -303,7 +307,7 @@ export class ProcessManager implements ControlHealthPort {
     isValidSpec(spec);
     const record = await this.readRecord(spec);
     if (!record) return;
-    await this.stopRecord(spec, record, true);
+    await this.stopRecord(spec, record, true, signal);
   }
 
   async check(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<{ ready: boolean; detail: string }> {
@@ -339,7 +343,12 @@ export class ProcessManager implements ControlHealthPort {
     } catch (error) {
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: `Cannot verify process identity: ${processErrorMessage(error)}` };
     }
-    if (!identity) return { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' };
+    if (!identity) return processDefinitelyExited(record.pid)
+      ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
+      : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
+    if (identity.createdAt !== record.createdAt) {
+      return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Recorded PID was reused; process identity changed.' };
+    }
     if (!sameIdentity(record, identity, spec)) {
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
     }
@@ -390,7 +399,10 @@ export class ProcessManager implements ControlHealthPort {
       if (status) return status;
       if (!record) throw new Error('Missing process record.');
       const identity = identities.get(record.pid);
-      if (!identity) return { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' };
+      if (!identity) return processDefinitelyExited(record.pid)
+        ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
+        : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
+      if (identity.createdAt !== record.createdAt) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Recorded PID was reused; process identity changed.' };
       if (!sameIdentity(record, identity, spec)) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
       try {
         const health = await this.readHealth(record);
@@ -506,9 +518,12 @@ export class ProcessManager implements ControlHealthPort {
     };
   }
 
-  private async stopRecord(spec: ManagedServiceSpec, record: ManagedProcessRecord, removeRecord: boolean): Promise<void> {
+  private async stopRecord(spec: ManagedServiceSpec, record: ManagedProcessRecord, removeRecord: boolean, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const current = await this.inspect(record.pid);
+    signal?.throwIfAborted();
     if (!current) {
+      if (!processDefinitelyExited(record.pid)) throw new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`);
       if (removeRecord) await this.removeRecord(spec.name);
       return;
     }
@@ -519,25 +534,31 @@ export class ProcessManager implements ControlHealthPort {
         await fetch(`http://127.0.0.1:${record.controlPort}/shutdown`, {
           method: 'POST',
           headers: { authorization: `Bearer ${record.controlToken}` },
-          signal: AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS),
         });
-      } catch { /* Verify identity again before any forced stop. */ }
+      } catch {
+        signal?.throwIfAborted();
+      }
     }
 
-    if (!await this.waitForExit(record, spec, this.shutdownTimeoutMs)) {
+    signal?.throwIfAborted();
+    if (!await this.waitForExit(record, spec, this.shutdownTimeoutMs, signal)) {
       const latest = await this.inspect(record.pid);
+      signal?.throwIfAborted();
       if (!latest) {
+        if (!processDefinitelyExited(record.pid)) throw new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`);
         if (removeRecord) await this.removeRecord(spec.name);
         return;
       }
       if (!sameIdentity(record, latest, spec)) throw new Error(`${spec.name} process identity changed before forced stop; refusing PID ${record.pid}.`);
+      signal?.throwIfAborted();
       try {
         if (process.platform === 'win32') process.kill(record.pid);
         else process.kill(record.pid, 'SIGKILL');
       } catch (error) {
         if (errorCode(error) !== 'ESRCH') throw error;
       }
-      if (!await this.waitForExit(record, spec, this.shutdownTimeoutMs)) {
+      if (!await this.waitForExit(record, spec, this.shutdownTimeoutMs, signal)) {
         throw new Error(`${spec.name} process ${record.pid} remained after a targeted forced stop.`);
       }
     }
@@ -545,14 +566,20 @@ export class ProcessManager implements ControlHealthPort {
     if (removeRecord) await this.removeRecord(spec.name);
   }
 
-  private async waitForExit(record: ManagedProcessRecord, spec: ManagedServiceSpec, timeoutMs: number): Promise<boolean> {
+  private async waitForExit(record: ManagedProcessRecord, spec: ManagedServiceSpec, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       const current = await this.inspect(record.pid);
-      if (!current) return true;
+      signal?.throwIfAborted();
+      if (!current) {
+        if (processDefinitelyExited(record.pid)) return true;
+        throw new Error(`${spec.name} process identity cannot be verified; refusing process control.`);
+      }
       if (!sameIdentity(record, current, spec)) throw new Error(`${spec.name} PID ${record.pid} no longer matches its recorded identity.`);
-      await sleep(this.pollIntervalMs);
+      await sleep(this.pollIntervalMs, undefined, { signal });
     }
+    signal?.throwIfAborted();
     return false;
   }
 
@@ -602,11 +629,6 @@ export class ProcessManager implements ControlHealthPort {
   private async readRecord(spec: ManagedServiceSpec): Promise<ManagedProcessRecord | null> {
     const filename = recordPath(this.paths, spec.name);
     try {
-      const fileInfo = await stat(filename);
-      if (isStaleFromPreviousBoot(fileInfo.mtimeMs)) {
-        await this.removeRecord(spec.name);
-        return null;
-      }
       const record = parseProcessRecord(JSON.parse(await readFile(filename, 'utf8')), spec);
       if (!matchesRecordedInstallation(record, spec)) {
         throw new Error(`${spec.name} process record belongs to another workspace; refusing process control.`);
