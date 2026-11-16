@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { resolveAgentHome } from '../../core/config.js';
+import { resolveAgentPaths } from '../storage/agent-paths.js';
 import { appendRotatingLog } from 'brc-shared';
 
 export interface FuzzySearchLogEntry {
@@ -23,31 +23,19 @@ export interface FuzzySearchLogEntry {
 }
 
 const FUZZY_LOG_HEADERS = [
-    'timestamp',
-    'searchText',
-    'foundText',
-    'similarity',
-    'executionTime',
-    'exactMatchCount',
-    'expectedReplacements',
-    'fuzzyThreshold',
-    'belowThreshold',
-    'diff',
-    'searchLength',
-    'foundLength',
-    'fileExtension',
-    'characterCodes',
-    'uniqueCharacterCount',
-    'diffLength'
+    'timestamp', 'similarity', 'executionTime', 'exactMatchCount',
+    'expectedReplacements', 'fuzzyThreshold', 'belowThreshold',
+    'searchLength', 'foundLength', 'fileExtension',
+    'uniqueCharacterCount', 'diffLength'
 ].join('\t');
 
-class FuzzySearchLogger {
+export class FuzzySearchLogger {
     private logPath: string;
     private initialized = false;
 
     constructor() {
         // Create log file in a dedicated directory
-        const logDir = path.join(resolveAgentHome(process.env), 'logs');
+        const logDir = resolveAgentPaths().logsDirectory;
         this.logPath = path.join(logDir, 'fuzzy-search.log');
     }
 
@@ -82,19 +70,15 @@ class FuzzySearchLogger {
             // Convert entry to tab-separated string
             const logLine = [
                 entry.timestamp.toISOString(),
-                entry.searchText.replace(/\n/g, '\\n').replace(/\t/g, '\\t'),
-                entry.foundText.replace(/\n/g, '\\n').replace(/\t/g, '\\t'),
                 entry.similarity.toString(),
                 entry.executionTime.toString(),
                 entry.exactMatchCount.toString(),
                 entry.expectedReplacements.toString(),
                 entry.fuzzyThreshold.toString(),
                 entry.belowThreshold.toString(),
-                entry.diff.replace(/\n/g, '\\n').replace(/\t/g, '\\t'),
                 entry.searchLength.toString(),
                 entry.foundLength.toString(),
                 entry.fileExtension,
-                entry.characterCodes,
                 entry.uniqueCharacterCount.toString(),
                 entry.diffLength.toString()
             ].join('\t');
@@ -130,7 +114,7 @@ class FuzzySearchLogger {
             
             await fs.rm(`${this.logPath}.1`, { force: true });
             await fs.writeFile(this.logPath, headers + '\n');
-            console.log('Fuzzy search log cleared');
+            process.stderr.write('Agent fuzzy-search diagnostics cleared.\n');
         } catch (error) {
             console.error('Failed to clear fuzzy search log:', error);
         }
@@ -138,4 +122,5 @@ class FuzzySearchLogger {
 }
 
 // Singleton instance
-export const fuzzySearchLogger = new FuzzySearchLogger();
+export let fuzzySearchLogger: FuzzySearchLogger;
+export function attachFuzzySearchLogger(instance: FuzzySearchLogger): void { fuzzySearchLogger = instance; }

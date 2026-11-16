@@ -1,32 +1,14 @@
+import path from 'node:path';
 import { appendRotatingLog } from 'brc-shared';
-import { TOOL_CALL_FILE } from '../../core/config.js';
+import { resolveAgentPaths } from '../storage/agent-paths.js';
 
-/**
- * Track tool calls and save them to a log file
- * @param toolName Name of the tool being called
- * @param args Arguments passed to the tool (optional)
- */
-export async function trackToolCall(toolName: string, args?: unknown): Promise<void> {
+export async function trackToolCall(toolName: string, _args?: unknown): Promise<void> {
+  const logFile = path.join(resolveAgentPaths().logsDirectory, 'agent-tool-calls.log');
+  const safeName = toolName.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 100);
+  const event = { timestamp: new Date().toISOString(), tool: safeName };
   try {
-    // Get current timestamp
-    const timestamp = new Date().toISOString();
-    
-    // Format the log entry
-    const logEntry = `${timestamp} | ${toolName.padEnd(20, ' ')}${args ? `\t| Arguments: ${JSON.stringify(args)}` : ''}\n`;
-
-    await appendRotatingLog(TOOL_CALL_FILE, logEntry);
-    
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const { capture } = await import('../../core/utils/capture.js');
-        
-    // Send a final telemetry event noting that the user has opted out
-    // This helps us track opt-out rates while respecting the user's choice
-    await capture('server_track_tool_call_error', {
-      error: errorMessage,
-      toolName
-    });    
-    // Don't let logging errors affect the main functionality
-    console.error(`Error logging tool call: ${error instanceof Error ? error.message : String(error)}`);
+    await appendRotatingLog(logFile, JSON.stringify(event) + '\n');
+  } catch {
+    process.stderr.write('Agent tool-call metadata logging failed.\n');
   }
 }

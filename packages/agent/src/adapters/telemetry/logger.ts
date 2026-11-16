@@ -1,82 +1,37 @@
-/**
- * Centralized logging utility for Desktop Commander
- * Ensures all logging goes through proper channels based on initialization state
- */
+export type LogLevel = 'emergency' | 'alert' | 'critical' | 'error'
+  | 'warning' | 'notice' | 'info' | 'debug';
 
-import type { FilteredStdioServerTransport } from '../../core/custom-stdio.js';
+type DiagnosticSink = (level: LogLevel, message: string) => void;
+let diagnosticSink: DiagnosticSink | null = null;
 
-// Global reference to the MCP transport (set in index.ts)
-declare global {
-  var mcpTransport: FilteredStdioServerTransport | undefined;
+export function installAgentLogSink(sink: DiagnosticSink): () => void {
+  const previous = diagnosticSink;
+  diagnosticSink = sink;
+  return () => { diagnosticSink = previous; };
 }
 
-export type LogLevel = 'emergency' | 'alert' | 'critical' | 'error' | 'warning' | 'notice' | 'info' | 'debug';
-
-/**
- * Log a message using the appropriate method based on MCP initialization state
- */
-export function log(level: LogLevel, message: string, data?: any): void {
-  try {
-    // Check if MCP transport is available
-    if (global.mcpTransport) {
-      // Always use MCP logging (will buffer if not initialized yet)
-      global.mcpTransport.sendLog(level, message, data);
-    } else {
-      // This should rarely happen, but fallback to create a JSON-RPC notification manually
-      const notification = {
-        jsonrpc: "2.0" as const,
-        method: "notifications/message",
-        params: {
-          level: level,
-          logger: "desktop-commander",
-          data: data ? { message, ...data } : message
-        }
-      };
-      process.stdout.write(JSON.stringify(notification) + '\n');
-    }
-  } catch (error) {
-    // Ultimate fallback - but this should be JSON-RPC too
-    const notification = {
-      jsonrpc: "2.0" as const,
-      method: "notifications/message", 
-      params: {
-        level: "error",
-        logger: "desktop-commander",
-        data: `[LOG-ERROR] Failed to log message: ${message}`
-      }
-    };
-    process.stdout.write(JSON.stringify(notification) + '\n');
-  }
+function redact(message: string): string {
+  return message.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/(deviceToken|access_token|password|secret)(["'=:\s]+)[^\s,}]+/gi, '$1$2[redacted]');
 }
 
-/**
- * Convenience functions for different log levels
- */
+export function log(level: LogLevel, message: string, _data?: unknown): void {
+  const safe = redact(message);
+  if (diagnosticSink) diagnosticSink(level, safe);
+  else process.stderr.write('[agent:' + level + '] ' + safe + '\n');
+}
+
 export const logger = {
-  emergency: (message: string, data?: any) => log('emergency', message, data),
-  alert: (message: string, data?: any) => log('alert', message, data),
-  critical: (message: string, data?: any) => log('critical', message, data),
-  error: (message: string, data?: any) => log('error', message, data),
-  warning: (message: string, data?: any) => log('warning', message, data),
-  notice: (message: string, data?: any) => log('notice', message, data),
-  info: (message: string, data?: any) => log('info', message, data),
-  debug: (message: string, data?: any) => log('debug', message, data),
+  emergency: (message: string, data?: unknown) => log('emergency', message, data),
+  alert: (message: string, data?: unknown) => log('alert', message, data),
+  critical: (message: string, data?: unknown) => log('critical', message, data),
+  error: (message: string, data?: unknown) => log('error', message, data),
+  warning: (message: string, data?: unknown) => log('warning', message, data),
+  notice: (message: string, data?: unknown) => log('notice', message, data),
+  info: (message: string, data?: unknown) => log('info', message, data),
+  debug: (message: string, data?: unknown) => log('debug', message, data),
 };
 
-/**
- * Log to stderr during early initialization (before MCP is ready)
- * Use this for critical startup messages that must be visible
- * NOTE: This should also be JSON-RPC format
- */
 export function logToStderr(level: LogLevel, message: string): void {
-  const notification = {
-    jsonrpc: "2.0" as const,
-    method: "notifications/message",
-    params: {
-      level: level,
-      logger: "desktop-commander", 
-      data: message
-    }
-  };
-  process.stdout.write(JSON.stringify(notification) + '\n');
+  log(level, message);
 }

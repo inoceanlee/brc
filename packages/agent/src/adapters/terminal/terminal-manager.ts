@@ -2,8 +2,8 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { TerminalSession, CommandExecutionResult, ActiveSession, TimingInfo, OutputEvent } from '../../core/types.js';
 import { DEFAULT_COMMAND_TIMEOUT } from '../../core/config.js';
-import { configManager } from '../../core/config-manager.js';
-import {capture} from "../../core/utils/capture.js";
+import { configManager } from '../storage/config-manager.js';
+import {capture} from "../telemetry/capture.js";
 import { analyzeProcessState } from '../system/process-detection.js';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
@@ -864,4 +864,5 @@ export class TerminalManager {
   }
 }
 
-export const terminalManager = new TerminalManager();
+export let terminalManager: TerminalManager;
+export function attachTerminalManager(instance: TerminalManager): void { terminalManager = instance; }

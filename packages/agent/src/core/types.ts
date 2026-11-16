@@ -1,9 +1,7 @@
 import { ChildProcess } from 'child_process';
-import { FilteredStdioServerTransport } from './custom-stdio.js';
 import type { PreviewFileType } from './ui/file-preview/shared/preview-file-types.js';
 
 declare global {
-  var mcpTransport: FilteredStdioServerTransport | undefined;
   var disableOnboarding: boolean | undefined;
 }
 

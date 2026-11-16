@@ -49,8 +49,10 @@ test('uses the default read limit unless a caller supplies a length', async () =
 });
 
 test('applies the configured read limit when length is omitted', async () => {
-  const { configManager } = await import('../packages/agent/dist/core/config-manager.js');
-  const { handleReadFile } = await import('../packages/agent/dist/core/handlers/filesystem-handlers.js');
+  const { configureAgentServices } = await import('../packages/agent/dist/composition.js');
+  configureAgentServices();
+  const { configManager } = await import('../packages/agent/dist/adapters/storage/config-manager.js');
+  const { handleReadFile } = await import('../packages/agent/dist/adapters/mcp/handlers/filesystem-handlers.js');
   const originalGetConfig = configManager.getConfig;
   configManager.getConfig = async () => ({ fileReadLineLimit: 2, allowedDirectories: [] });
   try {

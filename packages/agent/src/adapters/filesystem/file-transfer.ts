@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { validatePath } from '../../core/tools/filesystem.js';
+import { validatePath } from './filesystem.js';
 
 const TMPFILES_UPLOAD_URL = 'https://tmpfiles.org/api/v1/upload';
 const MAX_PLAINTEXT_BYTES = 99_000_000;

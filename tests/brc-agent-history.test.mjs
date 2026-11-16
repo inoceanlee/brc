@@ -10,12 +10,14 @@ import { once } from 'node:events';
 import { pathToFileURL } from 'node:url';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'brc-history-'));
-process.env.BRC_HOME = path.join(root, 'home');
+process.env.BRC_DATA_ROOT = path.join(root, 'home');
+const { configureAgentServices } = await import('../packages/agent/dist/composition.js');
+configureAgentServices();
 const { toolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
 const { fuzzySearchLogger } = await import('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js');
-const { resolveAgentHome } = await import('../packages/agent/dist/core/config.js');
+const { resolveAgentPaths } = await import('../packages/agent/dist/adapters/storage/agent-paths.js');
 const { ToolHistoryStorage } = await import('../packages/agent/dist/adapters/telemetry/toolHistoryStorage.js');
-const file = path.join(resolveAgentHome(process.env), 'tool-history.jsonl');
+const file = path.join(resolveAgentPaths().historyDirectory, 'tool-history.json');
 const output = { content: [{ type: 'text', text: 'ok' }] };
 
 test('history retains failed writes and retries them in order without duplicates', async () => {
@@ -26,7 +28,7 @@ test('history retains failed writes and retries them in order without duplicates
   toolHistory.addCall('second', {}, output);
   await rm(file, { recursive: true });
   await toolHistory.cleanup();
-  const records = (await readFile(file, 'utf8')).trim().split('\n').map(JSON.parse);
+  const records = JSON.parse(await readFile(file, 'utf8'));
   assert.deepEqual(records.map(record => record.toolName), ['first', 'second']);
   assert.equal(toolHistory.getStats().queuedWrites, 0);
 });
@@ -37,23 +39,23 @@ test('history caps cache and oversized output while preserving insertion order',
   const records = toolHistory.getRecentCalls({ maxResults: 1000 });
   assert.equal(records.length, 1000);
   assert.equal(records[0].toolName, 'call-2');
-  assert.match(records.at(-1).output.content[0].text, /output omitted from history/);
+  assert.match(records.at(-1).output.content[0].text, /tool output omitted/);
   await toolHistory.cleanup();
 });
 
 test('history compaction keeps newest complete lines within the target', async () => {
   const line = (n) => JSON.stringify({ n, value: 'x'.repeat(1024 * 1024) });
-  await writeFile(file, Array.from({ length: 6 }, (_, i) => line(i)).join('\n') + '\n');
+  await writeFile(file, JSON.stringify(Array.from({ length: 6 }, (_, i) => JSON.parse(line(i)))));
   toolHistory.addCall('after-trim', {}, output);
   await toolHistory.cleanup();
-  const records = (await readFile(file, 'utf8')).trim().split('\n').map(JSON.parse);
+  const records = JSON.parse(await readFile(file, 'utf8'));
   assert.deepEqual(records.slice(0, -1).map(record => record.n), [3, 4, 5]);
   assert.equal(records.at(-1).toolName, 'after-trim');
 });
 
 test('history and fuzzy logger share the resolved agent home', async () => {
   assert.equal(toolHistory.getStats().historyFile, file);
-  assert.equal(await fuzzySearchLogger.getLogPath(), path.join(resolveAgentHome(process.env), 'logs', 'fuzzy-search.log'));
+  assert.equal(await fuzzySearchLogger.getLogPath(), path.join(resolveAgentPaths().logsDirectory, 'fuzzy-search.log'));
 });
 
 test('storage reads, appends and rewrites JSONL without altering text', async () => {
@@ -67,22 +69,22 @@ test('storage reads, appends and rewrites JSONL without altering text', async ()
 });
 
 test('simultaneous additions retain their order in the persisted queue', async () => {
-  await writeFile(file, '');
+  await writeFile(file, '[]');
   await Promise.all(Array.from({ length: 20 }, (_, i) => Promise.resolve().then(() => {
     toolHistory.addCall(`parallel-${i}`, {}, output);
   })));
   await toolHistory.cleanup();
-  const records = (await readFile(file, 'utf8')).trim().split('\n').map(JSON.parse);
+  const records = JSON.parse(await readFile(file, 'utf8'));
   assert.deepEqual(records.map(record => record.toolName), Array.from({ length: 20 }, (_, i) => `parallel-${i}`));
 });
 
 test('history initialization reports lock contention instead of exposing an empty cache', () => {
   const directory = path.join(root, 'locked-startup');
-  const storage = new ToolHistoryStorage(directory);
-  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/adapters/telemetry/toolHistory.js')).href;
+  const storage = new ToolHistoryStorage(path.join(directory, 'data', 'agent'));
+  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/composition.js')).href;
   storage.withLock(() => {
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(moduleUrl)})`], {
-      env: { ...process.env, BRC_HOME: directory },
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(moduleUrl)}); m.configureAgentServices();`], {
+      env: { ...process.env, BRC_DATA_ROOT: directory },
       encoding: 'utf8',
       timeout: 10000,
     });
@@ -95,8 +97,8 @@ test('history writes preserve the destination of a symbolic link', async (t) => 
   const directory = path.join(root, 'linked');
   await mkdir(directory);
   const target = path.join(directory, 'target.jsonl');
-  const link = path.join(directory, 'tool-history.jsonl');
-  await writeFile(target, '{"n":1}\n');
+  const link = path.join(directory, 'tool-history.json');
+  await writeFile(target, '[{"n":1}]');
   try {
     await symlink(target, link, 'file');
   } catch (error) {
@@ -106,7 +108,7 @@ test('history writes preserve the destination of a symbolic link', async (t) => 
   const storage = new ToolHistoryStorage(directory);
   storage.withLock(() => storage.appendText('{"n":2}\n'));
   assert.equal((await lstat(link)).isSymbolicLink(), true);
-  assert.equal(await readFile(target, 'utf8'), '{"n":1}\n{"n":2}\n');
+  assert.equal(await readFile(target, 'utf8'), '[{"n":1},{"n":2}]');
 });
 
 test('rewrites do not widen existing POSIX permissions', async (t) => {
@@ -136,9 +138,9 @@ test('Windows DACL deny-write remains enforced across history rewrite', { skip: 
     const restored = acl(['/remove:d', sid]);
     assert.equal(restored.status, 0, restored.stderr);
   }
-  assert.equal(await readFile(storage.file, 'utf8'), 'original\n');
+  assert.equal(storage.readText(), 'original\n');
   storage.withLock(() => storage.rewriteText('updated\n'));
-  assert.equal(await readFile(storage.file, 'utf8'), 'updated\n');
+  assert.equal(storage.readText(), 'updated\n');
 });
 
 test('lock cleanup removes dead writers temporary files without following links', async (t) => {
@@ -173,7 +175,7 @@ test('lock cleanup removes dead writers temporary files without following links'
 test('existing filesystem root does not require recursive mkdir', () => {
   const directory = path.parse(root).root;
   const storage = new ToolHistoryStorage(directory);
-  assert.equal(storage.file, path.join(directory, 'tool-history.jsonl'));
+  assert.equal(storage.file, path.join(directory, 'tool-history.json'));
 });
 
 test('partial temporary write leaves committed history intact and can be retried', () => {
@@ -229,4 +231,44 @@ test('another process appends after compaction without losing its record', async
 test.after(async () => {
   await toolHistory.cleanup();
   await rm(root, { recursive: true, force: true });
+});
+
+test('history store persists a valid JSON document at the canonical agent data path', (t) => {
+  const directory = path.join(root, 'json-format');
+  const storage = new ToolHistoryStorage(directory);
+  storage.withLock(() => storage.appendText('{"toolName":"sample","arguments":{},"output":{"content":[]}}\n'));
+  assert.equal(path.basename(storage.file), 'tool-history.json');
+  const parsed = JSON.parse(fs.readFileSync(storage.file, 'utf8'));
+  assert.equal(Array.isArray(parsed), true);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].toolName, 'sample');
+});
+
+test('existing JSONL history migrates into a private JSON record collection', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-legacy-'));
+  const previous = process.env.BRC_DATA_ROOT;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
+    else process.env.BRC_DATA_ROOT = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  process.env.BRC_DATA_ROOT = directory;
+  const destination = path.join(directory, 'data', 'agent');
+  await mkdir(destination, { recursive: true });
+  const legacy = path.join(destination, 'tool-history.jsonl');
+  await writeFile(legacy, JSON.stringify({
+    timestamp: new Date().toISOString(), toolName: 'read_file',
+    arguments: { path: 'private-record-path' },
+    output: { content: [{ type: 'text', text: 'private-record-data' }] },
+  }) + '\n');
+  const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
+  const independent = new ToolHistory();
+  t.after(() => independent.cleanup());
+  const records = independent.getRecentCalls({ maxResults: 10 });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].toolName, 'read_file');
+  const stored = await readFile(path.join(destination, 'tool-history.json'), 'utf8');
+  assert.equal(Array.isArray(JSON.parse(stored)), true);
+  assert.doesNotMatch(stored, /private-record-/);
+  await assert.rejects(readFile(legacy, 'utf8'), { code: 'ENOENT' });
 });
