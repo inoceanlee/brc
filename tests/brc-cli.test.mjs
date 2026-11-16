@@ -182,6 +182,126 @@ console.log(JSON.stringify({ exitCode, cleanCount, calls, errors }));
   assert.match(result.errors.join('\n'), /cleanup failed/);
 });
 
+test('status reports degraded exit code for every output format', () => {
+  const result = probeResult(runProbe(`
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const services = [{ name: 'relay', state: 'degraded', pid: null, detail: 'unhealthy' }];
+const results = [];
+for (const format of ['table', 'plain', 'json', 'yaml']) {
+  const output = [];
+  const exitCode = await runCli(['status', '--output', format], {
+    paths, commands: { status: async () => 1 }, statusJson: async () => ({ services }),
+    clean: async () => {}, write: (value) => output.push(value), writeError: () => {},
+  });
+  results.push({ format, exitCode, output });
+}
+console.log(JSON.stringify(results));
+`));
+  for (const item of result) {
+    assert.equal(item.exitCode, 1, item.format);
+    if (item.format === 'json') assert.equal(JSON.parse(item.output[0]).services[0].state, 'degraded');
+  }
+});
+
+test('JSON command errors remain parseable when automatic cleanup also fails', () => {
+  const result = probeResult(runProbe(`
+const errors = [];
+const output = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const exitCode = await runCli(['start', '--json'], {
+  paths, commands: { start: async () => { throw new Error('start failed'); } },
+  clean: async () => { throw new Error('cleanup failed'); },
+  write: (message) => output.push(message), writeError: (message) => errors.push(message),
+});
+console.log(JSON.stringify({ exitCode, output, errors }));
+`));
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.output, []);
+  assert.equal(result.errors.length, 1);
+  const failure = JSON.parse(result.errors[0]);
+  assert.equal(failure.message, 'start failed');
+  assert.equal(failure.exit_code, 1);
+  assert.match(failure.cleanup.message, /cleanup failed/);
+});
+
+test('JSON output stays clean when automatic cleanup fails after success or invalid input', () => {
+  const results = probeResult(runProbe(`
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const results = [];
+for (const args of [['version', '--json'], ['--json', '--not-real']]) {
+  const output = [];
+  const errors = [];
+  const exitCode = await runCli(args, {
+    paths, commands: {}, clean: async () => { throw new Error('cleanup failed'); },
+    write: (message) => output.push(message), writeError: (message) => errors.push(message),
+  });
+  results.push({ exitCode, output, errors });
+}
+console.log(JSON.stringify(results));
+`));
+  assert.equal(results[0].exitCode, 0);
+  assert.equal(typeof JSON.parse(results[0].output[0]).version, 'string');
+  const warning = JSON.parse(results[0].errors.join('\n'));
+  assert.equal(warning.code, 'CLEANUP_FAILED');
+  assert.equal(warning.command_exit_code, 0);
+  assert.match(warning.message, /cleanup failed/);
+  assert.equal(results[1].exitCode, 2);
+  assert.deepEqual(results[1].output, []);
+  const usage = JSON.parse(results[1].errors.join('\n'));
+  assert.equal(usage.exit_code, 2);
+  assert.match(usage.cleanup.message, /cleanup failed/);
+});
+
+test('successful JSON mutations retain success when automatic cleanup fails', () => {
+  const result = probeResult(runProbe(`
+const output = [];
+const errors = [];
+let mutations = 0;
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const exitCode = await runCli(['start', '--json'], {
+  paths, commands: { start: async () => { mutations++; return 0; } },
+  clean: async () => { throw new Error('cleanup failed'); },
+  write: (message) => output.push(message), writeError: (message) => errors.push(message),
+});
+console.log(JSON.stringify({ exitCode, output, errors, mutations }));
+`));
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.mutations, 1);
+  assert.equal(JSON.parse(result.output[0]).status, 'success');
+  const warning = JSON.parse(result.errors.join('\n'));
+  assert.equal(warning.code, 'CLEANUP_FAILED');
+  assert.equal(warning.command_exit_code, 0);
+});
+
+test('structured command failures retain their details and exit code when cleanup fails', () => {
+  const result = probeResult(runProbe(`
+const errors = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const exitCode = await runCli(['start', '--json'], {
+  paths, commands: { start: async () => ({
+    status: 'error', error: { code: 'CONFLICT', exitCode: 5, message: 'busy', run: 'brc status', retryable: false, details: { service: 'relay' } },
+  }) },
+  clean: async () => { throw new Error('cleanup failed'); },
+  write: () => {}, writeError: (message) => errors.push(message),
+});
+console.log(JSON.stringify({ exitCode, errors }));
+`));
+  assert.equal(result.exitCode, 5);
+  const failure = JSON.parse(result.errors.join('\n'));
+  assert.equal(failure.code, 'CONFLICT');
+  assert.deepEqual(failure.details, { service: 'relay' });
+  assert.match(failure.cleanup.message, /cleanup failed/);
+});
+
+test('automatic cleanup reports do not corrupt JSON usage errors', async (t) => {
+  const { root, expiredLog } = await makeCleanupFixture(t);
+  const result = runCliProcess(['--json', '--not-real'], root);
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.equal(existsSync(expiredLog), false);
+});
+
 test('clean command runs cleanup once without recursion', () => {
   const result = probeResult(runProbe(`
 let cleanCount = 0;
@@ -579,4 +699,40 @@ console.log(JSON.stringify({ exitCode, aborted, cleaned, error: errors[0] }));
   const error = JSON.parse(value.error);
   assert.equal(error.exit_code, 1);
   assert.match(error.message, /timed out after 25 ms/i);
+});
+
+test('restart timeout reaches the locked stop before starting services', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-restart-cancel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workflowUrl = new URL('../packages/cli/dist/core/lifecycle/workflow.js', import.meta.url).href;
+  const databaseUrl = new URL('../packages/cli/dist/adapters/storage/relay-database.js', import.meta.url).href;
+  const probe = `
+const { ServiceManager } = await import(${JSON.stringify(workflowUrl)});
+const { RelayDatabase } = await import(${JSON.stringify(databaseUrl)});
+RelayDatabase.prototype.assertExists = () => {};
+ServiceManager.prototype.withLock = async function (operation) {
+  return operation({
+    stop: async (signal) => {
+      if (!signal) throw new Error('stop did not receive cancellation');
+      await new Promise((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason);
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+    start: async () => { throw new Error('restart started after cancellation'); },
+  });
+};
+process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'restart', '--timeout=25ms', '--json'];
+await import(${cliUrl});
+`;
+  const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+    encoding: 'utf8', windowsHide: true, timeout: 5000,
+    env: { ...inheritedEnv, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  const error = JSON.parse(result.stderr);
+  assert.match(error.message, /timed out/i);
+  assert.doesNotMatch(error.message, /did not receive cancellation|started after cancellation/);
 });

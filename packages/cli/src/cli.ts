@@ -166,7 +166,12 @@ async function dispatch(
       return completeCommand(await deps.commands.restart(deps.signal), parsed, deps);
     case 'status':
       if (parsed.output !== 'table' && deps.statusJson) {
-        return renderOutput(cliSuccess(await deps.statusJson()), parsed, deps);
+        const data = await deps.statusJson();
+        renderOutput(cliSuccess(data), parsed, deps);
+        if (data && typeof data === 'object' && 'services' in data && Array.isArray(data.services)
+          && data.services.some((service: unknown) => service !== null && typeof service === 'object'
+            && 'state' in service && service.state === 'degraded')) return 1;
+        return 0;
       }
       return completeCommand(await deps.commands.status(), parsed, deps);
     case 'logs':
@@ -217,6 +222,17 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
   let parsed: ParsedCommand | undefined;
   let timeoutHandle: NodeJS.Timeout | undefined;
   let timeoutController: AbortController | undefined;
+  const requestedJson = args.includes('--json') || args.includes('--output=json')
+    || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json');
+  const jsonErrors: string[] = [];
+  let cleanupFailure: string | undefined;
+  const outputDeps: CliDependencies = {
+    ...deps,
+    writeError: (message) => {
+      if ((parsed?.output ?? (requestedJson ? 'json' : 'table')) === 'json') jsonErrors.push(message);
+      else deps.writeError(message);
+    },
+  };
   try {
     parsed = parseCommand(args);
     if (parsed.timeoutMs !== undefined) {
@@ -231,20 +247,22 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
       ? AbortSignal.any([deps.signal, timeoutController.signal])
       : deps.signal ?? timeoutController?.signal;
     signal?.throwIfAborted();
-    const commandDeps = signal ? { ...deps, signal } : deps;
+    const commandDeps = signal ? { ...outputDeps, signal } : outputDeps;
     const invoke = () => dispatch(parsed!, commandDeps, clean, () => { skipCleanup = true; });
     exitCode = deps.trace ? await deps.trace.span('command', invoke) : await invoke();
   } catch (error) {
-    const requestedJson = args.includes('--json') || args.includes('--output=json')
-      || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json');
-    exitCode = renderFailure(error, parsed, parsed?.output ?? (requestedJson ? 'json' : 'table'), deps);
+    exitCode = renderFailure(error, parsed, parsed?.output ?? (requestedJson ? 'json' : 'table'), outputDeps);
   } finally {
     if (!skipCleanup) {
       try {
         if (deps.trace) await deps.trace.span('automatic-cleanup', clean);
         else await clean();
       } catch (error) {
-        deps.writeError(`brc: cleanup failed: ${errorMessage(error)}`);
+        if ((parsed?.output ?? (requestedJson ? 'json' : 'table')) === 'json') {
+          cleanupFailure = errorMessage(error);
+        } else {
+          deps.writeError(`brc: cleanup failed: ${errorMessage(error)}`);
+        }
       }
     }
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -255,6 +273,24 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
       catch (error) { deps.writeError(`brc: diagnostic write failed: ${errorMessage(error)}`); }
       reportTrace(deps, summary);
     }
+  }
+
+  if (cleanupFailure !== undefined) {
+    const cleanup = { code: 'CLEANUP_FAILED', message: cleanupFailure };
+    if (jsonErrors.length === 1) {
+      try {
+        const primary = JSON.parse(jsonErrors[0]) as unknown;
+        if (primary && typeof primary === 'object' && !Array.isArray(primary)) {
+          deps.writeError(JSON.stringify({ ...primary, cleanup }));
+          return exitCode;
+        }
+      } catch {
+        // Preserve non-JSON diagnostics in the structured warning below.
+      }
+    }
+    deps.writeError(JSON.stringify({ ...cleanup, command_exit_code: exitCode, ...(jsonErrors.length ? { diagnostics: jsonErrors } : {}) }));
+  } else {
+    for (const message of jsonErrors) deps.writeError(message);
   }
 
   return exitCode;
@@ -286,7 +322,12 @@ async function main(): Promise<void> {
   const clean = async (cleanPaths: BrcPaths) => {
     const { settings: cleanupSettings } = await readSettings(cleanPaths, process.env);
     const report = await cleanRuntime(cleanPaths, { settings: cleanupSettings });
-    if (report.removed || report.failures.length || report.preserved.length) {
+    const jsonOutput = parsed?.output === 'json' || (!parsed && (args.includes('--json') || args.includes('--output=json')
+      || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json')));
+    if (jsonOutput && report.failures.length) {
+      throw new Error(report.failures.map((failure) => `${failure.path}: ${failure.reason}`).join('; '));
+    }
+    if (!jsonOutput && (report.removed || report.failures.length || report.preserved.length)) {
       console.error(`BRC cleanup: removed ${report.removed} items, freed ${report.bytesRemoved} bytes.`);
       for (const failure of report.failures) console.error(`BRC cleanup failed: ${failure.path}: ${failure.reason}`);
       for (const preserved of report.preserved) console.error(`BRC cleanup preserved ${preserved.path}: ${preserved.reason}`);
@@ -431,7 +472,7 @@ async function main(): Promise<void> {
         await time('database-check', async () => relayDatabase.assertExists());
         await time('lifecycle-lock', () => serviceManager.withLock(async (operations) => {
           signal?.throwIfAborted();
-          await time('restart-stop', () => operations.stop());
+          await time('restart-stop', () => operations.stop(signal));
           try {
             signal?.throwIfAborted();
             await time('restart-config', async () => traefikManager.writeConfigWithLockHeld(await loadSettings(), undefined, signal));

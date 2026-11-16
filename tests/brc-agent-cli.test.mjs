@@ -15,7 +15,13 @@ function run(args, options = {}) {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(credentials));
   const base = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
-  const result = spawnSync(process.execPath, [binary, ...args], {
+  const probe = options.tty && `
+Object.defineProperty(process.stdin, 'isTTY', { value: ${Boolean(options.tty.stdin)} });
+Object.defineProperty(process.stderr, 'isTTY', { value: ${Boolean(options.tty.stderr)} });
+process.argv = [process.execPath, ${JSON.stringify(binary)}, ...${JSON.stringify(args)}];
+await import(${JSON.stringify(new URL('../packages/agent/dist/cli.js', import.meta.url).href)});
+`;
+  const result = spawnSync(process.execPath, probe ? ['--input-type=module', '-e', probe] : [binary, ...args], {
     encoding: 'utf8', timeout: 5000, input: options.input ?? '',
     env: { ...base, CI: 'true', DO_NOT_TRACK: '1', BRC_DATA_ROOT: root, BRC_UPSTREAM_TELEMETRY: '0', ...options.env },
   });
@@ -89,4 +95,36 @@ test('explicit --output json formats parser errors as JSON on stderr', () => {
   const error = JSON.parse(result.stderr);
   assert.equal(error.exit_code, 2);
   assert.equal(error.code, 'INVALID_USAGE');
+});
+
+test('logout prompts only with stdin and stderr terminals', () => {
+  for (const tty of [{ stdin: false, stderr: true }, { stdin: true, stderr: false }]) {
+    const result = run(['credentials', 'logout', '--json', '--interactive'], { tty, input: 'yes\n', env: { CI: 'false' } });
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(JSON.parse(result.stderr).exit_code, 2);
+    assert.deepEqual(result.stored, credentials);
+  }
+});
+
+test('interactive overrides CI, but no-input overrides interactive', () => {
+  const tty = { stdin: true, stderr: true };
+  const denied = run(['credentials', 'logout', '--interactive', '--no-input', '--json'], { tty, input: 'yes\n' });
+  assert.equal(denied.status, 2, denied.stderr);
+  assert.deepEqual(denied.stored, credentials);
+  const accepted = run(['credentials', 'logout', '--interactive', '--json'], { tty, input: 'yes\n' });
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(JSON.parse(accepted.stdout).removed, true);
+  assert.equal(accepted.present, false);
+  const ciDefault = run(['credentials', 'logout', '--json'], { tty, input: 'yes\n' });
+  assert.equal(ciDefault.status, 2, ciDefault.stderr);
+  assert.deepEqual(ciDefault.stored, credentials);
+});
+
+test('service confirmation refuses redirected stderr without changing registration', () => {
+  const result = run(['service', 'uninstall', '--interactive', '--json'], {
+    tty: { stdin: true, stderr: false }, input: 'yes\n', env: { CI: 'false' },
+  });
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.deepEqual(result.stored, credentials);
 });
