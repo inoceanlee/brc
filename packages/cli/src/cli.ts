@@ -23,7 +23,7 @@ import { ManagedProcessResourceSampler } from './adapters/process/resources.js';
 import { ServiceManager } from './core/lifecycle/workflow.js';
 import { createDefaultServices, diagnosticEnvironment } from './adapters/process/specs.js';
 import { startRejection, shouldWriteTraefikConfig } from './core/lifecycle/policy.js';
-import { cleanRuntime } from './adapters/storage/cleanup.js';
+import { cleanRuntime, type CleanupReport } from './adapters/storage/cleanup.js';
 import { createMaintenanceCommands } from './commands/maintenance.js';
 import { confirmBrcUninstall } from './maintenance/uninstall.js';
 import { readManagedLog } from './maintenance/logs.js';
@@ -48,7 +48,7 @@ export interface CliDependencies {
     updateTraefik: (signal?: AbortSignal) => Promise<CommandResult>;
     uninstall: (options: { yes: boolean; structuredOutput?: boolean; signal?: AbortSignal }, clean: () => Promise<void>) => Promise<CommandResult>;
   };
-  clean: (paths: BrcPaths) => Promise<void>;
+  clean: (paths: BrcPaths) => Promise<void | CleanupReport>;
   write: (message: string) => void;
   writeError: (message: string) => void;
   statusJson?: () => Promise<unknown>;
@@ -95,8 +95,8 @@ function completeCommand(result: CommandResult, parsed: ParsedCommand, deps: Cli
 
 function renderFailure(error: unknown, parsed: ParsedCommand | undefined, format: ParsedCommand['output'], deps: CliDependencies): number {
   const exitCode = errorExitCode(error);
-  if (exitCode === 130 || exitCode === 143) return exitCode;
-  const code = exitCode === 2 ? 'USAGE_ERROR' : exitCode === 3 ? 'PERMISSION_DENIED'
+  if ((exitCode === 130 || exitCode === 143) && !(error instanceof AggregateError)) return exitCode;
+  const code = exitCode === 130 || exitCode === 143 ? 'INTERRUPTED' : exitCode === 2 ? 'USAGE_ERROR' : exitCode === 3 ? 'PERMISSION_DENIED'
     : exitCode === 4 ? 'NOT_FOUND' : exitCode === 5 ? 'CONFLICT' : 'RUNTIME_ERROR';
   const details = parsed?.debug || parsed?.verbose
     ? error instanceof Error ? { name: error.name, stack: error.stack } : undefined
@@ -118,7 +118,7 @@ function renderFailure(error: unknown, parsed: ParsedCommand | undefined, format
 async function dispatch(
   parsed: ParsedCommand,
   deps: CliDependencies,
-  clean: () => Promise<void>,
+  clean: () => Promise<void | CleanupReport>,
   skipAutomaticCleanup: () => void,
 ): Promise<number> {
   if (parsed.preview && ['setup', 'start', 'stop', 'restart', 'uninstall', 'clean'].includes(parsed.name)) {
@@ -167,11 +167,15 @@ async function dispatch(
     case 'status':
       if (parsed.output !== 'table' && deps.statusJson) {
         const data = await deps.statusJson();
-        renderOutput(cliSuccess(data), parsed, deps);
-        if (data && typeof data === 'object' && 'services' in data && Array.isArray(data.services)
+        const degraded = data && typeof data === 'object' && 'services' in data && Array.isArray(data.services)
           && data.services.some((service: unknown) => service !== null && typeof service === 'object'
-            && 'state' in service && service.state === 'degraded')) return 1;
-        return 0;
+            && 'state' in service && service.state === 'degraded');
+        if (degraded && parsed.output === 'json') {
+          return renderOutput(cliFailure({ code: 'SERVICE_DEGRADED', exitCode: 1, message: 'One or more services are degraded.',
+            run: 'brc status', retryable: true, details: data }), parsed, deps);
+        }
+        renderOutput(cliSuccess(data), parsed, deps);
+        return degraded ? 1 : 0;
       }
       return completeCommand(await deps.commands.status(), parsed, deps);
     case 'logs':
@@ -187,15 +191,19 @@ async function dispatch(
       return completeCommand(await deps.commands.updateTraefik(deps.signal), parsed, deps);
     case 'clean':
       skipAutomaticCleanup();
-      await clean();
-      return renderOutput(cliSuccess({ command: 'clean', status: 'success' }), parsed, deps);
+      const report = await clean();
+      if (report?.failures.length) {
+        return renderOutput(cliFailure({ code: 'CLEANUP_FAILED', exitCode: 1, message: 'BRC cleanup failed.',
+          run: 'brc clean', retryable: true, details: report }), parsed, deps);
+      }
+      return renderOutput(cliSuccess(report ?? { command: 'clean', status: 'success' }), parsed, deps);
     case 'uninstall':
       skipAutomaticCleanup();
       return completeCommand(await deps.commands.uninstall({
         yes: parsed.args[0] === '--yes',
         structuredOutput: parsed.output !== 'table',
         signal: deps.signal,
-      }, clean), parsed, deps);
+      }, async () => { await clean(); }), parsed, deps);
     default:
       throw new UsageError(`Unknown command: ${parsed.name}. Run brc help for usage.`);
   }
@@ -213,11 +221,6 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
   let cleanupStarted = false;
   let skipCleanup = false;
   let exitCode = 0;
-  const clean = async () => {
-    if (cleanupStarted) return;
-    cleanupStarted = true;
-    await deps.clean(deps.paths);
-  };
 
   let parsed: ParsedCommand | undefined;
   let timeoutHandle: NodeJS.Timeout | undefined;
@@ -233,6 +236,23 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
       if ((parsed?.output ?? (requestedJson ? 'json' : 'table')) === 'json') jsonErrors.push(message);
       else deps.writeError(message);
     },
+  };
+  const clean = async (): Promise<void | CleanupReport> => {
+    if (cleanupStarted) return;
+    cleanupStarted = true;
+    const report = await deps.clean(deps.paths);
+    if (!report) return;
+    if ((parsed?.output ?? (requestedJson ? 'json' : 'table')) !== 'json'
+      && (report.removed || report.failures.length || report.preserved.length)) {
+      deps.writeError(`BRC cleanup: removed ${report.removed} items, freed ${report.bytesRemoved} bytes.`);
+      for (const failure of report.failures) deps.writeError(`BRC cleanup failed: ${failure.path}: ${failure.reason}`);
+      for (const preserved of report.preserved) deps.writeError(`BRC cleanup preserved ${preserved.path}: ${preserved.reason}`);
+    }
+    if (report.failures.length && parsed?.name !== 'clean'
+      && (parsed?.output ?? (requestedJson ? 'json' : 'table')) === 'json') {
+      cleanupFailure = report.failures.map((failure) => `${failure.path}: ${failure.reason}`).join('; ');
+    }
+    return report;
   };
   try {
     parsed = parseCommand(args);
@@ -333,17 +353,7 @@ async function main(): Promise<void> {
   const lightweight = !parsed || parsed.name === 'help' || parsed.name === 'version' || parsed.name === 'diagnose' || parsed.name === 'completion';
   const clean = async (cleanPaths: BrcPaths) => {
     const { settings: cleanupSettings } = await readSettings(cleanPaths, process.env);
-    const report = await cleanRuntime(cleanPaths, { settings: cleanupSettings });
-    const jsonOutput = parsed?.output === 'json' || (!parsed && (args.includes('--json') || args.includes('--output=json')
-      || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json')));
-    if (jsonOutput && report.failures.length) {
-      throw new Error(report.failures.map((failure) => `${failure.path}: ${failure.reason}`).join('; '));
-    }
-    if (!jsonOutput && (report.removed || report.failures.length || report.preserved.length)) {
-      console.error(`BRC cleanup: removed ${report.removed} items, freed ${report.bytesRemoved} bytes.`);
-      for (const failure of report.failures) console.error(`BRC cleanup failed: ${failure.path}: ${failure.reason}`);
-      for (const preserved of report.preserved) console.error(`BRC cleanup preserved ${preserved.path}: ${preserved.reason}`);
-    }
+    return cleanRuntime(cleanPaths, { settings: cleanupSettings });
   };
   if (lightweight) {
     process.exitCode = await runCli(args, {
@@ -419,7 +429,7 @@ async function main(): Promise<void> {
     (message) => console.error(message),
     {
       stopServices: (signal) => serviceManager.stop(signal),
-      confirm: (root) => confirmBrcUninstall(root, { interactive: parsed?.interactive, noInput: parsed?.noInput }),
+      confirm: (root) => confirmBrcUninstall(root, { interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json' }),
     },
   );
   const commandController = new AbortController();
@@ -437,7 +447,7 @@ async function main(): Promise<void> {
         if (parsed?.offline && !await traefikManager.currentVersion()) {
           throw new UsageError('Traefik is not installed and --offline prevents its download.');
         }
-        const administrator = relayDatabase.exists() ? undefined : await requestAdministrator({ interactive: parsed?.interactive, noInput: parsed?.noInput, signal });
+        const administrator = relayDatabase.exists() ? undefined : await requestAdministrator({ interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json', signal });
         await lifecycleLock.runExclusive(async () => {
           signal?.throwIfAborted();
           relayDatabase.initializeForNewRoot(rootWasEmpty, administrator);

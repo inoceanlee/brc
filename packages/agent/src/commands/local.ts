@@ -43,8 +43,8 @@ async function confirmChange(message: string): Promise<boolean> {
 }
 
 function allowsConfirmation(inv: AgentInvocation): boolean {
-  return !inv.noInput && !!process.stdin.isTTY && !!process.stderr.isTTY
-    && (inv.interactive || (process.env.CI !== 'true' && inv.format !== 'json'));
+  return inv.format !== 'json' && !inv.noInput && !!process.stdin.isTTY && !!process.stderr.isTTY
+    && (inv.interactive || process.env.CI !== 'true');
 }
 
 function completion(shell: string): string | null {

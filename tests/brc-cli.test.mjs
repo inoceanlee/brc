@@ -189,18 +189,123 @@ const services = [{ name: 'relay', state: 'degraded', pid: null, detail: 'unheal
 const results = [];
 for (const format of ['table', 'plain', 'json', 'yaml']) {
   const output = [];
+  const errors = [];
   const exitCode = await runCli(['status', '--output', format], {
     paths, commands: { status: async () => 1 }, statusJson: async () => ({ services }),
-    clean: async () => {}, write: (value) => output.push(value), writeError: () => {},
+    clean: async () => {}, write: (value) => output.push(value), writeError: (value) => errors.push(value),
   });
-  results.push({ format, exitCode, output });
+  results.push({ format, exitCode, output, errors });
 }
 console.log(JSON.stringify(results));
 `));
   for (const item of result) {
     assert.equal(item.exitCode, 1, item.format);
-    if (item.format === 'json') assert.equal(JSON.parse(item.output[0]).services[0].state, 'degraded');
+    if (item.format === 'json') {
+      assert.deepEqual(item.output, []);
+      const error = JSON.parse(item.errors.join('\n'));
+      assert.equal(error.exit_code, 1);
+      assert.equal(error.details.services[0].state, 'degraded');
+    }
   }
+});
+
+test('clean JSON returns the actual cleanup report', () => {
+  const result = probeResult(runProbe(`
+const output = [], errors = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const report = { removed: 2, bytesRemoved: 17, wouldRemove: 0, failures: [], preserved: [{ path: 'active', reason: 'active' }] };
+const exitCode = await runCli(['clean', '--json'], { paths, commands: {}, clean: async () => report,
+  write: (value) => output.push(value), writeError: (value) => errors.push(value) });
+console.log(JSON.stringify({ exitCode, output, errors }));
+`));
+  assert.equal(result.exitCode, 0);
+  assert.equal(JSON.parse(result.output[0]).removed, 2);
+  assert.equal(JSON.parse(result.output[0]).preserved[0].path, 'active');
+  assert.deepEqual(result.errors, []);
+});
+
+test('clean JSON reports files removed from the selected data root', async (t) => {
+  const { root, expiredLog } = await makeCleanupFixture(t);
+  const result = runCliProcess(['clean', '--json'], root);
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.removed, 1);
+  assert.deepEqual(report.failures, []);
+  assert.equal(existsSync(expiredLog), false);
+});
+
+test('clean JSON reports partial cleanup failures with the full report', () => {
+  const result = probeResult(runProbe(`
+const output = [], errors = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const report = { removed: 1, bytesRemoved: 9, wouldRemove: 0, failures: [{ path: 'file', reason: 'denied' }], preserved: [] };
+const exitCode = await runCli(['clean', '--json'], { paths, commands: {}, clean: async () => report,
+  write: (value) => output.push(value), writeError: (value) => errors.push(value) });
+console.log(JSON.stringify({ exitCode, output, errors }));
+`));
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.output, []);
+  const error = JSON.parse(result.errors.join('\n'));
+  assert.equal(error.details.removed, 1);
+  assert.equal(error.details.failures[0].reason, 'denied');
+});
+
+test('cleanup report failures have equal uninstall behavior across output formats', () => {
+  const results = probeResult(runProbe(`
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const results = [];
+for (const format of ['table', 'json']) {
+  const output = [], errors = [], calls = [];
+  const exitCode = await runCli(['uninstall', '--yes', '--output', format], {
+    paths, commands: { uninstall: async (_options, clean) => {
+      calls.push('stop'); await clean(); calls.push('remove'); return 0;
+    } },
+    clean: async () => ({ removed: 0, bytesRemoved: 0, wouldRemove: 0, failures: [{ path: 'file', reason: 'denied' }], preserved: [] }),
+    write: (value) => output.push(value), writeError: (value) => errors.push(value),
+  });
+  results.push({ exitCode, calls, errors });
+}
+console.log(JSON.stringify(results));
+`));
+  for (const result of results) {
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(result.calls, ['stop', 'remove']);
+  }
+  assert.match(results[0].errors.join('\n'), /denied/);
+  assert.match(JSON.parse(results[1].errors.join('\n')).cleanup.message, /denied/);
+});
+
+test('JSON lifecycle conflicts retain service and reason with exit code 5', () => {
+  const result = probeResult(runProbe(`
+const output = [], errors = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const exitCode = await runCli(['stop', '--json'], {
+  paths, commands: { stop: async () => { throw Object.assign(new Error('agent: process identity changed'), { exitCode: 5 }); } },
+  clean: async () => {}, write: (value) => output.push(value), writeError: (value) => errors.push(value),
+});
+console.log(JSON.stringify({ exitCode, output, errors }));
+`));
+  assert.equal(result.exitCode, 5);
+  assert.deepEqual(result.output, []);
+  const error = JSON.parse(result.errors.join('\n'));
+  assert.equal(error.code, 'CONFLICT');
+  assert.match(error.message, /agent: process identity changed/);
+});
+
+test('JSON cancellation retains an earlier lifecycle failure', () => {
+  const result = probeResult(runProbe(`
+const errors = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const exitCode = await runCli(['stop', '--json'], {
+  paths, commands: { stop: async () => { throw Object.assign(new AggregateError([new Error('agent: ownership conflict')], 'Interrupted after agent: ownership conflict'), { exitCode: 130 }); } },
+  clean: async () => {}, write: () => {}, writeError: (value) => errors.push(value),
+});
+console.log(JSON.stringify({ exitCode, errors }));
+`));
+  assert.equal(result.exitCode, 130);
+  const error = JSON.parse(result.errors.join('\n'));
+  assert.equal(error.exit_code, 130);
+  assert.match(error.message, /agent: ownership conflict/);
 });
 
 test('JSON command errors remain parseable when automatic cleanup also fails', () => {
@@ -409,6 +514,27 @@ test('noninteractive first setup fails before creating a new identity', async (t
   const result = runCliProcess(['setup'], root);
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /interactive terminal.*administrator password/i);
+  assert.equal(existsSync(path.join(root, 'data', 'relay.sqlite')), false);
+});
+
+test('JSON setup never mixes an interactive prompt with a structured error', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-cli-json-tty-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const probe = `
+Object.defineProperty(process.stdin, 'isTTY', { value: true });
+Object.defineProperty(process.stderr, 'isTTY', { value: true });
+process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'setup', '--interactive', '--json'];
+await import(${cliUrl});
+`;
+  const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+    encoding: 'utf8', input: 'admin\nshort\nshort\n', timeout: 5000, windowsHide: true,
+    env: { ...inheritedEnv, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  const error = JSON.parse(result.stderr);
+  assert.match(error.message, /interactive terminal/i);
   assert.equal(existsSync(path.join(root, 'data', 'relay.sqlite')), false);
 });
 
@@ -767,24 +893,21 @@ console.log(JSON.stringify({ exitCode, aborted, cleaned, error: errors[0] }));
 test('restart timeout reaches the locked stop before starting services', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'brc-restart-cancel-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const workflowUrl = new URL('../packages/cli/dist/core/lifecycle/workflow.js', import.meta.url).href;
+  const controllerUrl = new URL('../packages/cli/dist/adapters/process/controller.js', import.meta.url).href;
   const databaseUrl = new URL('../packages/cli/dist/adapters/storage/relay-database.js', import.meta.url).href;
   const probe = `
-const { ServiceManager } = await import(${JSON.stringify(workflowUrl)});
+const { ProcessManager } = await import(${JSON.stringify(controllerUrl)});
 const { RelayDatabase } = await import(${JSON.stringify(databaseUrl)});
 RelayDatabase.prototype.assertExists = () => {};
-ServiceManager.prototype.withLock = async function (operation) {
-  return operation({
-    stop: async (signal) => {
-      if (!signal) throw new Error('stop did not receive cancellation');
-      await new Promise((resolve, reject) => {
-        if (signal.aborted) return reject(signal.reason);
-        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-      });
-    },
-    start: async () => { throw new Error('restart started after cancellation'); },
+ProcessManager.prototype.status = async (service) => ({ name: service.name, state: 'running', pid: 123, detail: 'running' });
+ProcessManager.prototype.stop = async (_service, signal) => {
+  if (!signal) throw new Error('stop did not receive cancellation');
+  await new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
   });
 };
+ProcessManager.prototype.start = async () => { throw new Error('restart started after cancellation'); };
 process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'restart', '--timeout=25ms', '--json'];
 await import(${cliUrl});
 `;

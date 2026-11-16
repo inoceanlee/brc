@@ -111,13 +111,17 @@ test('interactive overrides CI, but no-input overrides interactive', () => {
   const denied = run(['credentials', 'logout', '--interactive', '--no-input', '--json'], { tty, input: 'yes\n' });
   assert.equal(denied.status, 2, denied.stderr);
   assert.deepEqual(denied.stored, credentials);
-  const accepted = run(['credentials', 'logout', '--interactive', '--json'], { tty, input: 'yes\n' });
+  const accepted = run(['credentials', 'logout', '--interactive'], { tty, input: 'yes\n' });
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(JSON.parse(accepted.stdout).removed, true);
+  assert.match(accepted.stdout, /removed: true/);
   assert.equal(accepted.present, false);
   const ciDefault = run(['credentials', 'logout', '--json'], { tty, input: 'yes\n' });
   assert.equal(ciDefault.status, 2, ciDefault.stderr);
   assert.deepEqual(ciDefault.stored, credentials);
+  const jsonInteractive = run(['credentials', 'logout', '--interactive', '--json'], { tty, input: 'yes\n', env: { CI: 'false' } });
+  assert.equal(jsonInteractive.status, 2, jsonInteractive.stderr);
+  assert.equal(JSON.parse(jsonInteractive.stderr).exit_code, 2);
+  assert.deepEqual(jsonInteractive.stored, credentials);
 });
 
 test('service confirmation refuses redirected stderr without changing registration', () => {
