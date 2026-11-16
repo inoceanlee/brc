@@ -230,7 +230,7 @@ test('cleanup preserves a previous-boot record when its live PID identity differ
   process.kill(process.pid, 0);
 });
 
-test('snapshot cleanup advances to later PID batches without persistent state', async (t) => {
+test('snapshot cleanup advances across fixed-time invocations', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const capturedAt = new Date(Date.now() - 40 * DAY).toISOString();
   for (let index = 0; index < 257; index++) {
@@ -243,11 +243,55 @@ test('snapshot cleanup advances to later PID batches without persistent state', 
   Date.now = () => 2_000_000_001_000;
   try {
     await cleanRuntime(brcPaths);
+    assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), true);
+    await cleanRuntime(brcPaths);
   } finally {
     Date.now = now;
   }
-  assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-0.json')), true);
+  assert.equal(await exists(path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json')), true);
   assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), false);
+});
+
+test('snapshot cursor recovers from malformed content without deleting live snapshots', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const cursor = path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json');
+  const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
+  await writeFile(cursor, '{invalid', { mode: 0o600 });
+  await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
+  const report = await cleanRuntime(brcPaths);
+  assert.equal(await exists(dead), false);
+  assert.ok(report.preserved.some((item) => item.path === cursor));
+  assert.equal(JSON.parse(await readFile(cursor, 'utf8')).lastPid, 2147483647);
+});
+
+test('snapshot cursor refuses a symbolic link and preserves snapshots', async (t) => {
+  const { root, paths: brcPaths } = await makeRoot(t);
+  const target = path.join(root, 'other-data');
+  const cursor = path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json');
+  const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
+  await writeFile(target, 'untouched');
+  try { await symlink(target, cursor); } catch (error) {
+    if (error.code === 'EPERM' || error.code === 'EACCES') return t.skip('symlink creation unavailable');
+    throw error;
+  }
+  await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
+  const report = await cleanRuntime(brcPaths);
+  assert.equal(await readFile(target, 'utf8'), 'untouched');
+  assert.equal(await exists(dead), true);
+  assert.ok(report.failures.some((item) => item.path === cursor) || report.preserved.some((item) => item.path === cursor));
+});
+
+test('snapshot cursor with unsafe permissions preserves candidates', { skip: process.platform === 'win32' }, async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const cursor = path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json');
+  const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
+  await writeFile(cursor, JSON.stringify({ version: 1, lastPid: 0 }), { mode: 0o666 });
+  const { chmod } = await import('node:fs/promises');
+  await chmod(cursor, 0o666);
+  await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
+  const report = await cleanRuntime(brcPaths);
+  assert.equal(await exists(dead), true);
+  assert.ok(report.failures.some((item) => item.path === cursor));
 });
 
 test('removes a valid process record only after its process exits', async (t) => {
