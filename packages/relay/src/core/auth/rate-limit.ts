@@ -1,11 +1,13 @@
 /** Tiny in-memory login rate limiter: N failures per key -> lock for a window. */
 export class LoginLimiter {
   private fails = new Map<string, { count: number; lockedUntil: number; last: number }>();
-  constructor(private readonly maxFails = 5, private readonly lockMs = 5 * 60_000) {
-    setInterval(() => {
-      const cutoff = Date.now() - 2 * this.lockMs;
-      for (const [k, v] of this.fails) if (v.last < cutoff) this.fails.delete(k);
-    }, 60_000).unref();
+  private lastCleanup = 0;
+  constructor(private readonly maxFails = 5, private readonly lockMs = 5 * 60_000) {}
+
+  prune(now = Date.now()): void {
+    if (now - this.lastCleanup < 60_000) return;
+    this.lastCleanup = now;
+    for (const [key, value] of this.fails) if (value.last < now - 2 * this.lockMs) this.fails.delete(key);
   }
   /** Returns seconds remaining if locked, else 0. */
   locked(key: string): number {
@@ -14,6 +16,7 @@ export class LoginLimiter {
     return Math.ceil((e.lockedUntil - Date.now()) / 1000);
   }
   fail(key: string): void {
+    this.prune();
     const e = this.fails.get(key) ?? { count: 0, lockedUntil: 0, last: 0 };
     e.count++; e.last = Date.now();
     if (e.count >= this.maxFails) { e.lockedUntil = Date.now() + this.lockMs; e.count = 0; }

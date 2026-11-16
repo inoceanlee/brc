@@ -6,10 +6,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SqliteStore, sha256, verifyPassword, hashPassword } from '../dist/adapters/storage/sqlite.js';
-import { RelayOAuthProvider } from '../dist/core/auth/provider.js';
+import { SqliteStore, randomToken, sha256, verifyPassword, hashPassword } from '../dist/adapters/storage/sqlite.js';
+import { RelayOAuthProvider, RelayClientsStore } from '../dist/adapters/http/oauth-provider.js';
 import { LoginLimiter } from '../dist/core/auth/rate-limit.js';
-import { DeviceHub } from '../dist/device-hub.js';
+import { DeviceHub } from '../dist/adapters/transport/device-hub.js';
 
 test('password hashing round-trips and rejects wrong password', () => {
   const h = hashPassword('s3cret');
@@ -101,11 +101,12 @@ test('OAuth rejects authorization codes, access tokens, refresh tokens, and API 
     db.close();
     const provider = new RelayOAuthProvider({
       store: s,
+      tokens: { randomToken, sha256 },
       currentUserId: () => null,
       renderLogin: () => {},
       renderConsent: () => {},
       issuer: 'https://relay.invalid',
-    });
+    }, new RelayClientsStore(s, { randomToken, sha256 }));
     const client = { client_id: 'client' };
     const outcomes = await Promise.allSettled([
       provider.challengeForAuthorizationCode(client, 'stale-challenge'),

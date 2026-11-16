@@ -5,7 +5,7 @@
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import type { DeviceHub } from '../../../device-hub.js';
+import type { DeviceHub } from '../../transport/device-hub.js';
 import type { SqliteStore } from '../../storage/sqlite.js';
 import { invokeTool, listUserDevices, type InvokeContext } from './invoke.js';
 
