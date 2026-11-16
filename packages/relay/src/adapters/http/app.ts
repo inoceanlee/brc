@@ -5,7 +5,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { DeviceHub } from '../transport/device-hub.js';
-import { verifyPassword, type SqliteStore } from '../storage/sqlite.js';
+import type { RelayStorePort } from '../../core/auth/ports.js';
 import type { RelayOAuthProvider } from './oauth-provider.js';
 import type { Sessions } from './sessions.js';
 import type { LoginLimiter } from '../../core/auth/rate-limit.js';
@@ -20,7 +20,8 @@ export { parseTrustProxy, loadConfig } from './config.js';
 export interface RelayHttpDependencies {
   app: Express;
   cfg: RelayConfig;
-  store: SqliteStore;
+  store: RelayStorePort;
+  verifyPassword: (password: string, hash: string) => boolean;
   hub: DeviceHub;
   sessions: Sessions;
   provider: RelayOAuthProvider;
@@ -29,7 +30,7 @@ export interface RelayHttpDependencies {
 }
 
 export function mountRelayRoutes(deps: RelayHttpDependencies): void {
-  const { app, cfg, store, hub, sessions, provider, limiter, log } = deps;
+  const { app, cfg, store, hub, sessions, provider, limiter, log, verifyPassword } = deps;
   const publicUrl = new URL(cfg.publicUrl);
   app.set('trust proxy', cfg.trustProxy);
   app.disable('x-powered-by');

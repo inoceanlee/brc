@@ -6,7 +6,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { DeviceHub } from '../../transport/device-hub.js';
-import type { SqliteStore } from '../../storage/sqlite.js';
+import type { RelayStorePort } from '../../../core/auth/ports.js';
 import { invokeTool, listUserDevices, type InvokeContext } from './invoke.js';
 
 export type McpContext = InvokeContext;
@@ -31,14 +31,14 @@ export const LIST_DEVICES_TOOL = {
 };
 
 /** Live tool set for a user: union across online, non-paused devices (with deviceId prop). */
-export function liveTools(hub: DeviceHub, store: SqliteStore, userId: string) {
+export function liveTools(hub: DeviceHub, store: RelayStorePort, userId: string) {
   const online = hub.list(userId).filter((d) => !store.getDevice(d.deviceId)?.paused);
   const merged = new Map<string, { name: string; description: string; inputSchema: unknown; annotations?: Record<string, unknown> }>();
   for (const d of online) for (const t of hub.get(d.deviceId)?.tools ?? []) if (!merged.has(t.name)) merged.set(t.name, { ...t, inputSchema: withDeviceId(t.inputSchema) });
   return { online: online.length, tools: [...merged.values()] };
 }
 
-export function createMcpServer(hub: DeviceHub, store: SqliteStore, ctx: McpContext, relayVersion: string): Server {
+export function createMcpServer(hub: DeviceHub, store: RelayStorePort, ctx: McpContext, relayVersion: string): Server {
   const server = new Server({ name: 'brc', version: relayVersion }, { capabilities: { tools: {} } });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {

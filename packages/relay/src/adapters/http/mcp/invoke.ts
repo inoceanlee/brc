@@ -3,7 +3,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { DeviceHub } from '../../transport/device-hub.js';
-import type { SqliteStore } from '../../storage/sqlite.js';
+import type { RelayStorePort } from '../../../core/auth/ports.js';
 import type { ToolResult } from 'brc-shared';
 
 export interface InvokeContext { userId: string; clientId: string }
@@ -13,7 +13,7 @@ export type InvokeOutcome =
 
 const argsHash = (args: unknown) => createHash('sha256').update(JSON.stringify(args ?? {})).digest('hex').slice(0, 16);
 
-export function listUserDevices(hub: DeviceHub, store: SqliteStore, userId: string) {
+export function listUserDevices(hub: DeviceHub, store: RelayStorePort, userId: string) {
   const online = new Set(hub.list(userId).map((d) => d.deviceId));
   return store.listDevices(userId).map((d) => ({
     deviceId: d.device_id, name: d.name, platform: d.platform, online: online.has(d.device_id), paused: !!d.paused, lastSeen: d.last_seen,
@@ -21,7 +21,7 @@ export function listUserDevices(hub: DeviceHub, store: SqliteStore, userId: stri
 }
 
 export async function invokeTool(
-  hub: DeviceHub, store: SqliteStore, ctx: InvokeContext,
+  hub: DeviceHub, store: RelayStorePort, ctx: InvokeContext,
   tool: string, rawArgs: Record<string, unknown> | undefined, opts: { timeoutMs?: number } = {},
 ): Promise<InvokeOutcome> {
   const args = { ...(rawArgs ?? {}) };

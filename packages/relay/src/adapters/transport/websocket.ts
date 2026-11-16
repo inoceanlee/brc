@@ -1,13 +1,13 @@
 import type { Server as HttpServer } from 'node:http';
 import type { WebSocketServer } from 'ws';
-import type { SqliteStore } from '../storage/sqlite.js';
+import type { RelayStorePort } from '../../core/auth/ports.js';
 import type { DeviceHub } from './device-hub.js';
 
 export function registerDeviceSocket(
   http: HttpServer,
   wss: WebSocketServer,
   hub: DeviceHub,
-  store: SqliteStore,
+  store: RelayStorePort,
   publicUrl: string,
   log: (level: string, message: string) => void,
 ): void {

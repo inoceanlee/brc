@@ -101,7 +101,7 @@ function buildRelay(cfg, log) {
     }, clientsStore);
     const app = express();
     const limiter = new LoginLimiter();
-    mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log });
+    mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log, verifyPassword });
     const http = createServer(app);
     const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
     registerDeviceSocket(http, wss, hub, store, cfg.publicUrl, log);
