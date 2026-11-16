@@ -89,3 +89,21 @@ test('diagnostic event lines stay valid JSON when bounded', async (t) => {
   assert.ok(Buffer.byteLength(lines[0]) <= 1_024);
   assert.equal(JSON.parse(lines[0]).truncated, true);
 });
+
+test('diagnostic JSONL never reads implicit rotation environment settings', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-diag-explicit-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const previous = process.env.BRC_LOG_ROTATE_MIB;
+  process.env.BRC_LOG_ROTATE_MIB = 'invalid';
+  try {
+    const { appendDiagnosticEvent } = await import('../packages/shared/dist/diagnostics/adapters/logging.js');
+    const filename = path.join(root, 'cli.log');
+    await appendDiagnosticEvent(filename, {
+      level: 'info', component: 'cli', source: { file: 'cli.ts' }, message: 'ready',
+    });
+    assert.equal(JSON.parse(await readFile(filename, 'utf8')).message, 'ready');
+  } finally {
+    if (previous === undefined) delete process.env.BRC_LOG_ROTATE_MIB;
+    else process.env.BRC_LOG_ROTATE_MIB = previous;
+  }
+});

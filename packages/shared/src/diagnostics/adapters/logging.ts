@@ -1,5 +1,6 @@
 import { lstat, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { DEFAULT_SETTINGS } from '../../config/core/settings.js';
 import { appendRotatingLog } from '../../managed-log.js';
 import { createDiagnosticEvent, type DiagnosticEventInput } from '../core/event.js';
 import type { DiagnosticLogPort } from '../core/ports.js';
@@ -28,11 +29,11 @@ async function appendRecord(
   record: string,
   options: TraceLogOptions,
 ): Promise<void> {
-  const maxRecordBytes = options.maxRecordBytes ?? 64 * 1024;
+  const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_SETTINGS.diagnostics.maxRecordBytes;
   if (!Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 128) throw new Error('Invalid diagnostic record size.');
   if (!fits(record, maxRecordBytes)) throw new Error('Diagnostic summary cannot fit record size.');
   await validateDirectory(filename);
-  await withDiagnosticLogLock(filename, () => appendRotatingLog(filename, record + '\n', options.maxBytes));
+  await withDiagnosticLogLock(filename, () => appendRotatingLog(filename, record + '\n', options.maxBytes ?? DEFAULT_SETTINGS.logs.rotateMiB * 1024 * 1024));
 }
 
 export async function appendTraceSummary(
@@ -40,7 +41,7 @@ export async function appendTraceSummary(
   summary: TraceSummary,
   options: TraceLogOptions = {},
 ): Promise<void> {
-  const maxRecordBytes = options.maxRecordBytes ?? 64 * 1024;
+  const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_SETTINGS.diagnostics.maxRecordBytes;
   if (!Number.isSafeInteger(maxRecordBytes) || maxRecordBytes < 128) throw new Error('Invalid diagnostic record size.');
   const event = {
     type: 'startup_trace',
@@ -83,7 +84,7 @@ export async function appendDiagnosticEvent(
   input: DiagnosticEventInput,
   options: TraceLogOptions = {},
 ): Promise<void> {
-  const maxRecordBytes = options.maxRecordBytes ?? 64 * 1024;
+  const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_SETTINGS.diagnostics.maxRecordBytes;
   const event = createDiagnosticEvent(input);
   let serialized = JSON.stringify(event);
   if (!fits(serialized, maxRecordBytes)) {
