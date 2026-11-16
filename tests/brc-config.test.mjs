@@ -360,7 +360,9 @@ test('invalid environment overrides do not replace valid configuration with last
   const { paths, lock } = await createFixture(t);
   const filename = path.join(paths.config, 'brc.yaml');
   const contents = '# user configuration\nversion: 1\n';
+  const backup = '# last-good configuration\nversion: 1\nservices:\n  relayPort: 3001\n';
   await writeFile(filename, contents);
+  await writeFile(filename + '.last-good', backup);
   await assert.rejects(
     SettingsManager.load(paths, { BRC_DATA_ROOT: paths.root, BRC_RELAY_PORT: 'invalid' }, {
       lock,
@@ -369,6 +371,7 @@ test('invalid environment overrides do not replace valid configuration with last
     /Invalid environment configuration/,
   );
   assert.equal(await readFile(filename, 'utf8'), contents);
+  assert.equal(await readFile(filename + '.last-good', 'utf8'), backup);
 });
 
 test('failed first config write removes new file and preserves defaults', async (t) => {
