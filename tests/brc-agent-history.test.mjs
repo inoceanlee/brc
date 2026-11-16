@@ -244,6 +244,121 @@ test('history store persists a valid JSON document at the canonical agent data p
   assert.equal(parsed[0].toolName, 'sample');
 });
 
+test('dispatcher exposes successful and failed calls without private content', async () => {
+  const { callTool } = await import('../packages/agent/dist/adapters/mcp/dispatcher.js');
+  const secret = 'history-dispatch-private-content';
+  const success = await callTool('list_searches', {});
+  assert.notEqual(success.isError, true);
+  const failure = await callTool('read_file', { path: secret });
+  assert.equal(failure.isError, true);
+  const history = await callTool('get_recent_tool_calls', { maxResults: 1000 });
+  assert.notEqual(history.isError, true);
+  const text = history.content[0].text;
+  assert.match(text, /list_searches/);
+  assert.match(text, /read_file/);
+  assert.match(text, /"isError": true/);
+  assert.doesNotMatch(text, /history-dispatch-private-content/);
+  await toolHistory.cleanup();
+  assert.doesNotMatch(await readFile(file, 'utf8'), /history-dispatch-private-content/);
+});
+
+test('history failures do not alter dispatcher results', async () => {
+  const { callTool } = await import('../packages/agent/dist/adapters/mcp/dispatcher.js');
+  const original = toolHistory.addCall;
+  toolHistory.addCall = () => { throw new Error('history unavailable'); };
+  try {
+    const result = await callTool('list_searches', {});
+    assert.notEqual(result.isError, true);
+  } finally {
+    toolHistory.addCall = original;
+  }
+});
+
+test('startup recovers a legacy file left after an interrupted migration', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-recover-'));
+  const previous = process.env.BRC_DATA_ROOT;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
+    else process.env.BRC_DATA_ROOT = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  process.env.BRC_DATA_ROOT = directory;
+  const destination = path.join(directory, 'data', 'agent');
+  await mkdir(destination, { recursive: true });
+  const record = {
+    timestamp: '2026-01-01T00:00:00.000Z', toolName: 'read_file',
+    arguments: { path: 'recover-private-path' },
+    output: { content: [{ type: 'text', text: 'recover-private-data' }] },
+  };
+  await writeFile(path.join(destination, 'tool-history.json'), JSON.stringify([record]));
+  const legacy = path.join(destination, 'tool-history.jsonl');
+  await writeFile(legacy, JSON.stringify(record) + '\n');
+  const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
+  const independent = new ToolHistory();
+  t.after(() => independent.cleanup());
+  assert.equal(independent.getRecentCalls({ maxResults: 10 }).length, 1);
+  assert.doesNotMatch(await readFile(path.join(destination, 'tool-history.json'), 'utf8'), /recover-private/);
+  await assert.rejects(readFile(legacy, 'utf8'), { code: 'ENOENT' });
+});
+
+test('failed migration retains the original legacy history for recovery', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-failed-migration-'));
+  const previous = process.env.BRC_DATA_ROOT;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
+    else process.env.BRC_DATA_ROOT = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  process.env.BRC_DATA_ROOT = directory;
+  const destination = path.join(directory, 'data', 'agent');
+  await mkdir(destination, { recursive: true });
+  const legacy = path.join(destination, 'tool-history.jsonl');
+  const source = JSON.stringify({
+    timestamp: '2026-01-01T00:00:00.000Z', toolName: 'read_file',
+    arguments: { path: 'recoverable-private-path' }, output,
+  }) + '\n';
+  await writeFile(legacy, source);
+  const originalRename = fs.renameSync;
+  fs.renameSync = () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); };
+  syncBuiltinESMExports();
+  try {
+    const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
+    assert.throws(() => new ToolHistory(), /disk failure/);
+  } finally {
+    fs.renameSync = originalRename;
+    syncBuiltinESMExports();
+  }
+  assert.equal(await readFile(legacy, 'utf8'), source);
+});
+
+test('startup rewrites existing history without sensitive fields', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-sanitize-'));
+  const previous = process.env.BRC_DATA_ROOT;
+  t.after(async () => {
+    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
+    else process.env.BRC_DATA_ROOT = previous;
+    await rm(directory, { recursive: true, force: true });
+  });
+  process.env.BRC_DATA_ROOT = directory;
+  const destination = path.join(directory, 'data', 'agent');
+  await mkdir(destination, { recursive: true });
+  const canonical = path.join(destination, 'tool-history.json');
+  await writeFile(canonical, JSON.stringify([{
+    timestamp: '2026-01-01T00:00:00.000Z', toolName: 'read_file',
+    arguments: { path: 'old-private-argument' },
+    output: { content: [{ type: 'text', text: 'old-private-output' }], isError: true },
+    extra: 'old-private-extra',
+  }]));
+  const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
+  const independent = new ToolHistory();
+  t.after(() => independent.cleanup());
+  const stored = await readFile(canonical, 'utf8');
+  assert.doesNotMatch(stored, /old-private-/);
+  const records = independent.getRecentCalls({ maxResults: 10 });
+  assert.equal(records[0].toolName, 'read_file');
+  assert.equal(records[0].output.isError, true);
+});
+
 test('existing JSONL history migrates into a private JSON record collection', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-legacy-'));
   const previous = process.env.BRC_DATA_ROOT;
