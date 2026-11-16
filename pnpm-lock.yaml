@@ -80,6 +80,9 @@ importers:
       isbinaryfile:
         specifier: ^5.0.4
         version: 5.0.7
+      js-yaml:
+        specifier: ^3.15.2
+        version: 3.15.2
       markdown-it:
         specifier: ^14.1.0
         version: 14.3.1
