@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveSettings, type CliResult } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSettingsLock, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, YamlSettingsStore, resolveSettings, type CliResult } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -20,9 +20,14 @@ const yaml = (value: unknown): string => {
 };
 
 async function createAgentDiagnostics() {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    key.startsWith('BRC_DIAGNOSTICS_') || key === 'BRC_LOG_ROTATE_MIB'));
-  const resolved = resolveSettings({ version: 1 }, env).settings;
+  const paths = resolveAgentPaths();
+  const codec = requireFromHere('js-yaml') as { safeLoad(value: string): unknown; safeDump(value: unknown, options: { noRefs: boolean }): string };
+  const settingsStore = new YamlSettingsStore({
+    filename: paths.configFile,
+    codec: { parse: (value) => codec.safeLoad(value), stringify: (value) => codec.safeDump(value, { noRefs: true }) },
+    lock: new FileSettingsLock(path.dirname(paths.configFile)),
+  });
+  const resolved = resolveSettings((await settingsStore.read()).settings, process.env).settings;
   const settings = resolved.diagnostics;
   const directory = process.env.BRC_DIAGNOSTICS_DIR;
   const enabled = process.env.BRC_DIAGNOSTICS_ENABLED !== undefined && settings.enabled && !!directory;

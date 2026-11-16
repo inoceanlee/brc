@@ -413,6 +413,20 @@ test('managed log writes explicitly without replacing console methods', async (t
   assert.match(contents, /relay standard error/);
 });
 
+test('Traefik logs missing managed configuration before exiting', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const logFile = path.join(brcPaths.logs, 'traefik.log');
+  const moduleUrl = JSON.stringify(new URL('../packages/cli/dist/traefik/runtime.js', import.meta.url).href);
+  const source = `import { runManagedTraefikService } from ${moduleUrl};\nawait runManagedTraefikService();`;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    encoding: 'utf8',
+    env: { ...env, BRC_MANAGED_SERVICE: 'traefik', BRC_LOG_FILE: logFile },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(await readFile(logFile, 'utf8'), /missing its managed runtime configuration/);
+});
+
 test('Agent activity logs stay bounded during continuous writes', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const trackToolsUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/trackTools.js', import.meta.url).href);

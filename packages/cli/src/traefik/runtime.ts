@@ -237,10 +237,10 @@ export async function runManagedTraefikService(
     const traefikRoot = process.env.BRC_TRAEFIK_ROOT;
     const configDirectory = process.env.BRC_TRAEFIK_CONFIG_DIR;
     const logFile = process.env.BRC_LOG_FILE;
+    if (logFile) managedLog = createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024);
     if (process.env.BRC_MANAGED_SERVICE !== 'traefik' || !traefikRoot || !configDirectory || !logFile) {
       throw new Error('Traefik service is missing its managed runtime configuration.');
     }
-    managedLog = createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024);
     const manifest = await readManifest(traefikRoot);
     if (!manifest) throw new Error('Traefik is not installed. Run brc setup first.');
     await ensureSafeDirectory(traefikRoot, path.join(traefikRoot, 'versions', manifest.current));
@@ -293,6 +293,13 @@ export async function runManagedTraefikService(
     control = await startManagedControlServer({
       server: options.controlServer,
       ...options.controlIdentity,
+      onStopError: (error) => {
+        const message = `BRC managed shutdown failed: ${errorMessage(error)}`;
+        diagnostics?.log(message, { level: 'error', error });
+        console.error(message);
+        managedLog?.write(message + '\n');
+        process.exitCode = 1;
+      },
       health: async () => {
         if (logFailure) return { state: 'degraded', detail: `Traefik log output failed: ${logFailure.message}` };
         if (!child || child.exitCode !== null || child.signalCode !== null) return { state: 'degraded', detail: 'Traefik process exited.' };

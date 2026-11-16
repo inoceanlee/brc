@@ -77,6 +77,10 @@ export async function runAgentConnection(
     control = await startManagedControlServer({
       server: controlServer,
       ...controlIdentity,
+      onStopError: (error) => {
+        log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      },
       health: () => awaitingPairing
         ? { state: 'pairing', detail: 'Agent awaits pairing approval.' }
         : client?.connected

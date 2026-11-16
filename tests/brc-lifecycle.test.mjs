@@ -290,6 +290,7 @@ test('protects managed control endpoints and runs shutdown once', async () => {
       readyFile: env.BRC_CONTROL_READY_FILE,
       id: env.BRC_MANAGED_ID,
       service: env.BRC_MANAGED_SERVICE,
+      onStopError: (error) => { throw error; },
       health: () => ({ state: 'running', detail: 'Relay ready.' }),
       stop: () => { stops.push('stop'); },
     });
@@ -320,6 +321,33 @@ test('protects managed control endpoints and runs shutdown once', async () => {
       else process.env[key] = value;
     }
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('managed control sends shutdown failures to its supplied error handler', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-control-error-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let report;
+  const failure = new Promise((resolve) => { report = resolve; });
+  const control = await startManagedControlServer({
+    server: createServer(),
+    token: 'a'.repeat(64),
+    readyFile: path.join(root, 'relay.ready.json'),
+    id: '00000000-0000-4000-8000-000000000001',
+    service: 'relay',
+    health: () => ({ state: 'running', detail: 'ready' }),
+    stop: () => { throw new Error('shutdown timeout'); },
+    onStopError: (error) => report(error),
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${control.port}/shutdown`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${'a'.repeat(64)}` },
+    });
+    assert.equal(response.status, 202);
+    assert.match((await failure).message, /shutdown timeout/);
+  } finally {
+    await control.close();
   }
 });
 

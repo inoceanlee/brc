@@ -89,6 +89,7 @@ export async function startManagedControlServer(options: {
   service?: string;
   health: () => ManagedHealth | Promise<ManagedHealth>;
   stop: () => void | Promise<void>;
+  onStopError: (error: unknown) => void;
 }): Promise<ManagedControlServer | undefined> {
   const { token, readyFile, id, service } = options;
   if (!token && !readyFile && !id && !service) return undefined;
@@ -99,10 +100,7 @@ export async function startManagedControlServer(options: {
     token,
     health: options.health,
     stop: options.stop,
-    onStopError: (error) => {
-      console.error('BRC managed shutdown failed: ' + (error instanceof Error ? error.message : String(error)));
-      process.exitCode = 1;
-    },
+    onStopError: options.onStopError,
   }));
   const closeServer = () => new Promise<void>((resolve, reject) => {
     if (!server.listening) return resolve();
