@@ -31,8 +31,8 @@ function countFunctions(files, root) {
       if (ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isArrowFunction(node)
         || ts.isMethodDeclaration(node) || ts.isConstructorDeclaration(node)
         || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
-        if (node.asteriskToken) generators += 1;
-        else if (node.body) functions += 1;
+        if (node.body) functions += 1;
+        if (node.body && node.asteriskToken) generators += 1;
       }
       ts.forEachChild(node, visit);
     };
@@ -49,8 +49,9 @@ test('build manifests cover every own TypeScript function', async () => {
     assert.equal(manifest.schema, 1);
     assert.equal(manifest.instrumented, counted.functions,
       `${pkg}: manifest must cover all instrumentable functions`);
-    const generators = manifest.skipped.filter((entry) => entry.reason === 'generator');
-    assert.equal(generators.length, counted.generators, `${pkg}: generator functions must be reported, not silently skipped`);
+    assert.equal(manifest.skipped.some((entry) => entry.reason === 'generator'), false,
+      `${pkg}: generators must be instrumented`);
+    assert.ok(counted.generators <= manifest.instrumented, `${pkg}: generator functions must be included`);
     const ids = manifest.functions.map((entry) => entry.id);
     assert.equal(new Set(ids).size, ids.length, `${pkg}: function ids must be unique`);
     for (const entry of manifest.functions) {

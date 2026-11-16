@@ -9,8 +9,8 @@ import path from 'node:path';
  * absent and the instrumented code performs one failed property lookup per
  * call. Original control flow (return, throw, `this`, arguments) is preserved.
  *
- * Generators are reported as unsupported rather than measured incorrectly:
- * suspension time must never be counted as execution time.
+ * Generator timing covers only active execution between resumptions.
+ * Time suspended at yield boundaries is excluded.
  */
 export function createInstrumentation(ts, options) {
   const functions = [];
@@ -113,12 +113,99 @@ export function createInstrumentation(ts, options) {
     return update(statements);
   };
 
+  const wrapGenerator = (node, body, id, kind, token, update) => {
+    const suffix = String(counter);
+    const suspend = `__brcSuspend${suffix}`;
+    const delegate = `__brcDelegate${suffix}`;
+    const isAsync = kind === 'async';
+    const iteratorKey = isAsync ? 'Symbol.asyncIterator' : 'Symbol.iterator';
+    const method = isAsync ? 'async ' : '';
+    const awaited = isAsync ? 'await ' : '';
+    const unwrap = isAsync ? 'const value = await yielded;' : 'const value = yielded;';
+    const helpers = ts.createSourceFile('brc-generated.ts', `
+      ${isAsync ? 'async ' : ''}function* ${suspend}(yielded) {
+        ${unwrap}
+        globalThis.__brcDiagEnd?.(${token});
+        let resumed = false;
+        try {
+          const input = yield value;
+          resumed = true;
+          ${token} = globalThis.__brcDiagBegin?.('${id}', '${kind}');
+          return input;
+        } catch (error) {
+          resumed = true;
+          ${token} = globalThis.__brcDiagBegin?.('${id}', '${kind}');
+          throw error;
+        } finally {
+          if (!resumed) ${token} = globalThis.__brcDiagBegin?.('${id}', '${kind}');
+        }
+      }
+      function ${delegate}(iterable) {
+        const iterator = ${isAsync ? 'iterable[Symbol.asyncIterator]?.() ?? iterable[Symbol.iterator]?.()' : 'iterable[Symbol.iterator]()'};
+        let suspended = false;
+        const resume = () => {
+          if (suspended) {
+            ${token} = globalThis.__brcDiagBegin?.('${id}', '${kind}');
+            suspended = false;
+          }
+        };
+        const finish = (result) => {
+          if (!result.done) {
+            globalThis.__brcDiagEnd?.(${token});
+            suspended = true;
+          }
+          return result;
+        };
+        const proxy = {
+          [${iteratorKey}]() { return this; },
+          ${method}next(input) { resume(); return finish(${awaited}iterator.next(input)); },
+        };
+        if (typeof iterator.throw === 'function') {
+          proxy.throw = ${method}function (error) { resume(); return finish(${awaited}iterator.throw(error)); };
+        }
+        if (typeof iterator.return === 'function') {
+          proxy.return = ${method}function (value) { resume(); return finish(${awaited}iterator.return(value)); };
+        }
+        return proxy;
+      }
+    `, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+    const replaceYield = (item) => {
+      if (ts.isFunctionLike(item) || ts.isClassLike(item)) return item;
+      if (ts.isYieldExpression(item)) {
+        const expression = item.expression
+          ? ts.visitNode(item.expression, replaceYield)
+          : ts.factory.createVoidZero();
+        return ts.factory.createYieldExpression(
+          ts.factory.createToken(ts.SyntaxKind.AsteriskToken),
+          ts.factory.createCallExpression(
+            ts.factory.createIdentifier(item.asteriskToken ? delegate : suspend),
+            undefined, [expression],
+          ),
+        );
+      }
+      return ts.visitEachChild(item, replaceYield, transformContext);
+    };
+    const freshLiterals = (item) => ts.isStringLiteral(item)
+      ? ts.factory.createStringLiteral(item.text)
+      : ts.visitEachChild(item, freshLiterals, transformContext);
+    const original = body.map((statement) => ts.visitNode(statement, replaceYield));
+    const statements = [
+      ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
+        ts.factory.createVariableDeclaration(token, undefined, undefined, probeCall('__brcDiagBegin', [
+          ts.factory.createStringLiteral(id), ts.factory.createStringLiteral(kind),
+        ])),
+      ], ts.NodeFlags.Let)),
+      ...helpers.statements.map((statement) => ts.visitNode(statement, freshLiterals)),
+      ts.factory.createTryStatement(
+        ts.factory.createBlock(original, true), undefined,
+        ts.factory.createBlock([endStatement(token)], true),
+      ),
+    ];
+    return update(statements);
+  };
+
   const instrument = (node) => {
     if (node.pos < 0 || node.end < 0) return node;
-    if (node.asteriskToken) {
-      skipped.push({ file: relativePath(sourceFile.fileName), line: lineOf(node), name: nameOf(node), reason: 'generator' });
-      return node;
-    }
     if (!node.body) {
       skipped.push({ file: relativePath(sourceFile.fileName), line: lineOf(node), name: nameOf(node), reason: 'no-body' });
       return node;
@@ -145,7 +232,7 @@ export function createInstrumentation(ts, options) {
         node, node.modifiers, node.parameters, ts.factory.createBlock([...head, ...statements], true),
       ));
     }
-    return wrap(ts, node, body, id, kind, token, (statements) => {
+    const update = (statements) => {
       const nextBody = ts.factory.createBlock(statements, true);
       if (ts.isFunctionDeclaration(node)) {
         return ts.factory.updateFunctionDeclaration(node, node.modifiers, node.asteriskToken, node.name, node.typeParameters, node.parameters, node.type, nextBody);
@@ -163,7 +250,10 @@ export function createInstrumentation(ts, options) {
         return ts.factory.updateSetAccessorDeclaration(node, node.modifiers, node.name, node.parameters, nextBody);
       }
       throw new Error(`Unsupported function-like node: ${ts.SyntaxKind[node.kind]}`);
-    });
+    };
+    return node.asteriskToken
+      ? wrapGenerator(node, body, id, kind, token, update)
+      : wrap(ts, node, body, id, kind, token, update);
   };
 
   let transformContext;
