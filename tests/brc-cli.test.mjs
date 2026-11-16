@@ -182,6 +182,77 @@ console.log(JSON.stringify({ exitCode, cleanCount, calls, errors }));
   assert.match(result.errors.join('\n'), /cleanup failed/);
 });
 
+test('status reports degraded exit code for every output format', () => {
+  const result = probeResult(runProbe(`
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const services = [{ name: 'relay', state: 'degraded', pid: null, detail: 'unhealthy' }];
+const results = [];
+for (const format of ['table', 'plain', 'json', 'yaml']) {
+  const output = [];
+  const exitCode = await runCli(['status', '--output', format], {
+    paths, commands: { status: async () => 1 }, statusJson: async () => ({ services }),
+    clean: async () => {}, write: (value) => output.push(value), writeError: () => {},
+  });
+  results.push({ format, exitCode, output });
+}
+console.log(JSON.stringify(results));
+`));
+  for (const item of result) {
+    assert.equal(item.exitCode, 1, item.format);
+    if (item.format === 'json') assert.equal(JSON.parse(item.output[0]).services[0].state, 'degraded');
+  }
+});
+
+test('JSON command errors remain parseable when automatic cleanup also fails', () => {
+  const result = probeResult(runProbe(`
+const errors = [];
+const output = [];
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const exitCode = await runCli(['start', '--json'], {
+  paths, commands: { start: async () => { throw new Error('start failed'); } },
+  clean: async () => { throw new Error('cleanup failed'); },
+  write: (message) => output.push(message), writeError: (message) => errors.push(message),
+});
+console.log(JSON.stringify({ exitCode, output, errors }));
+`));
+  assert.equal(result.exitCode, 1);
+  assert.deepEqual(result.output, []);
+  assert.equal(result.errors.length, 1);
+  assert.equal(JSON.parse(result.errors[0]).message, 'start failed');
+});
+
+test('JSON output stays clean when automatic cleanup fails after success or invalid input', () => {
+  const results = probeResult(runProbe(`
+const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
+const results = [];
+for (const args of [['version', '--json'], ['--json', '--not-real']]) {
+  const output = [];
+  const errors = [];
+  const exitCode = await runCli(args, {
+    paths, commands: {}, clean: async () => { throw new Error('cleanup failed'); },
+    write: (message) => output.push(message), writeError: (message) => errors.push(message),
+  });
+  results.push({ exitCode, output, errors });
+}
+console.log(JSON.stringify(results));
+`));
+  assert.equal(results[0].exitCode, 0);
+  assert.equal(typeof JSON.parse(results[0].output[0]).version, 'string');
+  assert.deepEqual(results[0].errors, []);
+  assert.equal(results[1].exitCode, 2);
+  assert.deepEqual(results[1].output, []);
+  assert.equal(JSON.parse(results[1].errors.join('\n')).exit_code, 2);
+});
+
+test('automatic cleanup reports do not corrupt JSON usage errors', async (t) => {
+  const { root, expiredLog } = await makeCleanupFixture(t);
+  const result = runCliProcess(['--json', '--not-real'], root);
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.equal(existsSync(expiredLog), false);
+});
+
 test('clean command runs cleanup once without recursion', () => {
   const result = probeResult(runProbe(`
 let cleanCount = 0;

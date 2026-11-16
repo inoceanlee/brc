@@ -42,6 +42,11 @@ async function confirmChange(message: string): Promise<boolean> {
   }
 }
 
+function allowsConfirmation(inv: AgentInvocation): boolean {
+  return !inv.noInput && !!process.stdin.isTTY && !!process.stderr.isTTY
+    && (inv.interactive || (process.env.CI !== 'true' && inv.format !== 'json'));
+}
+
 function completion(shell: string): string | null {
   const candidates = COMMANDS.map((item) => item.split(' ')[0]).filter((value, index, values) => values.indexOf(value) === index);
   if (shell === 'powershell') return 'Register-ArgumentCompleter -Native -CommandName brc-agent -ScriptBlock { param($wordToComplete) @(' + candidates.map((item) => JSON.stringify(item)).join(', ') + ') | Where-Object { $_ -like "$wordToComplete*" } }';
@@ -65,7 +70,7 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
       if (inv.preview) return cliSuccess({ action: 'credentials logout', wouldRemove: existing, removed: false });
       if (!existing) return cliSuccess({ action: 'credentials logout', removed: false });
       if (!inv.yes) {
-        if (inv.noInput || process.env.CI === 'true' || !process.stdin.isTTY) {
+        if (!allowsConfirmation(inv)) {
           return invalid('Credentials deletion requires --yes when non-interactive.', 'brc-agent credentials logout --yes');
         }
         if (!await confirmChange('Remove saved BRC Agent device credentials?')) return cliSuccess({ action: 'credentials logout', removed: false, cancelled: true });
@@ -77,7 +82,7 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
       const installing = inv.command === 'service install';
       if (inv.preview) return cliSuccess({ action: inv.command, wouldChange: true, changed: false });
       if (!inv.yes && inv.confirm !== 'brc-agent') {
-        if (inv.noInput || process.env.CI === 'true' || !process.stdin.isTTY) {
+        if (!allowsConfirmation(inv)) {
           return invalid('Service changes require --yes when non-interactive.', 'brc-agent ' + inv.command + ' --yes');
         }
         if (!await confirmChange('Change BRC Agent service registration?')) {
