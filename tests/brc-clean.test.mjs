@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
 import { ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
@@ -506,12 +507,11 @@ test('managed log reports write failures and rejects close', async (t) => {
 
 test('Traefik reports managed log write failure through diagnostics', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
-  const moduleUrl = JSON.stringify(new URL('../packages/cli/dist/traefik/runtime.js', import.meta.url).href);
-  const source = `import { runManagedTraefikService } from ${moduleUrl};\nconst events = [];\ntry { await runManagedTraefikService(undefined, { log: (message) => events.push(message) }); } catch {}\nif (!events.includes('Traefik managed log write failed.')) process.exitCode = 2;`;
+  const cli = fileURLToPath(new URL('../packages/cli/dist/cli.js', import.meta.url));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
-  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+  const result = spawnSync(process.execPath, [cli, '--run-traefik'], {
     encoding: 'utf8',
-    env: { ...env, BRC_MANAGED_SERVICE: 'traefik', BRC_LOG_FILE: brcPaths.logs },
+    env: { ...env, BRC_DATA_ROOT: brcPaths.root, BRC_MANAGED_SERVICE: 'traefik', BRC_LOG_FILE: brcPaths.logs },
   });
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /Traefik managed log write failed/);
@@ -521,7 +521,8 @@ test('Traefik logs missing managed configuration before exiting', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const logFile = path.join(brcPaths.logs, 'traefik.log');
   const moduleUrl = JSON.stringify(new URL('../packages/cli/dist/traefik/runtime.js', import.meta.url).href);
-  const source = `import { runManagedTraefikService } from ${moduleUrl};\nawait runManagedTraefikService();`;
+  const sharedUrl = JSON.stringify(new URL('../packages/shared/dist/managed-log.js', import.meta.url).href);
+  const source = `import { runManagedTraefikService } from ${moduleUrl};\nimport { createManagedLog } from ${sharedUrl};\nconst managedLog = createManagedLog(${JSON.stringify(logFile)}, 256, (error) => { throw error; });\nawait runManagedTraefikService(undefined, undefined, { managedLog });`;
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
     encoding: 'utf8',

@@ -7,7 +7,7 @@ import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { appendRotatingLog, createManagedLog, startManagedControlServer, type InjectedDiagnosticsRuntime, type ManagedControlServer, type ManagedLogSink } from 'brc-shared';
+import { appendRotatingLog, startManagedControlServer, type InjectedDiagnosticsRuntime, type ManagedControlServer, type ManagedLogSink } from 'brc-shared';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../config/settings.js';
 import type { BrcPaths } from '../config/paths.js';
 import { renderConfig, errorMessage, type TraefikTemplates } from './core.js';
@@ -23,6 +23,8 @@ export interface TraefikBinaryResourceMonitor {
 }
 
 export interface TraefikRuntimeOptions {
+  managedLog?: ManagedLogSink;
+  managedLogError?: () => Error | undefined;
   controlServer?: Server;
   controlIdentity?: { token?: string; readyFile?: string; id?: string; service?: string };
   createBinaryResourceMonitor?: (pid: number, instanceId: string) => Promise<TraefikBinaryResourceMonitor>;
@@ -226,7 +228,7 @@ export async function runManagedTraefikService(
   diagnostics?: Pick<InjectedDiagnosticsRuntime, 'log'>,
   options: TraefikRuntimeOptions = {},
 ): Promise<void> {
-  let managedLog: ManagedLogSink | undefined;
+  const managedLog = options.managedLog;
   let control: ManagedControlServer | undefined;
   let child: ChildProcess | undefined;
   let binaryMonitor: TraefikBinaryResourceMonitor | undefined;
@@ -237,12 +239,6 @@ export async function runManagedTraefikService(
     const traefikRoot = process.env.BRC_TRAEFIK_ROOT;
     const configDirectory = process.env.BRC_TRAEFIK_CONFIG_DIR;
     const logFile = process.env.BRC_LOG_FILE;
-    if (logFile) managedLog = createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024, (error) => {
-      logFailure = error;
-      process.exitCode = 1;
-      diagnostics?.log('Traefik managed log write failed.', { level: 'error', error });
-      console.error(`Traefik managed log write failed: ${error.message}`);
-    });
     if (process.env.BRC_MANAGED_SERVICE !== 'traefik' || !traefikRoot || !configDirectory || !logFile) {
       throw new Error('Traefik service is missing its managed runtime configuration.');
     }
@@ -291,7 +287,7 @@ export async function runManagedTraefikService(
       });
       binaryMonitor = undefined;
     }
-    await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => logFailure?.message ?? 'Traefik did not answer on its local health endpoint.');
+    await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => (logFailure ?? options.managedLogError?.())?.message ?? 'Traefik did not answer on its local health endpoint.');
     diagnostics?.log(`Traefik ${manifest.current} is healthy.`, { source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' } });
 
     if (!options.controlServer) throw new Error('Traefik process did not receive a control server.');
@@ -306,7 +302,8 @@ export async function runManagedTraefikService(
         process.exitCode = 1;
       },
       health: async () => {
-        if (logFailure) return { state: 'degraded', detail: `Traefik log output failed: ${logFailure.message}` };
+        const failure = logFailure ?? options.managedLogError?.();
+        if (failure) return { state: 'degraded', detail: `Traefik log output failed: ${failure.message}` };
         if (!child || child.exitCode !== null || child.signalCode !== null) return { state: 'degraded', detail: 'Traefik process exited.' };
         const status = await requestStatus(healthPort, '/ping');
         return status === 200

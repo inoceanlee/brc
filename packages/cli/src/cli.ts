@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { appendTraceSummary, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
+import { appendTraceSummary, createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FileDiagnosticLog, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
 import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
@@ -702,7 +702,17 @@ if (isMainModule()) {
           }),
         });
       } : undefined;
+      let managedLogError: Error | undefined;
+      const logFile = process.env.BRC_LOG_FILE;
+      const managedLog = logFile ? createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024, (error) => {
+        managedLogError = error;
+        process.exitCode = 1;
+        diagnostics.log('Traefik managed log write failed.', { level: 'error', error });
+        console.error(`Traefik managed log write failed: ${error.message}`);
+      }) : undefined;
       await runManagedTraefikService(settings, diagnostics, {
+        managedLog,
+        managedLogError: () => managedLogError,
         createBinaryResourceMonitor,
         controlServer: createServer(),
         controlIdentity: {
