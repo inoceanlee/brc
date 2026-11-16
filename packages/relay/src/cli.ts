@@ -187,22 +187,28 @@ let stopping: Promise<void> | undefined;
 const stop = (sig?: string): Promise<void> => stopping ??= (async () => {
   const errors: unknown[] = [];
   if (sig) log('info', `${sig} received, shutting down`);
-  try { await control?.close(); } catch (error) { errors.push(error); }
   try { await relay.close(); } catch (error) { errors.push(error); }
   try { await closeLogs(); } catch (error) { errors.push(error); }
   if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) throw new AggregateError(errors, 'Relay shutdown failed.');
+  if (errors.length > 1) throw new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join('; '));
 })();
-process.on('SIGINT', () => { void stop('SIGINT').catch((error: unknown) => log('error', String(error))); });
-process.on('SIGTERM', () => { void stop('SIGTERM').catch((error: unknown) => log('error', String(error))); });
+const stopForSignal = (signal: string) => {
+  void (async () => {
+    try { await stop(signal); } catch (error) { process.stderr.write(`Relay shutdown failed: ${String(error)}\n`); }
+    try { await control?.close(); } catch (error) { process.stderr.write(`Relay control shutdown failed: ${String(error)}\n`); }
+  })();
+};
+process.on('SIGINT', () => stopForSignal('SIGINT'));
+process.on('SIGTERM', () => stopForSignal('SIGTERM'));
 control = await startManagedControlServer({
   server: createServer(),
+  shutdownTimeoutMs: settings.runtime.shutdownTimeoutMs,
   token: process.env.BRC_CONTROL_TOKEN,
   readyFile: process.env.BRC_CONTROL_READY_FILE,
   id: process.env.BRC_MANAGED_ID,
   service: process.env.BRC_MANAGED_SERVICE,
   onStopError: (error) => {
-    log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.stderr.write(`BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   },
   health: async () => {

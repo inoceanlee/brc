@@ -49,6 +49,13 @@ test('secret flags are rejected before connecting or logging', () => {
   assert.equal(result.present, true);
 });
 
+test('CLI error output redacts bearer credentials', () => {
+  const result = run(['version', 'Bearer ' + 'fixture-private-value', '--json']);
+  assert.equal(result.status, 2);
+  assert.doesNotMatch(result.stderr, /fixture-private-value/);
+  assert.match(JSON.parse(result.stderr).message, /Bearer \[redacted\]/);
+});
+
 test('logout without confirmation cannot remove saved credentials', () => {
   const result = run(['credentials', 'logout', '--no-input', '--json']);
   assert.equal(result.status, 2, result.stderr);

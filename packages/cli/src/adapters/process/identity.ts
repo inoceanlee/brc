@@ -75,8 +75,8 @@ export async function inspectProcesses(pids: readonly number[], signal?: AbortSi
   await Promise.all(unique.map(async (pid) => { result.set(pid, await inspectNonWindows(pid, signal)); }));
   return result;
 }
-export async function inspectProcess(pid: number): Promise<ProcessIdentity | null> {
-  return (await inspectProcesses([pid])).get(pid) ?? null;
+export async function inspectProcess(pid: number, signal?: AbortSignal): Promise<ProcessIdentity | null> {
+  return (await inspectProcesses([pid], signal)).get(pid) ?? null;
 }
 
 async function inspectNonWindows(pid: number, signal?: AbortSignal): Promise<ProcessIdentity | null> {

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:http';
 
 test('connect --allow-dir persists the policy in Shared YAML before connection', async (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-allow-dir-'));
@@ -47,6 +48,8 @@ test('history shutdown reports timeouts and failures without exposing error cont
   await flushAgentHistory({ cleanup: () => new Promise(() => {}) }, message => messages.push(message), 10);
   await flushAgentHistory({ cleanup: async () => { throw new Error('private-history-value'); } }, message => messages.push(message), 100);
   assert.equal(messages.length, 2);
+  assert.match(messages[0], /timed out/);
+  assert.match(messages[1], /failed/);
   assert.doesNotMatch(messages.join(' '), /private-history-value/);
 });
 
@@ -57,6 +60,107 @@ test('history shutdown awaits an accepted flush', async () => {
   await flushAgentHistory({ cleanup: async () => { flushed = true; } }, message => messages.push(message), 100);
   assert.equal(flushed, true);
   assert.deepEqual(messages, []);
+});
+
+test('managed shutdown reports usage write failure without private error contents', async (t) => {
+  const { createToolDispatcher } = await import('../packages/agent/dist/adapters/mcp/dispatcher.js');
+  const { startManagedControlServer } = await import('../packages/shared/dist/index.js');
+  const root = mkdtempSync(path.join(os.tmpdir(), 'brc-usage-shutdown-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const privateValue = 'private-usage-json-value';
+  const logs = [];
+  const previous = console.error;
+  console.error = (...args) => logs.push(args.map(String).join(' '));
+  let control;
+  try {
+    const dispatcher = createToolDispatcher({
+      searchManager: { listSearchSessions: () => [] },
+      usageTracker: { trackSuccess: async () => { throw new Error(privateValue); } },
+      toolHistory: { addCall() {} },
+      trackToolCall: async () => {},
+    });
+    const result = await dispatcher.callTool('list_searches', {});
+    assert.notEqual(result.isError, true);
+    control = await startManagedControlServer({
+      server: createServer(),
+      token: 'test-token',
+      readyFile: path.join(root, 'ready.json'),
+      id: 'usage-test',
+      service: 'agent',
+      health: () => ({ state: 'running', detail: 'ready' }),
+      stop: () => dispatcher.stop(),
+      onStopError: () => {},
+    });
+    const response = await fetch(`http://127.0.0.1:${control.port}/shutdown`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer test-token' },
+      signal: AbortSignal.timeout(5000),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 500);
+    assert.match(body.error.message, /usage storage write failed/i);
+    assert.doesNotMatch(JSON.stringify(body), /private-usage-json-value/);
+    assert.match(logs.join('\n'), /usage storage write failed/i);
+    assert.doesNotMatch(logs.join('\n'), /private-usage-json-value/);
+  } finally {
+    console.error = previous;
+    await control?.close();
+  }
+});
+
+test('startup failure retains sanitized shutdown failure classification', async (t) => {
+  const previousSignals = new Map(['SIGINT', 'SIGTERM'].map((signal) => [signal, new Set(process.listeners(signal))]));
+  t.after(() => {
+    for (const [signal, before] of previousSignals) {
+      for (const listener of process.listeners(signal)) if (!before.has(listener)) process.removeListener(signal, listener);
+    }
+  });
+  const { runAgentConnection } = await import('../packages/agent/dist/adapters/transport/connection.js');
+  const { parseAgentInvocation } = await import('../packages/agent/dist/commands/parser.js');
+  const { DEFAULT_SETTINGS } = await import('../packages/shared/dist/index.js');
+  const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-control-privacy-'));
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    rmSync(root, { recursive: true, force: true });
+  });
+  const services = {
+    env: {
+      BRC_TOKEN: 'test-token', BRC_CONTROL_TOKEN: 'control-token',
+      BRC_CONTROL_READY_FILE: path.join(root, 'ready.json'),
+      BRC_MANAGED_ID: 'privacy-test', BRC_MANAGED_SERVICE: 'agent',
+    },
+    settingsStore: { read: async () => ({ settings: DEFAULT_SETTINGS, revision: null }) },
+    logger: { bind: () => () => {} },
+    bindHistoryFailureReporter: () => () => {},
+    credentials: { load: () => null },
+    dispatcher: {
+      listTools: () => [],
+      stop: async () => { throw new AggregateError([new Error('Agent usage storage write failed.')], 'usage failed'); },
+    },
+    searchManager: { stop: async () => { throw new Error('private-search-value'); } },
+    toolHistory: { cleanup: async () => {} },
+    createClient: () => { throw new Error('private-startup-value'); },
+  };
+  const diagnostics = { log() {}, getLogFailure: () => undefined, stop: async () => { throw new Error('private-diagnostic-value'); } };
+  const invocation = parseAgentInvocation(['connect', '--relay', 'http://127.0.0.1:1', '--device-id', 'test', '--no-browser']);
+  await assert.rejects(runAgentConnection(invocation, services, diagnostics, server), (error) =>
+    /Agent startup failed/.test(error.message)
+    && /Agent usage storage write failed/.test(error.message)
+    && /Agent search shutdown failed/.test(error.message)
+    && /Agent diagnostics shutdown failed/.test(error.message)
+    && /Agent control shutdown failed/.test(error.message)
+    && !/private-(startup|search|diagnostic)-value/.test(error.message));
+  services.env = { BRC_TOKEN: 'test-token' };
+  await assert.rejects(runAgentConnection(invocation, services, diagnostics, createServer()), (error) =>
+    /Agent startup failed/.test(error.message)
+    && /Agent search shutdown failed/.test(error.message)
+    && /Agent diagnostics shutdown failed/.test(error.message)
+    && !/private-(startup|search|diagnostic)-value/.test(error.message));
 });
 
 test('connection uses instance control environment and skips disabled diagnostic parameters', async (t) => {

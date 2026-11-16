@@ -225,7 +225,7 @@ function environmentPort(name: string): number {
 
 export async function runManagedTraefikService(
   settings: Readonly<BrcSettings> = DEFAULT_SETTINGS,
-  diagnostics?: Pick<InjectedDiagnosticsRuntime, 'log' | 'getLogFailure'>,
+  diagnostics?: Pick<InjectedDiagnosticsRuntime, 'log' | 'getLogFailure'> & Partial<Pick<InjectedDiagnosticsRuntime, 'stop'>>,
   options: TraefikRuntimeOptions = {},
 ): Promise<void> {
   const managedLog = options.managedLog;
@@ -235,6 +235,24 @@ export async function runManagedTraefikService(
   let logFailure: Error | undefined;
   let stopping = false;
   let logSink: Writable | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => cleanupPromise ??= (async () => {
+    const errors: unknown[] = [];
+    try { await binaryMonitor?.stop(); } catch (error) { errors.push(error); }
+    if (logSink && !logSink.destroyed) {
+      try {
+        logSink.end();
+        await finished(logSink);
+      } catch (error) { if (error !== logFailure) errors.push(error); }
+    }
+    try { await managedLog?.close(); } catch (error) { errors.push(error); }
+    try { await diagnostics?.stop?.(); } catch (error) { errors.push(error); }
+    const managedFailure = options.managedLogError?.();
+    if (managedFailure) errors.push(managedFailure);
+    if (logFailure) errors.push(logFailure);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join('; '));
+  })();
   try {
     const traefikRoot = process.env.BRC_TRAEFIK_ROOT;
     const configDirectory = process.env.BRC_TRAEFIK_CONFIG_DIR;
@@ -293,12 +311,11 @@ export async function runManagedTraefikService(
     if (!options.controlServer) throw new Error('Traefik process did not receive a control server.');
     control = await startManagedControlServer({
       server: options.controlServer,
+      shutdownTimeoutMs: settings.runtime.shutdownTimeoutMs,
       ...options.controlIdentity,
       onStopError: (error) => {
         const message = `BRC managed shutdown failed: ${errorMessage(error)}`;
-        diagnostics?.log(message, { level: 'error', error });
         console.error(message);
-        managedLog?.write(message + '\n');
         process.exitCode = 1;
       },
       health: async () => {
@@ -316,6 +333,18 @@ export async function runManagedTraefikService(
           child.kill();
           if (!await waitForChildExit(child, settings.runtime.shutdownTimeoutMs)) throw new Error('Traefik did not stop after the managed shutdown request.');
         }
+        let closeTimer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            childClosed,
+            new Promise<never>((_, reject) => {
+              closeTimer = setTimeout(() => reject(new Error('Traefik output streams did not close before the shutdown deadline.')), settings.runtime.shutdownTimeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(closeTimer);
+        }
+        await cleanup();
       },
     });
     if (!control) throw new Error('Traefik process did not receive a managed-control server.');
@@ -340,18 +369,11 @@ export async function runManagedTraefikService(
       await waitForChildExit(child, settings.runtime.shutdownTimeoutMs);
     }
   } finally {
-    const errors: unknown[] = [];
-    try { await binaryMonitor?.stop(); } catch (error) { errors.push(error); }
-    try { await control?.close(); } catch (error) { errors.push(error); }
-    if (logSink && !logSink.destroyed) {
-      try {
-        logSink.end();
-        await finished(logSink);
-      } catch (error) { if (error !== logFailure) errors.push(error); }
+    if (stopping) {
+      await control?.close();
+      await cleanup();
+    } else {
+      try { await cleanup(); } finally { await control?.close(); }
     }
-    try { await managedLog?.close(); } catch (error) { errors.push(error); }
-    if (logFailure) errors.push(logFailure);
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) throw new AggregateError(errors, 'Traefik shutdown failed.');
   }
 }

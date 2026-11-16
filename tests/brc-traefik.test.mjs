@@ -679,7 +679,9 @@ test('service order keeps Relay behind Traefik and routes Agent traffic through 
   assert.equal(services[1].env.BRC_DATA_ROOT, brcPaths.root);
   assert.equal(services[1].env.BRC_TRAEFIK_PORT, '13001');
   assert.equal(services[1].env.BRC_RUNTIME_STARTUP_TIMEOUT_MS, '12345');
+  assert.equal(services[0].env.BRC_RUNTIME_SHUTDOWN_TIMEOUT_MS, '6789');
   assert.equal(services[1].env.BRC_RUNTIME_SHUTDOWN_TIMEOUT_MS, '6789');
+  assert.equal(services[2].env.BRC_RUNTIME_SHUTDOWN_TIMEOUT_MS, '6789');
   assert.equal(services[0].env.BRC_LOG_ROTATE_MIB, '2');
   assert.equal(services[1].env.BRC_LOG_ROTATE_MIB, '2');
   assert.equal(services[2].env.BRC_LOG_ROTATE_MIB, '2');
@@ -843,10 +845,13 @@ test('managed Traefik health degrades on diagnostic log failure', { skip: realTr
     enabled: true, component: 'traefik',
     log: { async write() { throw failure; }, async flush() {} },
   });
+  const previousExitCode = process.exitCode;
+  t.after(() => { process.exitCode = previousExitCode; });
   const running = runManagedTraefikService(settings, diagnostics, {
     controlServer: createServer(),
     controlIdentity: { token: 'test-control-token', readyFile, id: 'test-traefik', service: 'traefik' },
   });
+  const outcome = running.then(() => undefined, (error) => error);
   try {
     let ready;
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -864,10 +869,12 @@ test('managed Traefik health degrades on diagnostic log failure', { skip: realTr
     assert.equal(health.state, 'degraded');
     assert.match(health.detail, /diagnostic write failed/);
     assert.equal(await httpStatus(healthPort, '/ping'), 200);
-    await fetch(`http://127.0.0.1:${ready.port}/shutdown`, {
+    const shutdown = await fetch(`http://127.0.0.1:${ready.port}/shutdown`, {
       method: 'POST', headers: { authorization: 'Bearer test-control-token' },
     });
-    await running;
+    assert.equal(shutdown.status, 500);
+    assert.match((await shutdown.json()).error.message, /diagnostic write failed/);
+    assert.match(String(await outcome), /diagnostic write failed/);
     await assert.rejects(diagnostics.stop(), failure);
   } finally {
     if (process.env.BRC_TRAEFIK_ROOT === brcPaths.traefik) {

@@ -22,7 +22,7 @@ export interface ManagedServiceSpec {
 export interface ProcessController {
   start(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<void>;
   stop(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<void>;
-  status(spec: ManagedServiceSpec): Promise<ServiceStatus>;
+  status(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<ServiceStatus>;
   statusMany?(specs: readonly ManagedServiceSpec[]): Promise<ServiceStatus[]>;
 }
 

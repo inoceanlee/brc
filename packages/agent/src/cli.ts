@@ -130,7 +130,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
 }
 
 function sanitizeError(message: string): string {
-  return message.replace(/Bearer\\s+\\S+/gi, 'Bearer [redacted]').replace(/(deviceToken|token|secret)(["'=:\\s]+)[^\\s,}]+/gi, '$1$2[redacted]');
+  return message.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/(deviceToken|token|secret)(["'=:\s]+)[^\s,}]+/gi, '$1$2[redacted]');
 }
 
 const requireFromHere = createRequire(import.meta.url);

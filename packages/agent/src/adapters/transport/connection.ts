@@ -10,7 +10,7 @@ import type { AgentLogger, LogLevel } from '../telemetry/logger.js';
 import type { AgentInvocation } from '../../commands/parser.js';
 import { AgentUsageError } from '../../commands/parser.js';
 import { readTokenFromStdin } from '../terminal/secret-input.js';
-import type { AgentConfigManager } from '../storage/config-manager.js';
+import { resolveAgentSettings, type AgentConfigManager } from '../storage/config-manager.js';
 import type { ToolHistory } from '../telemetry/toolHistory.js';
 import type { ToolDispatcher } from '../mcp/dispatcher.js';
 import type { AgentContext } from '../../context.js';
@@ -40,15 +40,19 @@ export async function flushAgentHistory(
   timeoutMs = AGENT_DEFAULTS.historyFlushTimeoutMs,
 ): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
   try {
     await Promise.race([
       history.cleanup(),
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('History flush timed out.')), timeoutMs);
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('History flush timed out.'));
+        }, timeoutMs);
       }),
     ]);
   } catch {
-    report('Agent history could not be flushed before shutdown.');
+    report(timedOut ? 'Agent history flush timed out.' : 'Agent history flush failed.');
   } finally {
     clearTimeout(timer);
   }
@@ -92,7 +96,7 @@ export async function runAgentConnection(
     diagnostics.log(message, { level: severity, source: { file: 'agent/logger.ts', function: 'log' } });
     if (severity === 'error') process.stderr.write('[agent:error] ' + message + '\n');
   });
-  let control: ManagedControlServer | undefined;
+  let controlStarting: Promise<ManagedControlServer | undefined> | undefined;
   let client: WsClient | undefined;
   let awaitingPairing = false;
   let stopPromise: Promise<void> | undefined;
@@ -101,52 +105,97 @@ export async function runAgentConnection(
     diagnostics.log(message, { level, source: { file: 'agent/connection.ts', function: 'log' } });
     if (!inv.quiet || level === 'error') process.stderr.write('[' + level + '] ' + message + '\n');
   };
-  const unbindHistoryFailure = services.bindHistoryFailureReporter((message) => log('error', message));
+  let historyFailure: string | undefined;
+  const unbindHistoryFailure = services.bindHistoryFailureReporter((message) => {
+    historyFailure ??= message;
+    log('error', message);
+  });
   const abort = new AbortController();
-  const stop = (signal?: 'SIGINT' | 'SIGTERM'): Promise<void> => stopPromise ??= (async () => {
+  const stop = (): Promise<void> => stopPromise ??= (async () => {
+    const errors: unknown[] = [];
     abort.abort(new Error('Agent shutdown requested.'));
-    client?.stop();
-    const pendingCalls = Promise.all([services.dispatcher.stop(), services.searchManager.stop()]);
-    try {
-      try {
-        await control?.close();
-      } finally {
-        let drainTimer: NodeJS.Timeout | undefined;
-        try {
-          await Promise.race([
-            pendingCalls,
-            new Promise<never>((_, reject) => {
-              drainTimer = setTimeout(() => reject(new Error('Agent tool shutdown timed out.')), AGENT_DEFAULTS.historyFlushTimeoutMs);
-            }),
-          ]);
-        } catch {
-          log('error', 'Agent tool calls did not finish before shutdown; their history may be incomplete.');
-        } finally {
-          clearTimeout(drainTimer);
-        }
-        try {
-          await flushAgentHistory(services.toolHistory, (message) => log('error', message));
-        } finally {
-          await diagnostics.stop();
-        }
-      }
-    } finally {
-      unbindHistoryFailure();
-      unbindLog();
-      if (signal) process.exit(signal === 'SIGINT' ? 130 : 143);
+    const pendingCalls = Promise.allSettled([services.dispatcher.stop(), services.searchManager.stop()]);
+    try { await client?.stop(); } catch (error) {
+      const timeout = error instanceof Error && error.message === 'Agent WebSocket did not close before the shutdown deadline.';
+      errors.push(new Error(timeout ? error.message : 'Agent WebSocket shutdown failed.'));
     }
+    let drainTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        pendingCalls.then((results) => {
+          if (results[0].status === 'rejected') {
+            const failure = results[0].reason;
+            const usageFailure = failure instanceof AggregateError && failure.errors.length > 0
+              && failure.errors.every((item: unknown) => item instanceof Error && item.message === 'Agent usage storage write failed.');
+            errors.push(new Error(usageFailure ? 'Agent usage storage write failed.' : 'Agent tool shutdown failed.'));
+          }
+          if (results[1].status === 'rejected') errors.push(new Error('Agent search shutdown failed.'));
+        }),
+        new Promise<never>((_, reject) => {
+          drainTimer = setTimeout(() => reject(new Error('Agent tool shutdown timed out.')), AGENT_DEFAULTS.historyFlushTimeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      clearTimeout(drainTimer);
+    }
+    try {
+      await flushAgentHistory(services.toolHistory, (message) => {
+        log('error', message);
+        errors.push(new Error(message));
+      });
+    } catch { errors.push(new Error('Agent history flush failed.')); }
+    if (historyFailure) errors.push(new Error(historyFailure));
+    try { await diagnostics.stop(); } catch { errors.push(new Error('Agent diagnostics shutdown failed.')); }
+    unbindHistoryFailure();
+    unbindLog();
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join('; '));
   })();
-  process.once('SIGINT', () => { void stop('SIGINT'); });
-  process.once('SIGTERM', () => { void stop('SIGTERM'); });
+  const stopForSignal = (signal: 'SIGINT' | 'SIGTERM') => {
+    void (async () => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          stop(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Agent shutdown timed out.')), AGENT_DEFAULTS.historyFlushTimeoutMs);
+          }),
+        ]);
+      } catch (error) {
+        process.stderr.write(`Agent shutdown failed: ${String(error)}\n`);
+      } finally {
+        clearTimeout(timer);
+      }
+      try {
+        await Promise.race([
+          (async () => { await (await controlStarting)?.close(); })(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Agent control startup or closure timed out.')), AGENT_DEFAULTS.historyFlushTimeoutMs);
+          }),
+        ]);
+      } catch {
+        process.stderr.write('Agent control shutdown failed.\n');
+      } finally {
+        clearTimeout(timer);
+      }
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    })();
+  };
+  process.once('SIGINT', () => stopForSignal('SIGINT'));
+  process.once('SIGTERM', () => stopForSignal('SIGTERM'));
   try {
-    control = await startManagedControlServer({
+    const settings = resolveAgentSettings((await services.settingsStore.read()).settings, services.env);
+    controlStarting = startManagedControlServer({
       server: controlServer,
+      shutdownTimeoutMs: settings.runtime.shutdownTimeoutMs,
       token: services.env.BRC_CONTROL_TOKEN,
       readyFile: services.env.BRC_CONTROL_READY_FILE,
       id: services.env.BRC_MANAGED_ID,
       service: services.env.BRC_MANAGED_SERVICE,
       onStopError: (error) => {
-        log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.stderr.write(`BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 1;
       },
       health: () => {
@@ -160,6 +209,7 @@ export async function runAgentConnection(
       },
       stop: () => stop(),
     });
+    await controlStarting;
     let creds: DeviceCredentials;
     if (manual) creds = manual;
     else if (saved && (!relay || saved.relayUrl === relay)) {
@@ -192,13 +242,16 @@ export async function runAgentConnection(
     });
     client.start();
   } catch (error) {
-    try {
-      await stop();
-    } catch (shutdownError) {
-      const primary = error instanceof Error ? error.message : String(error);
-      const secondary = shutdownError instanceof Error ? shutdownError.message : String(shutdownError);
-      throw new AggregateError([error, shutdownError], `${primary}; Agent shutdown failed: ${secondary}`, { cause: error });
+    const shutdownRequested = abort.signal.aborted;
+    const errors: unknown[] = [];
+    try { await stop(); } catch (shutdownError) { errors.push(shutdownError); }
+    if (!shutdownRequested) {
+      try { await (await controlStarting)?.close(); } catch { errors.push(new Error('Agent control shutdown failed.')); }
     }
-    throw error;
+    if (errors.length) {
+      const detail = errors.map((item) => item instanceof Error ? item.message : 'Agent shutdown failed.').join('; ');
+      throw new AggregateError([new Error('Agent startup failed.'), ...errors], `Agent startup failed; Agent shutdown failed: ${detail}`);
+    }
+    if (!shutdownRequested) throw error;
   }
 }

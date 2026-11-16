@@ -68,7 +68,7 @@ const service = process.env.BRC_MANAGED_SERVICE;
 const server = createServer((req, res) => {
   if (req.socket.remoteAddress !== '127.0.0.1' || req.headers.authorization !== 'Bearer ' + token) return res.writeHead(404).end();
   if (req.method === 'GET' && req.url === '/health') return res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, state: 'running', detail: 'ready' }));
-  if (req.method === 'POST' && req.url === '/shutdown') { res.writeHead(202).end(); setTimeout(() => process.exit(0), 20); return; }
+  if (req.method === 'POST' && req.url === '/shutdown') { res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true })); setTimeout(() => process.exit(0), 20); return; }
   res.writeHead(404).end();
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

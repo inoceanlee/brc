@@ -54,6 +54,7 @@ export function createDefaultServices(
   const relayEnv: NodeJS.ProcessEnv = {
     ...baseEnv,
     ...diagnosticEnvironment(settings, paths),
+    BRC_RUNTIME_SHUTDOWN_TIMEOUT_MS: String(settings.runtime.shutdownTimeoutMs),
     BRC_LOG_ROTATE_MIB: String(settings.logs.rotateMiB),
     BRC_AUDIT_RETENTION_DAYS: String(settings.audit.retentionDays),
     BRC_AUDIT_MAX_ENTRIES: String(settings.audit.maxEntries),
@@ -81,6 +82,7 @@ export function createDefaultServices(
   const agentEnv: NodeJS.ProcessEnv = {
     ...baseEnv,
     ...diagnosticEnvironment(settings, paths),
+    BRC_RUNTIME_SHUTDOWN_TIMEOUT_MS: String(settings.runtime.shutdownTimeoutMs),
     BRC_LOG_ROTATE_MIB: String(settings.logs.rotateMiB),
     BRC_DATA_ROOT: paths.root,
     BRC_CONFIG_FILE: path.join(paths.config, 'brc.yaml'),

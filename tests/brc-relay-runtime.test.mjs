@@ -63,11 +63,13 @@ test('relay CLI isolated start, health, managed logs, diagnostic snapshot and sh
     }
     assert.ok(existsSync(env.BRC_CONTROL_READY_FILE), 'managed control ready file missing');
     const ready = JSON.parse(readFileSync(env.BRC_CONTROL_READY_FILE, 'utf8'));
+    const exited = once(child, 'exit');
     const shutdown = await fetch(`http://127.0.0.1:${ready.port}/shutdown`, {
       method: 'POST', headers: { authorization: 'Bearer ' + env.BRC_CONTROL_TOKEN },
     });
-    assert.equal(shutdown.status, 202);
-    const [code] = await once(child, 'exit');
+    assert.equal(shutdown.status, 200);
+    assert.deepEqual(await shutdown.json(), { ok: true });
+    const [code] = await exited;
     assert.equal(code, 0, stdout + stderr);
     child = undefined;
     assert.match(readFileSync(path.join(dir, 'relay.log'), 'utf8'), /brc-relay listening/);

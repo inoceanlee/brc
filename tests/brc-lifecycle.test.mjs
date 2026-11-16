@@ -85,7 +85,9 @@ const control = createServer((req, res) => {
   }
   if (req.method === 'POST' && req.url === '/shutdown') {
     if (process.env.BRC_TEST_SHUTDOWN_TRACE) appendFileSync(process.env.BRC_TEST_SHUTDOWN_TRACE, 'shutdown\\n');
-    res.writeHead(202).end();
+    if (mode === 'shutdown-error') res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: false, error: { message: 'cleanup failed' } }));
+    else if (mode === 'legacy-shutdown') res.writeHead(202).end();
+    else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true }));
     if (mode !== 'hang') setTimeout(() => process.exit(0), 20);
     return;
   }
@@ -142,6 +144,47 @@ async function makeHarness(t, options = {}) {
   });
   return { root, paths: runtimePaths, spec, manager, entrypoint };
 }
+
+test('manager reports a service shutdown failure after process exit', async (t) => {
+  const harness = await makeHarness(t, { mode: 'shutdown-error' });
+  await harness.manager.start(harness.spec);
+  await assert.rejects(harness.manager.stop(harness.spec), /cleanup failed/);
+});
+
+test('manager receives the managed service shutdown deadline response', { timeout: 10000 }, async (t) => {
+  const harness = await makeHarness(t, { shutdownTimeoutMs: 300 });
+  const sharedUrl = new URL('../packages/shared/dist/managed-control.js', import.meta.url).href;
+  await writeFile(harness.entrypoint, `
+    import { createServer } from 'node:http';
+    import { startManagedControlServer } from ${JSON.stringify(sharedUrl)};
+    await startManagedControlServer({
+      server: createServer(),
+      token: process.env.BRC_CONTROL_TOKEN,
+      readyFile: process.env.BRC_CONTROL_READY_FILE,
+      id: process.env.BRC_MANAGED_ID,
+      service: process.env.BRC_MANAGED_SERVICE,
+      shutdownTimeoutMs: 300,
+      health: () => ({ state: 'running', detail: 'ready' }),
+      stop: () => new Promise(() => {}),
+      onStopError: () => { process.exitCode = 1; },
+    });
+  `);
+  try {
+    await harness.manager.start(harness.spec);
+    await assert.rejects(harness.manager.stop(harness.spec), (error) =>
+      /HTTP 500/.test(error.message) && /deadline/.test(error.message));
+  } finally {
+    try { await harness.manager.stop(harness.spec); } catch (error) {
+      if ((await harness.manager.status(harness.spec)).state !== 'stopped') throw error;
+    }
+  }
+});
+
+test('manager rejects the legacy accepted-only shutdown response', async (t) => {
+  const harness = await makeHarness(t, { mode: 'legacy-shutdown' });
+  await harness.manager.start(harness.spec);
+  await assert.rejects(harness.manager.stop(harness.spec), /shutdown was not confirmed/);
+});
 
 test('batch inspection validates and deduplicates process IDs', async () => {
   assert.deepEqual(await inspectProcesses([]), new Map());
@@ -372,7 +415,10 @@ test('service stop forwards cancellation and does not stop later services', asyn
   const stopped = [];
   const services = ['relay', 'agent'].map((name) => ({ name, entrypoint: '/test', workspaceRoot: '/', cwd: '/' }));
   const processes = {
-    status: async (spec) => ({ name: spec.name, state: 'running', pid: 1, detail: '' }),
+    status: async (spec, signal) => {
+      assert.equal(signal, controller.signal);
+      return { name: spec.name, state: 'running', pid: 1, detail: '' };
+    },
     stop: async (spec, signal) => {
       stopped.push(spec.name);
       assert.equal(signal, controller.signal);
@@ -535,14 +581,11 @@ test('protects managed control endpoints and runs shutdown once', async () => {
       headers: { authorization: `Bearer ${env.BRC_CONTROL_TOKEN}` },
     });
     assert.deepEqual(await health.json(), { ok: true, state: 'running', detail: 'Relay ready.' });
-    assert.equal((await fetch(`${endpoint}/shutdown`, {
+    const response = await fetch(`${endpoint}/shutdown`, {
       method: 'POST',
       headers: { authorization: `Bearer ${env.BRC_CONTROL_TOKEN}` },
-    })).status, 202);
-    assert.equal((await fetch(`${endpoint}/shutdown`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${env.BRC_CONTROL_TOKEN}` },
-    })).status, 202);
+    });
+    assert.equal(response.status, 200);
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(stops, ['stop']);
   } finally {
@@ -567,7 +610,7 @@ test('managed control sends shutdown failures to its supplied error handler', as
     id: '00000000-0000-4000-8000-000000000001',
     service: 'relay',
     health: () => ({ state: 'running', detail: 'ready' }),
-    stop: () => { throw new Error('shutdown timeout'); },
+    stop: () => { throw new AggregateError([new Error('shutdown timeout'), new Error('flush failed')], 'cleanup failed'); },
     onStopError: (error) => report(error),
   });
   try {
@@ -575,8 +618,11 @@ test('managed control sends shutdown failures to its supplied error handler', as
       method: 'POST',
       headers: { authorization: `Bearer ${'a'.repeat(64)}` },
     });
-    assert.equal(response.status, 202);
-    assert.match((await failure).message, /shutdown timeout/);
+    assert.equal(response.status, 500);
+    const message = (await response.json()).error.message;
+    assert.match(message, /shutdown timeout/);
+    assert.match(message, /flush failed/);
+    assert.match((await failure).message, /cleanup failed/);
   } finally {
     await control.close();
   }
@@ -961,17 +1007,55 @@ test('leaves an unrelated listener untouched when a service port is occupied', a
 test('force-stops only identity-matched process after controlled shutdown times out', async (t) => {
   const harness = await makeHarness(t, { mode: 'hang', shutdownTimeoutMs: 150 });
   const neighbor = service('agent', harness.entrypoint, harness.root, { BRC_TEST_MODE: 'normal' });
+  try {
+    await harness.manager.start(harness.spec);
+    await harness.manager.start(neighbor);
+    const neighborRecord = await harness.manager.status(neighbor);
+    await assert.rejects(harness.manager.stop(harness.spec), /forcibly stopped/i);
+    assert.equal((await harness.manager.status(harness.spec)).state, 'stopped');
+    const neighborStatus = await harness.manager.status(neighbor);
+    assert.equal(neighborStatus.pid, neighborRecord.pid);
+    assert.equal(neighborStatus.state, 'running');
+  } finally {
+    try {
+      await harness.manager.stop(neighbor);
+    } finally {
+      try { await harness.manager.stop(harness.spec); } catch (error) {
+        if ((await harness.manager.status(harness.spec)).state !== 'stopped') throw error;
+      }
+    }
+  }
+});
+
+test('cancellation after a forced signal reports unconfirmed exit and preserves the record', async (t) => {
+  const cancellation = new AbortController();
+  let stopping = false;
+  const harness = await makeHarness(t, {
+    mode: 'hang',
+    shutdownTimeoutMs: 500,
+    processOptions: {
+      inspectProcess: async (pid) => {
+        const identity = await inspectProcess(pid);
+        if (stopping && !identity) cancellation.abort(new Error('stop cancelled'));
+        return identity;
+      },
+    },
+  });
   await harness.manager.start(harness.spec);
-  await harness.manager.start(neighbor);
-  const neighborRecord = await harness.manager.status(neighbor);
-
-  await harness.manager.stop(harness.spec);
-
-  assert.equal((await harness.manager.status(harness.spec)).state, 'stopped');
-  const neighborStatus = await harness.manager.status(neighbor);
-  assert.equal(neighborStatus.pid, neighborRecord.pid);
-  assert.equal(neighborStatus.state, 'running');
-  await harness.manager.stop(neighbor);
+  const filename = path.join(harness.paths.runtime, 'relay.json');
+  try {
+    stopping = true;
+    await assert.rejects(harness.manager.stop(harness.spec, cancellation.signal), (error) =>
+      /forced termination signal was sent/.test(error.message)
+      && /exit is not yet confirmed/.test(error.message)
+      && /stop cancelled/.test(error.message));
+    assert.ok(await readFile(filename, 'utf8'));
+  } finally {
+    stopping = false;
+    try { await harness.manager.stop(harness.spec); } catch (error) {
+      if ((await harness.manager.status(harness.spec)).state !== 'stopped') throw error;
+    }
+  }
 });
 
 test('refuses forced termination when the PID identity changes after shutdown', async (t) => {
@@ -995,7 +1079,7 @@ test('refuses forced termination when the PID identity changes after shutdown', 
   } finally {
     stopping = false;
     harness.manager.updateRuntimeSettings({ startupTimeoutMs: 3000, shutdownTimeoutMs: 5000 });
-    await harness.manager.stop(harness.spec);
+    await assert.rejects(harness.manager.stop(harness.spec), /forcibly stopped/i);
   }
 });
 

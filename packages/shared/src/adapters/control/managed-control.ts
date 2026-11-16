@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { DEFAULT_SETTINGS } from '../../config/core/settings.js';
 
 export interface ManagedHealth {
   state: 'running' | 'degraded' | 'pairing';
@@ -18,6 +19,8 @@ export interface ManagedControlHandlerOptions {
   health: () => ManagedHealth | Promise<ManagedHealth>;
   stop: () => void | Promise<void>;
   onStopError: (error: unknown) => void;
+  onShutdownStart?: () => void;
+  onShutdownResponse?: () => void;
 }
 
 export interface ManagedControlIdentity {
@@ -26,12 +29,20 @@ export interface ManagedControlIdentity {
   pid: number;
   port: number;
 }
+function shutdownErrorMessage(error: unknown): string {
+  if (error instanceof AggregateError) {
+    const causes = Array.from(error.errors, shutdownErrorMessage);
+    return causes.length ? `${error.message}: ${causes.join('; ')}` : error.message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 
 export function createManagedControlRequestListener(options: ManagedControlHandlerOptions): (
   request: IncomingMessage,
   response: ServerResponse,
 ) => void {
-  let stopping = false;
+  let stopping: Promise<{ ok: true } | { ok: false; error: { message: string } }> | undefined;
   const expected = Buffer.from(options.token);
   return (request, response) => {
     const address = request.socket.remoteAddress ?? '';
@@ -57,13 +68,27 @@ export function createManagedControlRequestListener(options: ManagedControlHandl
     }
 
     if (request.method === 'POST' && request.url === '/shutdown') {
-      response.writeHead(202).end();
-      if (!stopping) {
-        stopping = true;
-        setImmediate(() => {
-          void Promise.resolve().then(() => options.stop()).catch((error) => options.onStopError(error));
-        });
-      }
+      options.onShutdownStart?.();
+      stopping ??= Promise.resolve().then(() => options.stop()).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => {
+          try { options.onStopError(error); } catch {}
+          return { ok: false as const, error: { message: shutdownErrorMessage(error) } };
+        },
+      );
+      let completed = false;
+      const complete = () => {
+        if (completed) return;
+        completed = true;
+        options.onShutdownResponse?.();
+      };
+      response.once('finish', complete);
+      response.once('close', complete);
+      void stopping.then((result) => {
+        if (response.destroyed) return;
+        response.writeHead(result.ok ? 200 : 500, { 'content-type': 'application/json', connection: 'close' });
+        response.end(JSON.stringify(result));
+      });
       return;
     }
 
@@ -89,6 +114,7 @@ export async function startManagedControlServer(options: {
   service?: string;
   health: () => ManagedHealth | Promise<ManagedHealth>;
   stop: () => void | Promise<void>;
+  shutdownTimeoutMs?: number;
   onStopError: (error: unknown) => void;
 }): Promise<ManagedControlServer | undefined> {
   const { token, readyFile, id, service } = options;
@@ -96,22 +122,74 @@ export async function startManagedControlServer(options: {
   if (!token || !readyFile || !id || !service) throw new Error('Incomplete BRC managed-control environment.');
 
   const server = options.server;
+  let shutdownResponse: Promise<void> | undefined;
+  let finishResponse: (() => void) | undefined;
+  let business: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
+  const closeServer = (): Promise<void> => closing ??= (async () => {
+    await business?.catch(() => undefined);
+    let timedOut = false;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        shutdownResponse,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => { timedOut = true; resolve(); }, options.shutdownTimeoutMs ?? DEFAULT_SETTINGS.runtime.shutdownTimeoutMs);
+          timer.unref();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    await new Promise<void>((resolve, reject) => {
+      if (!server.listening) return resolve();
+      const deadline = setTimeout(() => server.closeAllConnections(), 1_000);
+      deadline.unref();
+      server.close((error) => {
+        clearTimeout(deadline);
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+    if (timedOut) throw new Error('Managed shutdown did not finish before control server closure.');
+  })();
   server.on('request', createManagedControlRequestListener({
     token,
     health: options.health,
-    stop: options.stop,
+    stop: () => business ??= Promise.resolve().then(() => options.stop()),
     onStopError: options.onStopError,
+    onShutdownStart: () => {
+      if (!business) {
+        let timer: NodeJS.Timeout | undefined;
+        let expired = false;
+        const timeoutMs = options.shutdownTimeoutMs ?? DEFAULT_SETTINGS.runtime.shutdownTimeoutMs;
+        const deadline = Date.now() + timeoutMs;
+        const actual = Promise.resolve().then(() => options.stop());
+        void actual.catch(() => {
+          if (expired) {
+            try { options.onStopError(new Error('Managed shutdown failed after the deadline.')); } catch {}
+          }
+        });
+        business = Promise.race([
+          actual.then(() => {
+            if (Date.now() >= deadline) throw new Error('Managed shutdown did not finish before the deadline.');
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              expired = true;
+              reject(new Error('Managed shutdown did not finish before the deadline.'));
+            }, timeoutMs);
+            timer.unref();
+          }),
+        ]).finally(() => clearTimeout(timer));
+      }
+      shutdownResponse ??= new Promise<void>((resolve) => { finishResponse = resolve; });
+      void closeServer().catch(options.onStopError);
+    },
+    onShutdownResponse: () => {
+      finishResponse?.();
+    },
   }));
-  const closeServer = () => new Promise<void>((resolve, reject) => {
-    if (!server.listening) return resolve();
-    const deadline = setTimeout(() => server.closeAllConnections(), 1_000);
-    deadline.unref();
-    server.close((error) => {
-      clearTimeout(deadline);
-      if (error) reject(error);
-      else resolve();
-    });
-  });
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);

@@ -17,32 +17,39 @@ import { loadConfig } from '../dist/adapters/http/config.js';
 import { HmacSessionSigner, Sessions } from '../dist/adapters/http/sessions.js';
 import { SessionPolicy } from '../dist/core/auth/sessions.js';
 import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js';
+import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpServer } from '../dist/adapters/http/mcp/server.js';
 
 test('MCP factory closes the server after handler registration fails', async (t) => {
-  for (const failure of ['none', 'sync', 'async']) {
-    await t.test(failure, async (t) => {
-      const original = new Error('handler registration failed');
-      const errors = [];
-      let closes = 0;
-      t.mock.method(McpServer.prototype, 'setRequestHandler', () => { throw original; });
-      t.mock.method(McpServer.prototype, 'close', () => {
-        closes++;
-        if (failure === 'sync') throw new Error('close failed synchronously');
-        if (failure === 'async') return Promise.reject(new Error('close failed asynchronously'));
-        return Promise.resolve();
+  for (const target of [ListToolsRequestSchema, CallToolRequestSchema]) {
+    for (const failure of ['none', 'sync', 'async']) {
+      await t.test(`${target === ListToolsRequestSchema ? 'list' : 'call'}-${failure}`, async (t) => {
+        const original = new Error('handler registration failed');
+        const errors = [];
+        let closes = 0;
+        const originalHandler = McpServer.prototype.setRequestHandler;
+        t.mock.method(McpServer.prototype, 'setRequestHandler', function (schema, handler) {
+          if (schema === target) throw original;
+          return originalHandler.call(this, schema, handler);
+        });
+        t.mock.method(McpServer.prototype, 'close', () => {
+          closes++;
+          if (failure === 'sync') throw new Error('close failed synchronously');
+          if (failure === 'async') return Promise.reject(new Error('close failed asynchronously'));
+          return Promise.resolve();
+        });
+        assert.throws(() => createMcpServer({}, {}, { userId: 'user', clientId: 'client' }, 'test',
+          (level, message) => errors.push({ level, message })), (error) => error === original);
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(closes, 1);
+        if (failure === 'none') assert.deepEqual(errors, []);
+        else {
+          assert.equal(errors.length, 1);
+          assert.equal(errors[0].level, 'error');
+          assert.ok(errors[0].message.includes('close failed'));
+        }
       });
-      assert.throws(() => createMcpServer({}, {}, { userId: 'user', clientId: 'client' }, 'test',
-        (level, message) => errors.push({ level, message })), (error) => error === original);
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(closes, 1);
-      if (failure === 'none') assert.deepEqual(errors, []);
-      else {
-        assert.equal(errors.length, 1);
-        assert.equal(errors[0].level, 'error');
-        assert.ok(errors[0].message.includes('close failed'));
-      }
-    });
+    }
   }
 });
 
@@ -68,7 +75,11 @@ test('MCP request cleanup covers response close and request failures', async (t)
       const errors = [];
       const registrationFailure = new Error('handler registration failed');
       if (mode === 'registration') {
-        t.mock.method(McpServer.prototype, 'setRequestHandler', () => { throw registrationFailure; });
+        const originalHandler = McpServer.prototype.setRequestHandler;
+        t.mock.method(McpServer.prototype, 'setRequestHandler', function (schema, handler) {
+          if (schema === ListToolsRequestSchema) throw registrationFailure;
+          return originalHandler.call(this, schema, handler);
+        });
       }
       t.mock.method(McpServer.prototype, 'connect', async () => {
         if (mode === 'connect') throw new Error('connect failure');

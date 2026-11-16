@@ -28,6 +28,8 @@ export class WsClient {
   private stopped = false;
   private backoff: number = DEFAULTS.reconnectMinMs;
   private pongTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private stopPromise: Promise<void> | undefined;
   private lastUnauthorized = false;
   private unauthorizedCount = 0;
   private readonly log: NonNullable<WsClientOptions['log']>;
@@ -49,13 +51,29 @@ export class WsClient {
     return u.toString();
   }
 
-  start(): void { this.stopped = false; this.connect(); }
+  start(): void { this.stopped = false; this.stopPromise = undefined; this.connect(); }
 
-  stop(): void {
-    this.stopped = true;
-    this.clearPongTimer();
-    this.ws?.close(1000, 'agent stopped');
-    this.ws = null;
+  stop(): Promise<void> {
+    return this.stopPromise ??= (async () => {
+      this.stopped = true;
+      this.clearPongTimer();
+      clearTimeout(this.reconnectTimer ?? undefined);
+      this.reconnectTimer = null;
+      const ws = this.ws;
+      if (!ws || ws.readyState === WebSocket.CLOSED) return;
+      await new Promise<void>((resolve, reject) => {
+        let deadline: NodeJS.Timeout;
+        const onClose = () => { clearTimeout(deadline); resolve(); };
+        ws.once('close', onClose);
+        deadline = setTimeout(() => {
+          ws.off('close', onClose);
+          ws.terminate();
+          reject(new Error('Agent WebSocket did not close before the shutdown deadline.'));
+        }, DEFAULTS.reconnectMinMs);
+        if (ws.readyState === WebSocket.CONNECTING) ws.terminate();
+        else ws.close(1000, 'agent stopped');
+      });
+    })();
   }
 
   private connect(): void {
@@ -93,7 +111,7 @@ export class WsClient {
         return;
       }
       this.log('warn', `Disconnected (${code} ${reason?.toString() || ''}); retry in ${this.backoff} ms`);
-      setTimeout(() => this.connect(), this.backoff);
+      this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.connect(); }, this.backoff);
       this.backoff = Math.min(this.backoff * 2, DEFAULTS.reconnectMaxMs);
     });
 
@@ -105,12 +123,13 @@ export class WsClient {
     if (this.opts.onUnauthorized && this.unauthorizedCount <= 1) {
       this.stopped = true;
       const handled = await this.opts.onUnauthorized().catch((e) => { this.log('error', `re-pair failed: ${e instanceof Error ? e.message : String(e)}`); return false; });
+      if (this.stopped && this.stopPromise) return;
       if (handled) return;
       this.stopped = false;
     }
     const wait = Math.min(DEFAULTS.reconnectMaxMs, 10_000 * this.unauthorizedCount);
     this.log('error', `Unauthorized (code ${code}); retry in ${wait} ms`);
-    setTimeout(() => this.connect(), wait);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.connect(); }, wait);
   }
 
   private async onMessage(raw: Buffer): Promise<void> {
@@ -128,7 +147,10 @@ export class WsClient {
         return this.handleCall(msg);
       case 'error':
         this.log('error', `Relay error ${msg.code}: ${msg.message}`);
-        if (msg.fatal) this.stop();
+        if (msg.fatal) {
+          try { await this.stop(); }
+          catch (error) { this.log('error', `WebSocket shutdown failed: ${error instanceof Error ? error.message : String(error)}`); }
+        }
         return;
     }
   }

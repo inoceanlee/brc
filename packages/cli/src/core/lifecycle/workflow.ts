@@ -123,7 +123,7 @@ export class ServiceManager {
     for (const service of [...this.services].reverse()) {
       checkCancellation();
       try {
-        const current = await this.processes.status(service);
+        const current = await this.processes.status(service, signal);
         signal?.throwIfAborted();
         if (current.state !== 'stopped') await this.processes.stop(service, signal);
       } catch (error) {

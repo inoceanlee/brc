@@ -26,7 +26,7 @@ export interface ManagedProcessRecord extends ProcessIdentity {
   controlToken: string;
 }
 
-export type ProcessInspector = (pid: number) => ProcessIdentity | null | Promise<ProcessIdentity | null>;
+export type ProcessInspector = (pid: number, signal?: AbortSignal) => ProcessIdentity | null | Promise<ProcessIdentity | null>;
 
 export interface ProcessManagerOptions {
   startupTimeoutMs?: number;
@@ -296,12 +296,17 @@ export class ProcessManager implements ControlHealthPort {
     } catch (error) {
       let cleanupError: unknown;
       try {
-        if (record) await this.stopRecord(spec, record, true);
+        if (record) await this.stopRecord(spec, record, true, undefined, true);
         else if (child?.pid) await this.stopUnrecorded(spec, child.pid, id, token, readyFile);
       } catch (failure) {
         cleanupError = failure;
       }
-      if (cleanupError) throw new AggregateError([error, cleanupError], `${spec.name} failed to start and could not be safely rolled back.`);
+      if (cleanupError) {
+        const reason = signal?.aborted ? signal.reason : error;
+        const combined = new AggregateError([reason, cleanupError], `${spec.name} startup failed: ${processErrorMessage(reason)}; rollback reported: ${processErrorMessage(cleanupError)}`);
+        const exitCode = reason && typeof reason === 'object' && 'exitCode' in reason ? reason.exitCode : undefined;
+        throw Object.assign(combined, { exitCode });
+      }
       if (signal?.aborted) throw signal.reason ?? error;
       throw error;
     } finally {
@@ -333,7 +338,8 @@ export class ProcessManager implements ControlHealthPort {
     }
   }
 
-  async status(spec: ManagedServiceSpec): Promise<ServiceStatus> {
+  async status(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<ServiceStatus> {
+    signal?.throwIfAborted();
     if (this.starting.has(spec.name)) {
       return { name: spec.name, state: 'starting', pid: this.starting.get(spec.name) ?? null, detail: 'Service startup is in progress.' };
     }
@@ -341,14 +347,16 @@ export class ProcessManager implements ControlHealthPort {
     try {
       record = await this.readRecord(spec);
     } catch (error) {
+      signal?.throwIfAborted();
       return { name: spec.name, state: 'degraded', pid: null, detail: processErrorMessage(error) };
     }
     if (!record) return { name: spec.name, state: 'stopped', pid: null, detail: 'No managed process record.' };
 
     let identity: ProcessIdentity | null;
     try {
-      identity = await this.inspectForStatus(record.pid);
+      identity = await this.inspectForStatus(record.pid, signal);
     } catch (error) {
+      signal?.throwIfAborted();
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: `Cannot verify process identity: ${processErrorMessage(error)}` };
     }
     if (!identity) return await processDefinitelyExited(record.pid)
@@ -359,7 +367,7 @@ export class ProcessManager implements ControlHealthPort {
     }
 
     try {
-      const health = await this.readHealth(record);
+      const health = await this.readHealth(record, Infinity, signal);
       return {
         name: spec.name,
         state: health.state === 'pairing' && spec.name === 'agent' ? 'pairing' : health.ok && health.state === 'running' ? 'running' : 'degraded',
@@ -367,6 +375,7 @@ export class ProcessManager implements ControlHealthPort {
         detail: health.detail,
       };
     } catch (error) {
+      signal?.throwIfAborted();
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: `Health check failed: ${processErrorMessage(error)}` };
     }
   }
@@ -417,13 +426,14 @@ export class ProcessManager implements ControlHealthPort {
     }));
   }
 
-  private async inspectForStatus(pid: number): Promise<ProcessIdentity | null> {
+  private async inspectForStatus(pid: number, signal?: AbortSignal): Promise<ProcessIdentity | null> {
     for (let attempt = 0; attempt <= IDENTITY_INSPECTION_RETRY_COUNT; attempt++) {
       try {
-        return await this.inspect(pid);
+        return await this.inspect(pid, signal);
       } catch (error) {
+        signal?.throwIfAborted();
         if (attempt === IDENTITY_INSPECTION_RETRY_COUNT) throw error;
-        await sleep(this.pollIntervalMs);
+        await sleep(this.pollIntervalMs, undefined, { signal });
       }
     }
     throw new Error('Process identity inspection exhausted all retries.');
@@ -522,12 +532,13 @@ export class ProcessManager implements ControlHealthPort {
     };
   }
 
-  private async stopRecord(spec: ManagedServiceSpec, record: ManagedProcessRecord, removeRecord: boolean, signal?: AbortSignal): Promise<void> {
+  private async stopRecord(spec: ManagedServiceSpec, record: ManagedProcessRecord, removeRecord: boolean, signal?: AbortSignal, rollback = false): Promise<void> {
     signal?.throwIfAborted();
     let current: ProcessIdentity | null;
     try {
-      current = await this.inspect(record.pid);
+      current = await this.inspect(record.pid, signal);
     } catch (error) {
+      signal?.throwIfAborted();
       throw Object.assign(new Error(`${spec.name} process identity cannot be verified: ${processErrorMessage(error)}`, { cause: error }), { exitCode: 5 });
     }
     signal?.throwIfAborted();
@@ -538,46 +549,88 @@ export class ProcessManager implements ControlHealthPort {
     }
     if (!sameIdentity(record, current, spec)) throw Object.assign(new Error(`${spec.name} process identity changed; refusing to stop PID ${record.pid}.`), { exitCode: 5 });
 
+    const deadline = Date.now() + this.shutdownTimeoutMs;
+    const requestDeadline = deadline + HEALTH_REQUEST_TIMEOUT_MS;
+    let shutdownError: Error | undefined;
+    const checkCancellation = () => {
+      if (!signal?.aborted) return;
+      if (shutdownError) {
+        throw new AggregateError([shutdownError, signal.reason], `${shutdownError.message}; shutdown cancelled: ${processErrorMessage(signal.reason)}`);
+      }
+      signal.throwIfAborted();
+    };
     if (record.controlPort > 0) {
       try {
-        await fetch(`http://127.0.0.1:${record.controlPort}/shutdown`, {
+        const timeout = AbortSignal.timeout(Math.max(1, requestDeadline - Date.now()));
+        const response = await fetch(`http://127.0.0.1:${record.controlPort}/shutdown`, {
           method: 'POST',
           headers: { authorization: `Bearer ${record.controlToken}` },
-          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS),
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
-      } catch {
-        signal?.throwIfAborted();
+        let body: { ok?: unknown; error?: { message?: unknown } };
+        try { body = await response.json() as typeof body; }
+        catch (error) { throw new Error(`${spec.name} shutdown returned HTTP ${response.status} with an invalid response: ${processErrorMessage(error)}`, { cause: error }); }
+        if (response.status !== 200 || body?.ok !== true) {
+          const detail = typeof body?.error?.message === 'string' ? body.error.message : 'invalid shutdown response';
+          throw new Error(`${spec.name} shutdown failed (HTTP ${response.status}): ${detail}`);
+        }
+      } catch (error) {
+        checkCancellation();
+        shutdownError = new Error(`${spec.name} shutdown was not confirmed: ${processErrorMessage(error)}`, { cause: error });
       }
+    } else {
+      if (removeRecord) shutdownError = new Error(`${spec.name} has no managed shutdown endpoint.`);
     }
 
-    signal?.throwIfAborted();
-    if (!await this.waitForExit(record, spec, this.shutdownTimeoutMs, signal)) {
+    checkCancellation();
+    try {
+    if (!await this.waitForExit(record, spec, Math.max(0, deadline - Date.now()), signal)) {
       let latest: ProcessIdentity | null;
-      try { latest = await this.inspect(record.pid); }
+      try { latest = await this.inspect(record.pid, signal); }
       catch (error) {
-        signal?.throwIfAborted();
+        checkCancellation();
         throw Object.assign(new Error(`${spec.name} process identity cannot be verified: ${processErrorMessage(error)}`, { cause: error }), { exitCode: 5 });
       }
-      signal?.throwIfAborted();
+      checkCancellation();
       if (!latest) {
         if (!await processDefinitelyExited(record.pid)) throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`), { exitCode: 5 });
         if (removeRecord) await this.removeRecord(spec.name);
+        if (shutdownError) throw shutdownError;
         return;
       }
       if (!sameIdentity(record, latest, spec)) throw Object.assign(new Error(`${spec.name} process identity changed before forced stop; refusing PID ${record.pid}.`), { exitCode: 5 });
-      signal?.throwIfAborted();
+      checkCancellation();
+      let forced = true;
       try {
         if (process.platform === 'win32') process.kill(record.pid);
         else process.kill(record.pid, 'SIGKILL');
       } catch (error) {
         if (errorCode(error) !== 'ESRCH') throw error;
+        forced = false;
+      }
+      if (forced && !rollback) {
+        shutdownError = new Error(`${spec.name} forced termination signal was sent; process exit is not yet confirmed${shutdownError ? `: ${shutdownError.message}` : '.'}`, { cause: shutdownError });
       }
       if (!await this.waitForExit(record, spec, this.shutdownTimeoutMs, signal)) {
-        throw new Error(`${spec.name} process ${record.pid} remained after a targeted forced stop.`);
+        throw new Error(`${spec.name} process ${record.pid} exit was not confirmed after targeted forced stop.`);
       }
+      if (forced && !rollback) {
+        shutdownError = new Error(`${spec.name} was forcibly stopped after the shutdown deadline${shutdownError?.cause ? `: ${processErrorMessage(shutdownError.cause)}` : '.'}`, { cause: shutdownError?.cause });
+      }
+      if (forced && rollback && record.controlPort === 0) shutdownError = undefined;
+    }
+    } catch (error) {
+      checkCancellation();
+      if (shutdownError && error !== shutdownError) {
+        const combined = new AggregateError([shutdownError, error], `${shutdownError.message}; ${processErrorMessage(error)}`);
+        const exitCode = error && typeof error === 'object' && 'exitCode' in error ? error.exitCode : undefined;
+        throw Object.assign(combined, { exitCode });
+      }
+      throw error;
     }
 
     if (removeRecord) await this.removeRecord(spec.name);
+    if (shutdownError) throw shutdownError;
   }
 
   private async waitForExit(record: ManagedProcessRecord, spec: ManagedServiceSpec, timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
@@ -585,7 +638,7 @@ export class ProcessManager implements ControlHealthPort {
     while (Date.now() < deadline) {
       signal?.throwIfAborted();
       let current: ProcessIdentity | null;
-      try { current = await this.inspect(record.pid); }
+      try { current = await this.inspect(record.pid, signal); }
       catch (error) {
         signal?.throwIfAborted();
         throw Object.assign(new Error(`${spec.name} process identity cannot be verified: ${processErrorMessage(error)}`, { cause: error }), { exitCode: 5 });
@@ -596,7 +649,7 @@ export class ProcessManager implements ControlHealthPort {
         throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing process control.`), { exitCode: 5 });
       }
       if (!sameIdentity(record, current, spec)) throw Object.assign(new Error(`${spec.name} PID ${record.pid} no longer matches its recorded identity.`), { exitCode: 5 });
-      await sleep(this.pollIntervalMs, undefined, { signal });
+      await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())), undefined, { signal });
     }
     signal?.throwIfAborted();
     return false;
@@ -631,7 +684,7 @@ export class ProcessManager implements ControlHealthPort {
       controlPort: ready?.port ?? 0,
       controlToken: token,
     };
-    await this.stopRecord(spec, record, false);
+    await this.stopRecord(spec, record, false, undefined, true);
   }
 
   private isCandidateIdentity(identity: ProcessIdentity, spec: ManagedServiceSpec, id: string): boolean {

@@ -44,6 +44,18 @@ export interface ToolDispatcherDependencies {
 
 export function createToolDispatcher(deps: ToolDispatcherDependencies): ToolDispatcher {
 const pending = new Set<Promise<ToolResult>>();
+const pendingUsage = new Set<Promise<void>>();
+const usageFailures: unknown[] = [];
+let additionalUsageFailures = 0;
+function trackUsage(operation: Promise<unknown>): void {
+  const tracked = operation.then(() => undefined, () => {
+    console.error('Agent usage storage write failed.');
+    if (usageFailures.length < 16) usageFailures.push(new Error('Agent usage storage write failed.'));
+    else additionalUsageFailures++;
+  });
+  pendingUsage.add(tracked);
+  void tracked.then(() => pendingUsage.delete(tracked));
+}
 let stopping = false;
 const TOOL_HANDLERS: Record<string, Handler> = {
   get_config: () => getConfig(deps),
@@ -98,9 +110,9 @@ async function executeTool(name: string, args: Args): Promise<ToolResult> {
   try {
     result = (await handler(args ?? {})) as ToolResult;
     const tracking = result.isError ? deps.usageTracker.trackFailure(name) : deps.usageTracker.trackSuccess(name);
-    void tracking.catch((error: unknown) => console.error('Failed to track tool usage:', error));
+    trackUsage(tracking);
   } catch (err) {
-    void deps.usageTracker.trackFailure(name).catch((error: unknown) => console.error('Failed to track tool usage:', error));
+    trackUsage(deps.usageTracker.trackFailure(name));
     const message = err instanceof Error ? err.message : String(err);
     result = { content: [{ type: 'text', text: `Error in ${name}: ${message}` }], isError: true };
   }
@@ -133,6 +145,8 @@ function callTool(name: string, args: Args): Promise<ToolResult> {
 async function stop(): Promise<void> {
   stopping = true;
   await Promise.allSettled([...pending]);
+  await Promise.all([...pendingUsage]);
+  if (usageFailures.length) throw new AggregateError(usageFailures, `Agent usage tracking failed${additionalUsageFailures ? ` (${additionalUsageFailures} additional failures)` : ''}.`);
 }
 
 return { callTool, listTools, hasTool, stop };

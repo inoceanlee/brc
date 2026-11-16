@@ -9,6 +9,8 @@ import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 
 test('importing the CLI assembly does not execute a command', (t) => {
@@ -239,4 +241,130 @@ test('agent preserves credentials when a relay rejects its token', async (t) => 
   assert.equal(pairingStarts, 0);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).deviceToken, 'old-token');
   assert.match(output, /credentials remain unchanged/);
+});
+
+async function within(promise, milliseconds, stage) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${stage} timed out.`)), milliseconds); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function managedAgentScenario(t, mode) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-shutdown-'));
+  const sockets = new Set();
+  let agent;
+  let output = '';
+  let resolveHello;
+  const hello = new Promise((resolve) => { resolveHello = resolve; });
+  const server = createServer((_req, res) => res.writeHead(404).end());
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('error', () => {});
+    socket.on('close', () => sockets.delete(socket));
+  });
+  server.on('upgrade', (req, socket) => {
+    if (mode === 'retry') {
+      socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    let helloSeen = false;
+    socket.on('data', () => {
+      if (helloSeen) return;
+      helloSeen = true;
+      resolveHello(socket);
+    });
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const readyFile = path.join(root, 'control.ready.json');
+  const relayUrl = `http://127.0.0.1:${server.address().port}`;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  const exited = new Promise((resolve, reject) => {
+    agent = spawn(process.execPath, [
+      fileURLToPath(new URL('../packages/agent/dist/cli.js', import.meta.url)),
+      'connect', '--relay', relayUrl, '--device-id', 'shutdown-test', '--no-browser',
+    ], {
+      env: {
+        ...env, BRC_DATA_ROOT: root, BRC_TOKEN: 'test-token', BRC_CONTROL_TOKEN: 'test-control-token',
+        BRC_CONTROL_READY_FILE: readyFile, BRC_MANAGED_ID: 'shutdown-test',
+        BRC_MANAGED_SERVICE: 'agent', BRC_UPSTREAM_TELEMETRY: '0', DO_NOT_TRACK: '1',
+      },
+      windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    agent.once('error', reject);
+    agent.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  agent.stdout.on('data', (chunk) => { output += chunk; });
+  agent.stderr.on('data', (chunk) => { output += chunk; });
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    if (agent.exitCode === null && agent.signalCode === null) agent.kill('SIGKILL');
+    try {
+      await within(exited.catch(() => undefined), 3000, 'Agent cleanup');
+      await within(new Promise((resolve) => server.close(resolve)), 3000, 'Relay cleanup');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  const deadline = Date.now() + 10_000;
+  while (!existsSync(readyFile)) {
+    if (agent.exitCode !== null || agent.signalCode !== null) throw new Error(`Agent exited before control readiness: ${output}`);
+    if (Date.now() >= deadline) throw new Error(`Agent control readiness timed out: ${output}`);
+    await sleep(25);
+  }
+  const ready = JSON.parse(readFileSync(readyFile, 'utf8'));
+  return { hello, ready, exited, output: () => output };
+}
+
+test('managed agent reports a WebSocket close timeout and terminates the connection', { timeout: 15_000 }, async (t) => {
+  const scenario = await managedAgentScenario(t, 'hold');
+  const socket = await within(scenario.hello, 5000, 'Agent WebSocket connection');
+  const closed = new Promise((resolve) => socket.once('close', resolve));
+  const disconnected = new Promise((resolve) => {
+    socket.once('end', () => {
+      resolve('end');
+      socket.end();
+    });
+    socket.once('close', () => resolve('close'));
+  });
+  const response = await fetch(`http://127.0.0.1:${scenario.ready.port}/shutdown`, {
+    method: 'POST', headers: { authorization: 'Bearer test-control-token' }, signal: AbortSignal.timeout(5000),
+  });
+  const body = await within(response.json(), 3000, 'Managed shutdown response body');
+  assert.equal(response.status, 500);
+  assert.match(body.error.message, /WebSocket.*shutdown deadline/);
+  const disconnectEvent = await within(disconnected, 3000, 'Agent socket disconnect');
+  assert.ok(disconnectEvent === 'end' || disconnectEvent === 'close');
+  await within(closed, 3000, 'Relay socket closure after disconnect');
+  const exit = await within(scenario.exited, 3000, `Agent exit (${scenario.output()})`);
+  assert.equal(exit.code, 1);
+});
+
+test('managed agent exits promptly when stopped during reconnect delay', { timeout: 15_000 }, async (t) => {
+  const scenario = await managedAgentScenario(t, 'retry');
+  const deadline = Date.now() + 10_000;
+  while (!/retry in 10000 ms/.test(scenario.output())) {
+    if (Date.now() >= deadline) throw new Error(`Agent did not enter reconnect delay: ${scenario.output()}`);
+    await sleep(25);
+  }
+  const response = await fetch(`http://127.0.0.1:${scenario.ready.port}/shutdown`, {
+    method: 'POST', headers: { authorization: 'Bearer test-control-token' }, signal: AbortSignal.timeout(5000),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
+  const exit = await Promise.race([
+    scenario.exited,
+    sleep(5000, null, { ref: false }).then(() => { throw new Error('Agent remained alive after stopping during reconnect delay.'); }),
+  ]);
+  assert.equal(exit.code, 0);
 });
