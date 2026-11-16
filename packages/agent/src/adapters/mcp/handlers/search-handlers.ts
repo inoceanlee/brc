@@ -1,16 +1,16 @@
-import { searchManager } from '../../system/search-manager.js';
+import type { SearchManager } from '../../system/search-manager.js';
 import {
   StartSearchArgsSchema,
   GetMoreSearchResultsArgsSchema,
   StopSearchArgsSchema
 } from '../../../core/tools/schemas.js';
 import { ServerResult } from '../../../core/types.js';
-import { capture } from '../../telemetry/capture.js';
+import type { Capture } from '../../telemetry/capture.js';
 
 /**
  * Handle start_search command
  */
-export async function handleStartSearch(args: unknown): Promise<ServerResult> {
+export async function handleStartSearch(args: unknown, searchManager: SearchManager, capture: Capture): Promise<ServerResult> {
   const parsed = StartSearchArgsSchema.safeParse(args);
   if (!parsed.success) {
     return {
@@ -82,7 +82,7 @@ export async function handleStartSearch(args: unknown): Promise<ServerResult> {
 /**
  * Handle get_more_search_results command
  */
-export async function handleGetMoreSearchResults(args: unknown): Promise<ServerResult> {
+export async function handleGetMoreSearchResults(args: unknown, searchManager: SearchManager): Promise<ServerResult> {
   const parsed = GetMoreSearchResultsArgsSchema.safeParse(args);
   if (!parsed.success) {
     return {
@@ -177,7 +177,7 @@ export async function handleGetMoreSearchResults(args: unknown): Promise<ServerR
 /**
  * Handle stop_search command
  */
-export async function handleStopSearch(args: unknown): Promise<ServerResult> {
+export async function handleStopSearch(args: unknown, searchManager: SearchManager): Promise<ServerResult> {
   const parsed = StopSearchArgsSchema.safeParse(args);
   if (!parsed.success) {
     return {
@@ -217,7 +217,7 @@ export async function handleStopSearch(args: unknown): Promise<ServerResult> {
 /**
  * Handle list_searches command
  */
-export async function handleListSearches(): Promise<ServerResult> {
+export async function handleListSearches(searchManager: SearchManager): Promise<ServerResult> {
   try {
     const sessions = searchManager.listSearchSessions();
     

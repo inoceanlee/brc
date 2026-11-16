@@ -49,22 +49,18 @@ test('uses the default read limit unless a caller supplies a length', async () =
 });
 
 test('applies the configured read limit when length is omitted', async () => {
-  const { configureAgentServices } = await import('../packages/agent/dist/composition.js');
-  configureAgentServices();
-  const { configManager } = await import('../packages/agent/dist/adapters/storage/config-manager.js');
   const { handleReadFile } = await import('../packages/agent/dist/adapters/mcp/handlers/filesystem-handlers.js');
-  const originalGetConfig = configManager.getConfig;
-  configManager.getConfig = async () => ({ fileReadLineLimit: 2, allowedDirectories: [] });
-  try {
-    await withFile('one\ntwo\nthree', async (file) => {
-      const result = await handleReadFile({ path: file });
-      assert.match(result.content[0].text, /\n\none\ntwo$/);
-      const explicit = await handleReadFile({ path: file, length: 1 });
-      assert.match(explicit.content[0].text, /\n\none$/);
-    });
-  } finally {
-    configManager.getConfig = originalGetConfig;
-  }
+  await withFile('one\ntwo\nthree', async (file, handler) => {
+    const dependencies = {
+      configManager: { getConfig: async () => ({ fileReadLineLimit: 2, allowedDirectories: [] }) },
+      capture: async () => {},
+      fileHandlers: { getFileHandler: async () => handler },
+    };
+    const result = await handleReadFile({ path: file }, dependencies);
+    assert.match(result.content[0].text, /\n\none\ntwo$/);
+    const explicit = await handleReadFile({ path: file, length: 1 }, dependencies);
+    assert.match(explicit.content[0].text, /\n\none$/);
+  });
 });
 
 test('reads long lines and reports the requested page', async () => {
@@ -112,4 +108,26 @@ test('appends and rewrites without changing write semantics', async () => {
     await handler.write(file, 'replacement');
     assert.equal(await readFile(file, 'utf8'), 'replacement');
   });
+});
+
+test('file transfer receive sessions are isolated between instances', async () => {
+  const { prepareFileReceive, receiveFileTransfer } = await import('../packages/agent/dist/adapters/filesystem/file-transfer.js');
+  const firstKeys = new Map();
+  const secondKeys = new Map();
+  const first = prepareFileReceive(firstKeys);
+  const second = prepareFileReceive(secondKeys);
+
+  assert.equal(firstKeys.has(first.receiveId), true);
+  assert.equal(secondKeys.has(second.receiveId), true);
+  assert.equal(firstKeys.has(second.receiveId), false);
+  assert.equal(secondKeys.has(first.receiveId), false);
+
+  await assert.rejects(
+    receiveFileTransfer({}, secondKeys, first.receiveId, '', ''),
+    /Receive session is missing or expired/,
+  );
+  assert.equal(firstKeys.has(first.receiveId), true);
+  assert.equal(secondKeys.has(second.receiveId), true);
+  firstKeys.clear();
+  secondKeys.clear();
 });

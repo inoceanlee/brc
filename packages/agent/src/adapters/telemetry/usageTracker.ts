@@ -1,6 +1,13 @@
-import { configManager } from '../storage/config-manager.js';
-import { capture } from './capture.js';
-import { logger } from './logger.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { FeatureFlagManager } from '../network/feature-flags.js';
+
+export interface UsageTrackerDependencies {
+  configManager: AgentConfigManager;
+  featureFlagManager: FeatureFlagManager;
+  getCurrentClient: () => { name: string } | undefined;
+  isOnboardingDisabled: () => boolean;
+  logger: { debug(message: string): void };
+}
 
 export interface ToolUsageStats {
   // Tool category counters
@@ -60,6 +67,7 @@ const SESSION_TIMEOUT = 30 * 60 * 1000;
 
 export class UsageTracker {
   private currentSession: UsageSession | null = null;
+  constructor(private readonly deps: UsageTrackerDependencies) {}
 
   /**
    * Get default usage stats
@@ -87,6 +95,7 @@ export class UsageTracker {
    * Get current usage stats from config
    */
   async getStats(): Promise<ToolUsageStats> {
+    const { configManager } = this.deps;
     // Migrate old nested feedbackGiven to top-level if needed
     const stats = await configManager.getValue('usageStats');
     return stats || this.getDefaultStats();
@@ -146,6 +155,7 @@ export class UsageTracker {
    * Track a successful tool call
    */
   async trackSuccess(toolName: string): Promise<ToolUsageStats> {
+    const { configManager } = this.deps;
     this.updateSession();
     const now = Date.now();
     const category = this.getToolCategory(toolName);
@@ -172,6 +182,7 @@ export class UsageTracker {
    * Track a failed tool call
    */
   async trackFailure(toolName: string): Promise<ToolUsageStats> {
+    const { configManager } = this.deps;
     this.updateSession();
     const now = Date.now();
     const category = this.getToolCategory(toolName);
@@ -199,7 +210,7 @@ export class UsageTracker {
    */
   async shouldPromptForFeedback(): Promise<boolean> {
     // Check feature flag first
-    const { featureFlagManager } = await import('../network/feature-flags.js');
+    const { featureFlagManager, configManager, logger } = this.deps;
     const feedbackEnabled = featureFlagManager.get('user_surveys', false);
     if (!feedbackEnabled) {
       return false;
@@ -208,7 +219,7 @@ export class UsageTracker {
     // Check if client is desktop-commander (disable for this client)
     //return true;
     try {
-      const { currentClient } = await import('../../context.js');
+      const currentClient = this.deps.getCurrentClient();
       if (currentClient?.name === 'desktop-commander') {
         return false;
       }
@@ -291,6 +302,7 @@ export class UsageTracker {
    * Check if user should be prompted for error feedback
    */
   async shouldPromptForErrorFeedback(): Promise<boolean> {
+    const { configManager } = this.deps;
     const stats = await this.getStats();
 
     // Don't prompt if feedback already given (check top-level config)
@@ -318,6 +330,7 @@ export class UsageTracker {
    * Mark that user was prompted for feedback
    */
   async markFeedbackPrompted(): Promise<void> {
+    const { configManager } = this.deps;
     const now = Date.now();
     const today = new Date(now).toISOString().split('T')[0];
 
@@ -343,6 +356,7 @@ export class UsageTracker {
    * Mark that user has given feedback
    */
   async markFeedbackGiven(): Promise<void> {
+    const { configManager } = this.deps;
     // Set top-level config flag
     await configManager.setValue('feedbackGiven', true);
   }
@@ -352,6 +366,7 @@ export class UsageTracker {
    */
   async getUsageSummary(): Promise<string> {
     const stats = await this.getStats();
+    const { configManager } = this.deps;
     const now = Date.now();
 
     const daysSinceFirst = Math.round((now - stats.firstUsed) / (1000 * 60 * 60 * 24));
@@ -387,6 +402,7 @@ export class UsageTracker {
    * Get onboarding state from config
    */
   async getOnboardingState(): Promise<OnboardingState> {
+    const { configManager } = this.deps;
     const stored = await configManager.getValue('onboardingState');
     return stored || {
       promptsUsed: false,
@@ -399,6 +415,7 @@ export class UsageTracker {
    * Save onboarding state to config
    */
   async saveOnboardingState(state: OnboardingState): Promise<void> {
+    const { configManager } = this.deps;
     await configManager.setValue('onboardingState', state);
   }
   /**
@@ -406,7 +423,7 @@ export class UsageTracker {
    */
   async shouldShowOnboarding(): Promise<boolean> {
     // Check feature flag first (remote kill switch)
-    const { featureFlagManager } = await import('../network/feature-flags.js');
+    const { featureFlagManager, configManager, logger } = this.deps;
 
     // Default false: on cold starts (no flag cache yet, e.g. ephemeral Docker
     // containers) this can run before the background flag fetch completes.
@@ -427,13 +444,13 @@ export class UsageTracker {
     }
 
     // Check if onboarding is disabled via command line argument
-    if ((global as any).disableOnboarding) {
+    if (this.deps.isOnboardingDisabled()) {
       return false;
     }
 
     // Check if client is desktop-commander (disable for this client)
     try {
-      const { currentClient } = await import('../../context.js');
+      const currentClient = this.deps.getCurrentClient();
       if (currentClient?.name === 'desktop-commander') {
         return false;
       }
@@ -533,7 +550,7 @@ For anonymous_user_use_case: Look at conversation history to understand what use
     state.attemptsShown++;
     state.lastShownAt = now;
 
-    logger.debug('Onboarding prompt shown.');
+    this.deps.logger.debug('Onboarding prompt shown.');
 
     await this.saveOnboardingState(state);
   }
@@ -554,7 +571,7 @@ For anonymous_user_use_case: Look at conversation history to understand what use
   async markPromptUsed(promptId: string, category: string): Promise<void> {
     // This could be expanded later to track detailed prompt usage
     // For now, we'll just rely on the capture analytics
-    logger.debug('Prompt usage recorded.');
+    this.deps.logger.debug('Prompt usage recorded.');
   }
 
   /**
@@ -567,10 +584,7 @@ For anonymous_user_use_case: Look at conversation history to understand what use
       lastShownAt: 0
     };
     await this.saveOnboardingState(defaultState);
-    logger.debug('Onboarding state reset.');
+    this.deps.logger.debug('Onboarding state reset.');
   }
 }
 
-// Export singleton instance
-export let usageTracker: UsageTracker;
-export function attachUsageTracker(instance: UsageTracker): void { usageTracker = instance; }

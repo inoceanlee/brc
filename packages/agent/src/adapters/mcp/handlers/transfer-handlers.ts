@@ -7,21 +7,27 @@ import {
   prepareFileReceive,
   receiveFileTransfer,
   sendFileTransfer,
+  type ReceiveKeys,
 } from '../../filesystem/file-transfer.js';
 import type { ServerResult } from '../../../core/types.js';
+import type { FilesystemDependencies } from '../../filesystem/filesystem.js';
+
+export interface TransferDependencies extends FilesystemDependencies {
+  receiveKeys: ReceiveKeys;
+}
 
 function errorResult(message: string): ServerResult {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
-export async function handlePrepareFileTransfer(args: unknown): Promise<ServerResult> {
+export async function handlePrepareFileTransfer(args: unknown, dependencies: TransferDependencies): Promise<ServerResult> {
   const parsed = PrepareFileTransferArgsSchema.safeParse(args);
   if (!parsed.success) {
     return errorResult('Invalid arguments for prepare_file_transfer: ' + parsed.error);
   }
 
   try {
-    const result = prepareFileReceive(parsed.data.ttlSeconds);
+    const result = prepareFileReceive(dependencies.receiveKeys, parsed.data.ttlSeconds);
     return {
       content: [{
         type: 'text',
@@ -37,7 +43,7 @@ export async function handlePrepareFileTransfer(args: unknown): Promise<ServerRe
   }
 }
 
-export async function handleSendFileTransfer(args: unknown): Promise<ServerResult> {
+export async function handleSendFileTransfer(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
   const parsed = SendFileTransferArgsSchema.safeParse(args);
   if (!parsed.success) {
     return errorResult('Invalid arguments for send_file_transfer: ' + parsed.error);
@@ -45,6 +51,7 @@ export async function handleSendFileTransfer(args: unknown): Promise<ServerResul
 
   try {
     const result = await sendFileTransfer(
+      dependencies,
       parsed.data.sourcePath,
       parsed.data.recipientPublicKey,
       parsed.data.expireSeconds,
@@ -66,7 +73,7 @@ export async function handleSendFileTransfer(args: unknown): Promise<ServerResul
     return errorResult(error instanceof Error ? error.message : String(error));
   }
 }
-export async function handleReceiveFileTransfer(args: unknown): Promise<ServerResult> {
+export async function handleReceiveFileTransfer(args: unknown, dependencies: TransferDependencies): Promise<ServerResult> {
   const parsed = ReceiveFileTransferArgsSchema.safeParse(args);
   if (!parsed.success) {
     return errorResult('Invalid arguments for receive_file_transfer: ' + parsed.error);
@@ -74,6 +81,8 @@ export async function handleReceiveFileTransfer(args: unknown): Promise<ServerRe
 
   try {
     const result = await receiveFileTransfer(
+      dependencies,
+      dependencies.receiveKeys,
       parsed.data.receiveId,
       parsed.data.transferToken,
       parsed.data.destinationPath,

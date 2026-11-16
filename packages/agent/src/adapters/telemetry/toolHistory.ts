@@ -1,8 +1,8 @@
 import { existsSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { ServerResult } from '../../core/types.js';
-import { resolveAgentPaths } from '../storage/agent-paths.js';
-import { ToolHistoryStorage } from './toolHistoryStorage.js';
+import { resolveAgentPaths, type AgentPaths } from '../storage/agent-paths.js';
+import type { ToolHistoryStorage } from './toolHistoryStorage.js';
 
 export interface ToolCallRecord {
   timestamp: string;
@@ -29,7 +29,6 @@ function formatLocalTimestamp(isoTimestamp: string): string {
     hour12: false
   });
 }
-
 function trimHistory(lines: string[], targetBytes: number): string[] {
   const kept: string[] = [];
   let bytes = 0;
@@ -41,6 +40,7 @@ function trimHistory(lines: string[], targetBytes: number): string[] {
   }
   return kept.reverse();
 }
+
 
 export class ToolHistory {
   private history: ToolCallRecord[] = [];
@@ -55,9 +55,9 @@ export class ToolHistory {
   private isWriting = false;
   private writeInterval?: NodeJS.Timeout;
 
-  constructor() {
-    this.storage = new ToolHistoryStorage(resolveAgentPaths().historyDirectory);
-    this.migrateLegacyHistory();
+  constructor(storage: ToolHistoryStorage, paths: AgentPaths, env: NodeJS.ProcessEnv, private readonly reportWriteFailure: () => void) {
+    this.storage = storage;
+    this.migrateLegacyHistory(paths, env);
 
     // Load existing history on startup
     this.loadFromDisk();
@@ -66,10 +66,9 @@ export class ToolHistory {
     this.startWriteProcessor();
   }
 
-  private migrateLegacyHistory(): void {
-    const paths = resolveAgentPaths();
+  private migrateLegacyHistory(paths: AgentPaths, env: NodeJS.ProcessEnv): void {
     const candidates = [path.join(paths.historyDirectory, 'tool-history.jsonl')];
-    const defaultRoot = resolveAgentPaths({ ...process.env, BRC_DATA_ROOT: undefined }).root;
+    const defaultRoot = resolveAgentPaths({ ...env, BRC_DATA_ROOT: undefined }).root;
     if (path.normalize(paths.root).toLowerCase() === path.normalize(defaultRoot).toLowerCase()) {
       candidates.push(path.join(paths.legacyDirectory, 'tool-history.jsonl'));
     }
@@ -196,6 +195,11 @@ export class ToolHistory {
     } catch (error) {
       // Put back in queue on failure
       this.writeQueue.unshift(...toWrite);
+      try {
+        this.reportWriteFailure();
+      } catch {
+        // Diagnostic failures must not discard queued records.
+      }
     } finally {
       this.isWriting = false;
     }
@@ -325,5 +329,3 @@ export class ToolHistory {
   }
 }
 
-export let toolHistory: ToolHistory;
-export function attachToolHistory(instance: ToolHistory): void { toolHistory = instance; }

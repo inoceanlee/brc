@@ -3,11 +3,11 @@ import { createRequire } from 'node:module';
 import { lstat, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  BRC_SETTING_KEYS, DEFAULT_SETTINGS, FileSettingsLock, YamlSettingsStore, resolveSettings, withSettingValue,
+  DEFAULT_SETTINGS, resolveSettings, withSettingValue,
   type BrcSettings, type BrcSettingKey, type SettingsStorePort,
 } from 'brc-shared';
 import { parseEditableValue, type ConfigFieldKey } from '../../core/config-field-definitions.js';
-import { ConfigStorage } from './config-storage.js';
+import type { ConfigStorage } from './config-storage.js';
 import { resolveAgentPaths, type AgentPaths } from './agent-paths.js';
 
 export interface ServerConfig {
@@ -63,6 +63,17 @@ function normaliseTelemetryEnabled(value: unknown): unknown {
 export const normalizeTelemetryEnabledValue = normaliseTelemetryEnabled;
 export const isTelemetryDisabledValue = (value: unknown): boolean => normaliseTelemetryEnabled(value) === false;
 
+export function resolveAgentSettings(settings: BrcSettings, env: NodeJS.ProcessEnv): BrcSettings {
+  const enabled = resolveSettings(settings, { BRC_DIAGNOSTICS_ENABLED: env.BRC_DIAGNOSTICS_ENABLED }).settings.diagnostics.enabled;
+  if (enabled) return resolveSettings(settings, env).settings;
+  const filtered = { ...env };
+  delete filtered.BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS;
+  delete filtered.BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS;
+  delete filtered.BRC_DIAGNOSTICS_MAX_RECORD_BYTES;
+  delete filtered.BRC_DIAGNOSTICS_RETENTION_DAYS;
+  return resolveSettings(settings, filtered).settings;
+}
+
 function hasExplicitYamlKey(document: unknown, key: BrcSettingKey): boolean {
   let current: unknown = document;
   for (const segment of key.split('.')) {
@@ -75,24 +86,17 @@ function hasExplicitYamlKey(document: unknown, key: BrcSettingKey): boolean {
 export class AgentConfigManager {
   private readonly options: AgentConfigOptions;
   private readonly paths: AgentPaths;
-  private readonly settingsStore: SettingsStorePort;
-  private readonly stateStorage: ConfigStorage;
-  private readonly usageStorage: ConfigStorage;
   private initPromise: Promise<void> | null = null;
 
-  constructor(options: AgentConfigOptions = {}) {
+  constructor(
+    private readonly settingsStore: SettingsStorePort,
+    private readonly stateStorage: ConfigStorage,
+    private readonly usageStorage: ConfigStorage,
+    options: AgentConfigOptions = {},
+  ) {
     this.options = options;
     const env = options.env ?? process.env;
     this.paths = options.paths ?? resolveAgentPaths(env);
-    this.settingsStore = new YamlSettingsStore({
-      filename: this.paths.configFile,
-      codec: { parse: (data) => yaml.safeLoad(data), stringify: (data) => yaml.safeDump(data, { noRefs: true }) },
-      lock: new FileSettingsLock(path.dirname(this.paths.configFile)),
-      backupFilename: this.paths.configFile + '.last-good',
-      backupKeys: BRC_SETTING_KEYS.filter((key) => key.startsWith('agent.')),
-    });
-    this.stateStorage = new ConfigStorage(path.join(this.paths.historyDirectory, 'state.json'));
-    this.usageStorage = new ConfigStorage(this.paths.usageFile);
   }
 
   async init(): Promise<void> {
@@ -134,7 +138,7 @@ export class AgentConfigManager {
 
   private async readSettings(): Promise<BrcSettings> {
     const { settings } = await this.settingsStore.read();
-    return resolveSettings(settings, this.options.env ?? process.env).settings;
+    return resolveAgentSettings(settings, this.options.env ?? process.env);
   }
 
   private async updateState(mutate: (data: ServerConfig) => unknown): Promise<unknown> {
@@ -297,5 +301,3 @@ export class AgentConfigManager {
   }
 }
 
-export let configManager: AgentConfigManager;
-export function attachConfigManager(instance: AgentConfigManager): void { configManager = instance; }

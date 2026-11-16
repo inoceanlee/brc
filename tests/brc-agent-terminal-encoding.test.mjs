@@ -22,9 +22,31 @@ const {
 } = await import(moduleUrl);
 const terminalManagerUrl = new URL('../packages/agent/dist/adapters/terminal/terminal-manager.js', import.meta.url).href;
 
+let configManager;
+let capture;
+if (process.platform === 'win32') {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'brc-terminal-config-'));
+  const previousRoot = process.env.BRC_DATA_ROOT;
+  const previousConfig = process.env.BRC_CONFIG_FILE;
+  process.env.BRC_DATA_ROOT = directory;
+  process.env.BRC_CONFIG_FILE = path.join(directory, 'config', 'brc.yaml');
+  const { configureAgentServices } = await import('../packages/agent/dist/index.js');
+  const services = await configureAgentServices();
+  ({ configManager, capture } = services);
+  const { toolHistory } = services;
+  test.after(() => {
+    toolHistory.cleanup();
+    if (previousRoot === undefined) delete process.env.BRC_DATA_ROOT;
+    else process.env.BRC_DATA_ROOT = previousRoot;
+    if (previousConfig === undefined) delete process.env.BRC_CONFIG_FILE;
+    else process.env.BRC_CONFIG_FILE = previousConfig;
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+}
+
 test('Windows shell probe preserves supported stdin/stdout/stderr encodings and exit codes', { skip: process.platform !== 'win32' }, async () => {
   const { TerminalManager } = await import(terminalManagerUrl);
-  const manager = new TerminalManager();
+  const manager = new TerminalManager(configManager, capture);
   const cases = [
     {
       executable: 'powershell.exe',
@@ -77,7 +99,7 @@ test('Windows CMD handles UTF-8 files, native streams, Unicode paths, and comman
   const scriptPath = path.join(directory, 'external.mjs');
   fs.writeFileSync(inputPath, 'BRC-FILE-中文-日本語-🙂\n', 'utf8');
   fs.writeFileSync(scriptPath, 'process.stdout.write("BRC-NODE-中文-日本語-🙂\\n"); process.stderr.write("BRC-STDERR-中文\\n"); process.exitCode=23;', 'utf8');
-  const manager = new TerminalManager();
+  const manager = new TerminalManager(configManager, capture);
   const command = `type "${inputPath}" & echo BRC-PIPE-中文 | findstr PIPE & node.exe "${scriptPath}"`;
   let pid = -1;
   try {
@@ -106,7 +128,7 @@ test('Windows CMD handles UTF-8 files, native streams, Unicode paths, and comman
 
 test('completed Windows shell waits for the stdout pipe to drain', { skip: process.platform !== 'win32' }, async () => {
   const { TerminalManager } = await import(terminalManagerUrl);
-  const manager = new TerminalManager();
+  const manager = new TerminalManager(configManager, capture);
   const command = '[Console]::Out.WriteLine("BRC-READY"); [Console]::In.ReadLine() | Out-Null; [Console]::Out.WriteLine("BRC-FLUSHED")';
   const started = await manager.executeCommand(command, 100, 'powershell.exe');
   assert.equal(started.isBlocked, true);

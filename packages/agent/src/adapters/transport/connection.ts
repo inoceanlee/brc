@@ -1,15 +1,59 @@
 import os from 'node:os';
 import type { Server } from 'node:http';
-import { startManagedControlServer, type InjectedDiagnosticsRuntime, type ManagedControlServer } from 'brc-shared';
-import { WsClient } from './ws-client.js';
-import { pairDevice, loadCredentials, type DeviceCredentials } from './pairing.js';
-import { callTool, listTools } from '../mcp/dispatcher.js';
+import { startManagedControlServer, type InjectedDiagnosticsRuntime, type ManagedControlServer, type SettingsStorePort } from 'brc-shared';
+import type { WsClient, WsClientOptions } from './ws-client.js';
+import { pairDevice, type DeviceCredentials } from './pairing.js';
 import { VERSION } from '../../core/version.js';
-import { setCurrentClient } from '../../context.js';
-import { installAgentLogSink, type LogLevel } from '../telemetry/logger.js';
+import { AGENT_DEFAULTS } from '../../core/config.js';
+import type { AgentPaths } from '../storage/agent-paths.js';
+import type { AgentLogger, LogLevel } from '../telemetry/logger.js';
 import type { AgentInvocation } from '../../commands/parser.js';
 import { AgentUsageError } from '../../commands/parser.js';
 import { readTokenFromStdin } from '../terminal/secret-input.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { ToolHistory } from '../telemetry/toolHistory.js';
+import type { ToolDispatcher } from '../mcp/dispatcher.js';
+import type { AgentContext } from '../../context.js';
+import type { SearchManager } from '../system/search-manager.js';
+
+export interface AgentConnectionServices {
+  paths: AgentPaths;
+  createClient(options: WsClientOptions): WsClient;
+  logger: AgentLogger;
+  env: NodeJS.ProcessEnv;
+  settingsStore: SettingsStorePort;
+  credentials: {
+    load(): DeviceCredentials | null;
+    save(credentials: DeviceCredentials): void;
+    filename: string;
+  };
+  searchManager: SearchManager;
+  bindHistoryFailureReporter(report: (message: string) => void): () => void;
+  configManager: AgentConfigManager;
+  toolHistory: ToolHistory;
+  dispatcher: ToolDispatcher;
+  context: AgentContext;
+}
+export async function flushAgentHistory(
+  history: Pick<ToolHistory, 'cleanup'>,
+  report: (message: string) => void,
+  timeoutMs = AGENT_DEFAULTS.historyFlushTimeoutMs,
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      history.cleanup(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('History flush timed out.')), timeoutMs);
+      }),
+    ]);
+  } catch {
+    report('Agent history could not be flushed before shutdown.');
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 
 function validateRelay(input: string): string {
   const url = new URL(input);
@@ -21,32 +65,32 @@ function validateRelay(input: string): string {
 
 export async function runAgentConnection(
   inv: AgentInvocation,
+  services: AgentConnectionServices,
   diagnostics: InjectedDiagnosticsRuntime,
   controlServer: Server,
-  controlIdentity: { token?: string; readyFile?: string; id?: string; service?: string },
 ): Promise<void> {
   if (inv.offline) throw new AgentUsageError('Connecting requires network access; remove --offline.');
-  const relayArg = inv.relay || process.env.BRC_RELAY;
-  const name = inv.name || process.env.BRC_NAME || os.hostname();
-  const deviceId = inv.deviceId || process.env.BRC_DEVICE_ID;
-  const token = inv.tokenStdin ? await readTokenFromStdin() : process.env.BRC_TOKEN;
-  if (inv.tokenStdin && process.env.BRC_TOKEN) throw new AgentUsageError('Choose either BRC_TOKEN or --token-stdin.');
+  const relayArg = inv.relay || services.env.BRC_RELAY;
+  const name = inv.name || services.env.BRC_NAME || os.hostname();
+  const deviceId = inv.deviceId || services.env.BRC_DEVICE_ID;
+  const token = inv.tokenStdin ? await readTokenFromStdin() : services.env.BRC_TOKEN;
+  if (inv.tokenStdin && services.env.BRC_TOKEN) throw new AgentUsageError('Choose either BRC_TOKEN or --token-stdin.');
   if (token && (!relayArg || !deviceId)) {
     throw new AgentUsageError('BRC_TOKEN or --token-stdin also requires --relay and --device-id.');
   }
-  const saved = !token ? loadCredentials() : null;
+  const saved = !token ? services.credentials.load() : null;
   if (!token && !relayArg && !saved) throw new AgentUsageError('No saved device credentials. Specify --relay to pair.');
   const relay = relayArg ? validateRelay(relayArg) : undefined;
   const manual = token && relay && deviceId
     ? { relayUrl: relay, deviceId, deviceToken: token, name, pairedAt: 'manual' }
     : undefined;
   if (inv.allowDirectories.length) {
-    const { configManager } = await import('../storage/config-manager.js');
-    await configManager.setUserSetting('allowedDirectories', inv.allowDirectories);
+    await services.configManager.setUserSetting('allowedDirectories', inv.allowDirectories);
   }
-  const unbindLog = installAgentLogSink((level: LogLevel, message: string) => {
+  const unbindLog = services.logger.bind((level: LogLevel, message: string) => {
     const severity = level === 'warning' ? 'warn' : ['emergency', 'alert', 'critical', 'error'].includes(level) ? 'error' : level === 'debug' ? 'debug' : 'info';
     diagnostics.log(message, { level: severity, source: { file: 'agent/logger.ts', function: 'log' } });
+    if (severity === 'error') process.stderr.write('[agent:error] ' + message + '\n');
   });
   let control: ManagedControlServer | undefined;
   let client: WsClient | undefined;
@@ -57,16 +101,39 @@ export async function runAgentConnection(
     diagnostics.log(message, { level, source: { file: 'agent/connection.ts', function: 'log' } });
     if (!inv.quiet || level === 'error') process.stderr.write('[' + level + '] ' + message + '\n');
   };
+  const unbindHistoryFailure = services.bindHistoryFailureReporter((message) => log('error', message));
   const abort = new AbortController();
   const stop = async (signal?: 'SIGINT' | 'SIGTERM') => {
     if (stopping) return;
     stopping = true;
     abort.abort(new Error('Agent shutdown requested.'));
     client?.stop();
+    const pendingCalls = Promise.all([services.dispatcher.stop(), services.searchManager.stop()]);
     try {
-      await control?.close();
-      await diagnostics.stop();
+      try {
+        await control?.close();
+      } finally {
+        let drainTimer: NodeJS.Timeout | undefined;
+        try {
+          await Promise.race([
+            pendingCalls,
+            new Promise<never>((_, reject) => {
+              drainTimer = setTimeout(() => reject(new Error('Agent tool shutdown timed out.')), AGENT_DEFAULTS.historyFlushTimeoutMs);
+            }),
+          ]);
+        } catch {
+          log('error', 'Agent tool calls did not finish before shutdown; their history may be incomplete.');
+        } finally {
+          clearTimeout(drainTimer);
+        }
+        try {
+          await flushAgentHistory(services.toolHistory, (message) => log('error', message));
+        } finally {
+          await diagnostics.stop();
+        }
+      }
     } finally {
+      unbindHistoryFailure();
       unbindLog();
       if (signal) process.exit(signal === 'SIGINT' ? 130 : 143);
     }
@@ -76,7 +143,10 @@ export async function runAgentConnection(
   try {
     control = await startManagedControlServer({
       server: controlServer,
-      ...controlIdentity,
+      token: services.env.BRC_CONTROL_TOKEN,
+      readyFile: services.env.BRC_CONTROL_READY_FILE,
+      id: services.env.BRC_MANAGED_ID,
+      service: services.env.BRC_MANAGED_SERVICE,
       onStopError: (error) => {
         log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exitCode = 1;
@@ -98,20 +168,21 @@ export async function runAgentConnection(
       awaitingPairing = true;
       try {
         creds = await pairDevice({
-          relayUrl: relay, name, deviceId, openBrowser: !inv.noBrowser && process.env.BRC_NO_BROWSER !== '1',
-          log: (message) => process.stderr.write(message + '\n'), signal: abort.signal,
+          relayUrl: relay, name, deviceId, openBrowser: !inv.noBrowser && services.env.BRC_NO_BROWSER !== '1',
+          log: (message) => process.stderr.write(message + '\n'), signal: abort.signal, credentials: services.credentials,
         });
       } finally {
         awaitingPairing = false;
       }
     }
     if (abort.signal.aborted) return;
-    setCurrentClient({ name: 'brc-agent', version: VERSION });
-    const tools = listTools();
+    const tools = services.dispatcher.listTools();
     log('info', 'BRC Agent connecting ' + tools.length + ' tool definitions to ' + creds.relayUrl + '.');
-    client = new WsClient({
+    client = services.createClient({
       relayUrl: creds.relayUrl, token: creds.deviceToken, deviceId: creds.deviceId, name: creds.name,
-      agentVersion: VERSION, coreVersion: VERSION, tools, callTool, log,
+      agentVersion: VERSION, coreVersion: VERSION, tools,
+      callTool: (tool, args, client) => services.context.runRemote(client ?? null, () => services.dispatcher.callTool(tool, args)),
+      log,
       onUnauthorized: async () => {
         log('error', 'Relay rejected the saved device token; credentials remain unchanged. Pair explicitly after checking device ownership.');
         return false;

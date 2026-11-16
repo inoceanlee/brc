@@ -1,10 +1,10 @@
 import { ServerResult } from '../../../core/types.js';
-import { usageTracker } from '../../telemetry/usageTracker.js';
+import type { UsageTracker } from '../../telemetry/usageTracker.js';
 
 /**
  * Get usage statistics for debugging and analysis
  */
-export async function getUsageStats(): Promise<ServerResult> {
+export async function getUsageStats(usageTracker: UsageTracker): Promise<ServerResult> {
   try {
     const summary = await usageTracker.getUsageSummary();
     

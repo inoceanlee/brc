@@ -576,14 +576,13 @@ test('Traefik logs missing managed configuration before exiting', async (t) => {
 test('Agent activity logs stay bounded during continuous writes', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const trackToolsUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/trackTools.js', import.meta.url).href);
-  const fuzzyLoggerUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js', import.meta.url).href);
   const source = `
-import { configureAgentServices } from ${JSON.stringify(new URL('../packages/agent/dist/composition.js', import.meta.url).href)};
+import { configureAgentServices } from ${JSON.stringify(new URL('../packages/agent/dist/index.js', import.meta.url).href)};
 import { trackToolCall } from ${trackToolsUrl};
-import { fuzzySearchLogger } from ${fuzzyLoggerUrl};
-configureAgentServices();
+import { DEFAULT_SETTINGS } from ${JSON.stringify(new URL('../packages/shared/dist/index.js', import.meta.url).href)};
+const { fuzzySearchLogger } = await configureAgentServices();
 const payload = 'x'.repeat(1024 * 1024);
-for (let i = 0; i < 4; i++) await trackToolCall('test', { payload });
+for (let i = 0; i < 4; i++) await trackToolCall(${JSON.stringify(brcPaths.logs)}, DEFAULT_SETTINGS.logs.rotateMiB * 1024 * 1024, 'test', { payload });
 const entry = {
   timestamp: new Date(), searchText: payload, foundText: 'found', similarity: 1, executionTime: 1,
   exactMatchCount: 1, expectedReplacements: 1, fuzzyThreshold: 0.9, belowThreshold: false,

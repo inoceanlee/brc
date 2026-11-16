@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { CredentialStore } from '../packages/agent/dist/adapters/storage/credential-store.js';
 import { pairDevice } from '../packages/agent/dist/adapters/transport/pairing.js';
 
 test('cancelled pairing does not call the Relay or save credentials', async (t) => {
@@ -20,9 +21,12 @@ test('cancelled pairing does not call the Relay or save credentials', async (t) 
   globalThis.fetch = async () => { requests += 1; throw new Error('unexpected network request'); };
   const abort = new AbortController();
   abort.abort();
+  const file = path.join(root, 'data', 'agent', 'device.json');
+  const store = new CredentialStore(path.dirname(file));
   await assert.rejects(pairDevice({
     relayUrl: 'https://relay.example', name: 'test', openBrowser: false,
     log: () => {}, signal: abort.signal,
+    credentials: { filename: file, load: () => store.load(), save: (value) => store.save(value) },
   }), /abort/i);
   assert.equal(requests, 0);
 });

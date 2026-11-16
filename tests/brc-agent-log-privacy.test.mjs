@@ -8,16 +8,15 @@ import path from 'node:path';
 const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-privacy-'));
 process.env.BRC_DATA_ROOT = root;
 process.env.DO_NOT_TRACK = '1';
-const { configureAgentServices } = await import('../packages/agent/dist/composition.js');
-configureAgentServices();
+const { configureAgentServices } = await import('../packages/agent/dist/index.js');
+const services = await configureAgentServices();
+const { toolHistory, fuzzySearchLogger } = services;
 const { trackToolCall } = await import('../packages/agent/dist/adapters/telemetry/trackTools.js');
-const { toolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-const { fuzzySearchLogger } = await import('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js');
-const { logger } = await import('../packages/agent/dist/adapters/telemetry/logger.js');
+const { DEFAULT_SETTINGS } = await import('../packages/shared/dist/index.js');
 const privateText = 'private-secret-8328';
 
 test('metadata tool-call log never persists raw arguments', async () => {
-  await trackToolCall('edit_block', { token: privateText, nested: { content: privateText } });
+  await trackToolCall(path.join(root, 'logs'), DEFAULT_SETTINGS.logs.rotateMiB * 1024 * 1024, 'edit_block', { token: privateText, nested: { content: privateText } });
   const file = path.join(root, 'logs', 'agent-tool-calls.log');
   assert.equal(existsSync(file), true);
   const text = readFileSync(file, 'utf8');
@@ -53,7 +52,7 @@ test('agent logging never writes unsolicited JSON-RPC messages to stdout', () =>
   let stdout = '';
   const original = process.stdout.write;
   process.stdout.write = (chunk) => { stdout += String(chunk); return true; };
-  try { logger.info('safe operation'); } finally { process.stdout.write = original; }
+  try { services.logger.info('safe operation'); } finally { process.stdout.write = original; }
   assert.equal(stdout, '');
 });
 
@@ -64,9 +63,14 @@ test('config adapter logs do not disclose editable user values', async () => {
   let captured = '';
   process.stderr.write = (value) => { captured += String(value); return true; };
   try {
-    const updated = await setConfigValue({ key: 'allowedDirectories', value: ['private-secret-8328'] });
+    const updated = await setConfigValue({ key: 'allowedDirectories', value: ['private-secret-8328'] }, services.configManager);
     assert.notEqual(updated.isError, true);
-    const read = await getConfig();
+    const { VERSION } = await import('../packages/agent/dist/core/version.js');
+    const read = await getConfig({
+      configManager: services.configManager,
+      featureFlagManager: services.featureFlagManager,
+      currentClient: { name: 'brc-agent', version: VERSION },
+    });
     assert.notEqual(read.isError, true);
   } finally { process.stderr.write = original; }
   assert.doesNotMatch(captured, /private-secret-8328/);
@@ -74,9 +78,8 @@ test('config adapter logs do not disclose editable user values', async () => {
 
 test('usage statistics and onboarding diagnostics do not write to stdout', () => {
   const script = `
-    const { configureAgentServices } = await import(${JSON.stringify(new URL('../packages/agent/dist/composition.js', import.meta.url).href)});
-    configureAgentServices();
-    const { usageTracker } = await import(${JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/usageTracker.js', import.meta.url).href)});
+    const { configureAgentServices } = await import(${JSON.stringify(new URL('../packages/agent/dist/index.js', import.meta.url).href)});
+    const { usageTracker } = await configureAgentServices();
     await usageTracker.resetOnboardingState();
   `;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
@@ -89,10 +92,39 @@ test('usage statistics and onboarding diagnostics do not write to stdout', () =>
 test.after(() => rmSync(root, { recursive: true, force: true }));
 
 test('Agent logger forwards redacted events into the injected Shared diagnostic sink', async () => {
-  const { installAgentLogSink } = await import('../packages/agent/dist/adapters/telemetry/logger.js');
+  const { createAgentLogger } = await import('../packages/agent/dist/adapters/telemetry/logger.js');
+  const first = createAgentLogger();
+  const second = createAgentLogger();
   const received = [];
-  const dispose = installAgentLogSink((level, message) => received.push({ level, message }));
-  try { logger.info('Bearer private-secret-8328'); }
-  finally { dispose(); }
+  const other = [];
+  const dispose = first.bind((level, message) => received.push({ level, message }));
+  const disposeOther = second.bind((level, message) => other.push({ level, message }));
+  first.info('Bearer private-secret-8328');
+  dispose();
+  second.info('second instance');
+  disposeOther();
   assert.deepEqual(received, [{ level: 'info', message: 'Bearer [redacted]' }]);
+  assert.deepEqual(other, [{ level: 'info', message: 'second instance' }]);
+});
+
+
+test('telemetry opt-in remains bound to the Agent instance environment', async () => {
+  const { createCapture } = await import('../packages/agent/dist/adapters/telemetry/capture.js');
+  const original = process.env.BRC_UPSTREAM_TELEMETRY;
+  let reads = 0;
+  try {
+    process.env.BRC_UPSTREAM_TELEMETRY = '1';
+    const { capture } = createCapture({
+      env: { BRC_UPSTREAM_TELEMETRY: '0' },
+      configManager: { getOrCreateClientId: async () => { reads++; return 'id'; } },
+      getContext: () => ({ currentClient: null, currentCallIsRemote: false, currentRemoteClient: null }),
+      getSystemInfo: () => { throw new Error('disabled telemetry must not collect system data'); },
+    });
+    await capture('instance-test');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads, 0);
+  } finally {
+    if (original === undefined) delete process.env.BRC_UPSTREAM_TELEMETRY;
+    else process.env.BRC_UPSTREAM_TELEMETRY = original;
+  }
 });

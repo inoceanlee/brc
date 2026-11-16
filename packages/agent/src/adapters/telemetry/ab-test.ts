@@ -1,5 +1,5 @@
-import { configManager } from '../storage/config-manager.js';
-import { featureFlagManager } from '../network/feature-flags.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { FeatureFlagManager } from '../network/feature-flags.js';
 
 /**
  * A/B Test controlled feature flags
@@ -31,6 +31,7 @@ interface Experiment {
   variants: WeightedVariant[];
 }
 
+export function createABTest(configManager: AgentConfigManager, featureFlagManager: FeatureFlagManager) {
 // Cache for variant assignments (loaded once per session)
 const variantCache: Record<string, string> = {};
 
@@ -99,14 +100,14 @@ async function getVariant(experimentName: string): Promise<string | null> {
 /**
  * Get the exact assigned variant for a named experiment.
  */
-export async function getABTestVariant(experimentName: string): Promise<string | null> {
+async function getABTestVariant(experimentName: string): Promise<string | null> {
   return getVariant(experimentName);
 }
 
 /**
  * Check if a feature (variant name) is enabled for current user
  */
-export async function hasFeature(featureName: string): Promise<boolean> {
+async function hasFeature(featureName: string): Promise<boolean> {
   const experiments = getExperiments();
   if (!experiments || typeof experiments !== 'object') return false;
   
@@ -123,7 +124,7 @@ export async function hasFeature(featureName: string): Promise<boolean> {
 /**
  * Get all A/B test assignments for analytics (reads from config)
  */
-export async function getABTestAssignments(): Promise<Record<string, string>> {
+async function getABTestAssignments(): Promise<Record<string, string>> {
   const experiments = getExperiments();
   const assignments: Record<string, string> = {};
   
@@ -144,4 +145,7 @@ function hashCode(str: string): number {
     hash |= 0;
   }
   return Math.abs(hash);
+}
+
+return { getABTestVariant, hasFeature, getABTestAssignments };
 }

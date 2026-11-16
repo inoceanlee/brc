@@ -1,5 +1,10 @@
-import { configManager } from '../storage/config-manager.js';
-import { usageTracker } from '../telemetry/usageTracker.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { UsageTracker } from '../telemetry/usageTracker.js';
+
+export interface DockerPromptDependencies {
+    configManager: AgentConfigManager;
+    usageTracker: UsageTracker;
+}
 
 /**
  * Docker MCP Gateway prompt utilities
@@ -9,7 +14,7 @@ import { usageTracker } from '../telemetry/usageTracker.js';
 /**
  * Check if user should be prompted about Docker MCP Gateway
  */
-export async function shouldPromptForDockerInfo(): Promise<boolean> {
+export async function shouldPromptForDockerInfo({ configManager, usageTracker }: DockerPromptDependencies): Promise<boolean> {
     // Step 1: Check if client is Docker MCP Gateway
     const currentClient = await configManager.getValue('currentClient');
     if (currentClient?.name !== 'docker') return false;
@@ -32,8 +37,10 @@ export function getDockerInfoMessage(): string {
  * Process Docker prompt injection for successful tool calls
  * Returns the modified result with Docker message injected if conditions are met
  */
-export async function processDockerPrompt(result: any, toolName: string): Promise<any> {
-    const shouldPromptDocker = await shouldPromptForDockerInfo();
+export async function processDockerPrompt<T extends { content?: Array<{ type: string; text?: string }> }>(
+    deps: DockerPromptDependencies, result: T, toolName: string
+): Promise<T> {
+    const shouldPromptDocker = await shouldPromptForDockerInfo(deps);
     console.log(`[DOCKER DEBUG] Should prompt for Docker info: ${shouldPromptDocker}`);
 
     if (shouldPromptDocker) {

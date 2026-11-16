@@ -1,7 +1,3 @@
-import { configManager } from '../storage/config-manager.js';
-import { getABTestVariant } from './ab-test.js';
-import { capture } from './capture.js';
-import { featureFlagManager } from '../network/feature-flags.js';
 
 export const MCP_UI_EXPERIMENT_NAME = 'McpUiPreviews';
 export const MCP_UI_SHOW_VARIANT = 'showMCPUi';
@@ -65,13 +61,6 @@ export async function resolveMcpUiPreviewDecision(deps: McpUiPreviewDecisionDeps
   }
 }
 
-export async function shouldShowMcpUiPreviews(): Promise<boolean> {
-  return resolveMcpUiPreviewDecision({
-    getExistingAssignment: () => configManager.getValue(`abTest_${MCP_UI_EXPERIMENT_NAME}`),
-    isFirstRun: () => configManager.isFirstRun(),
-    wasLoadedFromCache: () => featureFlagManager.wasLoadedFromCache(),
-    waitForFreshFlags: () => featureFlagManager.waitForFreshFlags(),
-    getABTestVariant,
-    capture,
-  });
+export async function shouldShowMcpUiPreviews(deps: McpUiPreviewDecisionDeps): Promise<boolean> {
+  return resolveMcpUiPreviewDecision(deps);
 }

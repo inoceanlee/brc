@@ -1,6 +1,5 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { resolveAgentPaths } from '../storage/agent-paths.js';
 import { appendRotatingLog } from 'brc-shared';
 
 export interface FuzzySearchLogEntry {
@@ -33,10 +32,8 @@ export class FuzzySearchLogger {
     private logPath: string;
     private initialized = false;
 
-    constructor() {
-        // Create log file in a dedicated directory
-        const logDir = resolveAgentPaths().logsDirectory;
-        this.logPath = path.join(logDir, 'fuzzy-search.log');
+    constructor(logsDirectory: string, private readonly maxBytes: number | (() => Promise<number>)) {
+        this.logPath = path.join(logsDirectory, 'fuzzy-search.log');
     }
 
     private async ensureLogFile(): Promise<void> {
@@ -65,6 +62,7 @@ export class FuzzySearchLogger {
 
     async log(entry: FuzzySearchLogEntry): Promise<void> {
         try {
+            const maxBytes = typeof this.maxBytes === 'number' ? this.maxBytes : await this.maxBytes();
             await this.ensureLogFile();
             
             // Convert entry to tab-separated string
@@ -83,7 +81,7 @@ export class FuzzySearchLogger {
                 entry.diffLength.toString()
             ].join('\t');
             
-            await appendRotatingLog(this.logPath, logLine + '\n');
+            await appendRotatingLog(this.logPath, logLine + '\n', maxBytes);
         } catch (error) {
             console.error('Failed to write to fuzzy search log:', error);
         }
@@ -121,6 +119,3 @@ export class FuzzySearchLogger {
     }
 }
 
-// Singleton instance
-export let fuzzySearchLogger: FuzzySearchLogger;
-export function attachFuzzySearchLogger(instance: FuzzySearchLogger): void { fuzzySearchLogger = instance; }

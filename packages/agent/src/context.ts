@@ -1,19 +1,25 @@
-/**
- * Better Remote Commander (BRC): replaces the module-level client state that upstream kept in server.ts.
- * The agent transport sets these per tool call so telemetry/config code keeps working.
- */
-export let currentClient: { name: string; version: string } = { name: 'brc-agent', version: '0.0.0' };
-export let currentCallIsRemote = true;
-export let currentRemoteClient: { name?: string; version?: string } | null = null;
+import { AsyncLocalStorage } from 'node:async_hooks';
 
-export function setCurrentClient(info: { name?: string; version?: string }): void {
-  currentClient = { name: info.name ?? 'unknown', version: info.version ?? 'unknown' };
+export interface AgentCallContext {
+  currentClient: { name: string; version: string };
+  currentCallIsRemote: boolean;
+  currentRemoteClient: { name?: string; version?: string } | null;
 }
 
-export function setCurrentCallIsRemote(isRemote: boolean): void {
-  currentCallIsRemote = isRemote;
-}
+export class AgentContext {
+  private readonly calls = new AsyncLocalStorage<AgentCallContext>();
 
-export function setCurrentRemoteClient(info: { name?: string; version?: string } | null): void {
-  currentRemoteClient = info;
+  constructor(private readonly currentClient: AgentCallContext['currentClient']) {}
+
+  current(): AgentCallContext {
+    return this.calls.getStore() ?? {
+      currentClient: this.currentClient,
+      currentCallIsRemote: false,
+      currentRemoteClient: null,
+    };
+  }
+
+  runRemote<T>(client: AgentCallContext['currentRemoteClient'], operation: () => T): T {
+    return this.calls.run({ currentClient: this.currentClient, currentCallIsRemote: true, currentRemoteClient: client }, operation);
+  }
 }

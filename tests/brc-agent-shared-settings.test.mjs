@@ -6,7 +6,8 @@ import os from 'node:os';
 import { createRequire } from 'node:module';
 import { AgentConfigManager } from '../packages/agent/dist/adapters/storage/config-manager.js';
 import { resolveAgentPaths } from '../packages/agent/dist/adapters/storage/agent-paths.js';
-import { resolveSettings } from '../packages/shared/dist/index.js';
+import { ConfigStorage } from '../packages/agent/dist/adapters/storage/config-storage.js';
+import { BRC_SETTING_KEYS, FileSettingsLock, YamlSettingsStore, resolveSettings } from '../packages/shared/dist/index.js';
 
 const require = createRequire(import.meta.url);
 const yaml = require('js-yaml');
@@ -16,7 +17,19 @@ function isolated(t) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const env = { BRC_DATA_ROOT: root };
   const paths = resolveAgentPaths(env);
-  const manager = new AgentConfigManager({ paths, env, legacyDirectory: path.join(root, 'legacy') });
+  const settingsStore = new YamlSettingsStore({
+    filename: paths.configFile,
+    codec: { parse: (data) => yaml.safeLoad(data), stringify: (data) => yaml.safeDump(data, { noRefs: true }) },
+    lock: new FileSettingsLock(path.dirname(paths.configFile)),
+    backupFilename: paths.configFile + '.last-good',
+    backupKeys: BRC_SETTING_KEYS.filter((key) => key.startsWith('agent.')),
+  });
+  const manager = new AgentConfigManager(
+    settingsStore,
+    new ConfigStorage(path.join(paths.historyDirectory, 'state.json')),
+    new ConfigStorage(paths.usageFile),
+    { paths, env, legacyDirectory: path.join(root, 'legacy') },
+  );
   return { manager, root, paths };
 }
 

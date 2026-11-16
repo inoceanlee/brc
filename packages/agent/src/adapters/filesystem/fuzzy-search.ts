@@ -1,4 +1,4 @@
-import { capture } from '../telemetry/capture.js';
+import type { FilesystemDependencies } from './filesystem.js';
 import { Worker } from 'worker_threads';
 import type { FuzzyMatch, FuzzySearchMetrics } from '../../core/tools/fuzzySearchCore.js';
 
@@ -36,6 +36,7 @@ const CORE_MODULE_URL = new URL('../../core/tools/fuzzySearchCore.js', import.me
  * on the main thread, where the client identity is initialized.
  */
 export function runFuzzySearchInWorker(
+    capture: FilesystemDependencies['capture'],
     text: string,
     query: string,
     timeoutMs: number = FUZZY_SEARCH_TIMEOUT_MS
@@ -54,7 +55,7 @@ export function runFuzzySearchInWorker(
         worker.on('message', (msg: { ok: true; result: FuzzyMatch; metrics: FuzzySearchMetrics } | { ok: false; error: string }) => {
             clearTimeout(timer);
             if (msg.ok) {
-                captureFuzzySearchMetrics(msg.metrics);
+                captureFuzzySearchMetrics(capture, msg.metrics);
                 resolve(msg.result);
             } else {
                 reject(new Error(`Fuzzy search worker failed: ${msg.error}`));
@@ -80,7 +81,7 @@ export function runFuzzySearchInWorker(
 }
 
 /** Same telemetry events the search used to emit inline, now sent from the main thread. */
-function captureFuzzySearchMetrics(metrics: FuzzySearchMetrics): void {
+function captureFuzzySearchMetrics(capture: FilesystemDependencies['capture'], metrics: FuzzySearchMetrics): void {
     capture('fuzzy_search_recursive_metrics', metrics.recursive);
     if (metrics.iterative) {
         capture('fuzzy_search_iterative_metrics', metrics.iterative);

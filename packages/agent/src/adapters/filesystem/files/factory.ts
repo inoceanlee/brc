@@ -6,54 +6,23 @@
  * or async (content-based like BinaryFileHandler using isBinaryFile)
  */
 
-import { FileHandler } from './base.js';
-import { TextFileHandler } from './text.js';
-import { ImageFileHandler } from './image.js';
-import { BinaryFileHandler } from './binary.js';
-import { ExcelFileHandler } from './excel.js';
-import { PdfFileHandler } from './pdf.js';
-import { DocxFileHandler } from './docx.js';
+import type { FileHandler } from './base.js';
+import type { TextFileHandler } from './text.js';
+import type { ImageFileHandler } from './image.js';
+import type { BinaryFileHandler } from './binary.js';
+import type { ExcelFileHandler } from './excel.js';
+import type { PdfFileHandler } from './pdf.js';
+import type { DocxFileHandler } from './docx.js';
 
-// Singleton instances of each handler
-let excelHandler: ExcelFileHandler | null = null;
-let imageHandler: ImageFileHandler | null = null;
-let textHandler: TextFileHandler | null = null;
-let binaryHandler: BinaryFileHandler | null = null;
-let pdfHandler: PdfFileHandler | null = null;
-let docxHandler: DocxFileHandler | null = null;
-
-/**
- * Initialize handlers (lazy initialization)
- */
-function getExcelHandler(): ExcelFileHandler {
-    if (!excelHandler) excelHandler = new ExcelFileHandler();
-    return excelHandler;
-}
-
-function getImageHandler(): ImageFileHandler {
-    if (!imageHandler) imageHandler = new ImageFileHandler();
-    return imageHandler;
-}
-
-function getTextHandler(): TextFileHandler {
-    if (!textHandler) textHandler = new TextFileHandler();
-    return textHandler;
-}
-
-function getBinaryHandler(): BinaryFileHandler {
-    if (!binaryHandler) binaryHandler = new BinaryFileHandler();
-    return binaryHandler;
-}
-
-function getPdfHandler(): PdfFileHandler {
-    if (!pdfHandler) pdfHandler = new PdfFileHandler();
-    return pdfHandler;
-}
-
-function getDocxHandler(): DocxFileHandler {
-    if (!docxHandler) docxHandler = new DocxFileHandler();
-    return docxHandler;
-}
+export class FileHandlerFactory {
+    constructor(
+        private readonly docx: DocxFileHandler,
+        private readonly pdf: PdfFileHandler,
+        private readonly excel: ExcelFileHandler,
+        private readonly image: ImageFileHandler,
+        private readonly binary: BinaryFileHandler,
+        private readonly text: TextFileHandler,
+    ) {}
 
 /**
  * Get the appropriate file handler for a given file path
@@ -73,34 +42,34 @@ function getDocxHandler(): DocxFileHandler {
  * @param filePath File path to get handler for
  * @returns FileHandler instance that can handle this file
  */
-export async function getFileHandler(filePath: string): Promise<FileHandler> {
+async getFileHandler(filePath: string): Promise<FileHandler> {
     // Check DOCX first (extension-based, sync)
-    if (getDocxHandler().canHandle(filePath)) {
-        return getDocxHandler();
+    if (this.docx.canHandle(filePath)) {
+        return this.docx;
     }
 
     // Check PDF (extension-based, sync)
-    if (getPdfHandler().canHandle(filePath)) {
-        return getPdfHandler();
+    if (this.pdf.canHandle(filePath)) {
+        return this.pdf;
     }
 
     // Check Excel (extension-based, sync)
-    if (getExcelHandler().canHandle(filePath)) {
-        return getExcelHandler();
+    if (this.excel.canHandle(filePath)) {
+        return this.excel;
     }
 
     // Check Image (extension-based, sync - images are binary but handled specially)
-    if (getImageHandler().canHandle(filePath)) {
-        return getImageHandler();
+    if (this.image.canHandle(filePath)) {
+        return this.image;
     }
 
     // Check Binary (content-based, async via isBinaryFile)
-    if (await getBinaryHandler().canHandle(filePath)) {
-        return getBinaryHandler();
+    if (await this.binary.canHandle(filePath)) {
+        return this.binary;
     }
 
     // Default to text handler
-    return getTextHandler();
+    return this.text;
 }
 
 /**
@@ -109,8 +78,8 @@ export async function getFileHandler(filePath: string): Promise<FileHandler> {
  * @param path File path
  * @returns true if file is Excel format
  */
-export function isExcelFile(path: string): boolean {
-    return getExcelHandler().canHandle(path);
+isExcelFile(path: string): boolean {
+    return this.excel.canHandle(path);
 }
 
 /**
@@ -119,6 +88,7 @@ export function isExcelFile(path: string): boolean {
  * @param path File path
  * @returns true if file is an image format
  */
-export function isImageFile(path: string): boolean {
-    return getImageHandler().canHandle(path);
+isImageFile(path: string): boolean {
+    return this.image.canHandle(path);
+}
 }

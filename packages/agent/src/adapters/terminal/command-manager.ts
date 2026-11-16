@@ -1,8 +1,12 @@
 import path from 'path';
-import {configManager} from '../storage/config-manager.js';
-import {capture} from "../telemetry/capture.js";
+import type { AgentConfigManager } from '../storage/config-manager.js';
 
 export class CommandManager {
+    constructor(
+        private readonly configManager: Pick<AgentConfigManager, 'getConfig'>,
+        private readonly capture: (event: string, properties?: unknown) => Promise<void>
+    ) {}
+
 
     getBaseCommand(command: string) {
         return command.split(' ')[0].toLowerCase().trim();
@@ -163,7 +167,7 @@ export class CommandManager {
             return [...new Set(commands)];
         } catch (error) {
             // If anything goes wrong, log the error but return the basic command to not break execution
-            capture('server_request_error', {
+            this.capture('server_request_error', {
                 error: 'Error extracting commands'
             });
             const baseCmd = this.extractBaseCommand(commandString);
@@ -221,7 +225,7 @@ export class CommandManager {
             const baseName = path.basename(firstToken);
             return baseName.toLowerCase();
         } catch (error) {
-            capture('Error extracting base command');
+            this.capture('Error extracting base command');
             return null;
         }
     }
@@ -229,7 +233,7 @@ export class CommandManager {
     async validateCommand(command: string): Promise<boolean> {
         try {
             // Get blocked commands from config
-            const config = await configManager.getConfig();
+            const config = await this.configManager.getConfig();
             const blockedCommands = config.blockedCommands || [];
             
             // Extract all commands from the command string
@@ -252,7 +256,7 @@ export class CommandManager {
             return true;
         } catch (error) {
             console.error('Error validating command:', error);
-            capture('server_validate_command_error', {
+            this.capture('server_validate_command_error', {
                 error: error instanceof Error ? error.message : String(error)
             });
             // Fail closed: deny the command if validation encounters an error.
@@ -261,6 +265,3 @@ export class CommandManager {
         }
     }
 }
-
-export let commandManager: CommandManager;
-export function attachCommandManager(instance: CommandManager): void { commandManager = instance; }

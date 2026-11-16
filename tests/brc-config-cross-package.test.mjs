@@ -13,7 +13,8 @@ import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapter
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { AgentConfigManager } from '../packages/agent/dist/adapters/storage/config-manager.js';
 import { resolveAgentPaths } from '../packages/agent/dist/adapters/storage/agent-paths.js';
-import { FileSettingsLock, resolveSettings } from '../packages/shared/dist/index.js';
+import { ConfigStorage } from '../packages/agent/dist/adapters/storage/config-storage.js';
+import { BRC_SETTING_KEYS, FileSettingsLock, YamlSettingsStore, resolveSettings } from '../packages/shared/dist/index.js';
 
 function LifecycleLock(paths, options) {
   return new LifecycleLockImpl(paths, new LockStore(paths), options);
@@ -28,7 +29,19 @@ test('Agent writes keep the shared last-good config current for CLI rollback', a
   const env = { BRC_DATA_ROOT: root };
   const paths = resolveBrcPaths(env);
   const agentPaths = resolveAgentPaths({ ...env, BRC_CONFIG_FILE: path.join(paths.config, 'brc.yaml') });
-  const agent = new AgentConfigManager({ paths: agentPaths, env });
+  const settingsStore = new YamlSettingsStore({
+    filename: agentPaths.configFile,
+    codec: { parse: (data) => yaml.safeLoad(data), stringify: (data) => yaml.safeDump(data, { noRefs: true }) },
+    lock: new FileSettingsLock(path.dirname(agentPaths.configFile)),
+    backupFilename: agentPaths.configFile + '.last-good',
+    backupKeys: BRC_SETTING_KEYS.filter((key) => key.startsWith('agent.')),
+  });
+  const agent = new AgentConfigManager(
+    settingsStore,
+    new ConfigStorage(path.join(agentPaths.historyDirectory, 'state.json')),
+    new ConfigStorage(agentPaths.usageFile),
+    { paths: agentPaths, env },
+  );
   let applyCount = 0;
   const manager = await SettingsManager.load(paths, env, {
     lock: { runExclusive: async (operation) => operation() },
@@ -52,7 +65,16 @@ test('CLI and Agent serialize concurrent updates without losing either setting',
   const env = { BRC_DATA_ROOT: root };
   const paths = resolveBrcPaths(env);
   const agentPaths = resolveAgentPaths({ ...env, BRC_CONFIG_FILE: path.join(paths.config, 'brc.yaml') });
-  const agent = new AgentConfigManager({ paths: agentPaths, env });
+  const settingsStore = new YamlSettingsStore({
+    filename: agentPaths.configFile,
+    codec: { parse: (data) => yaml.safeLoad(data), stringify: (data) => yaml.safeDump(data, { noRefs: true }) },
+    lock: new FileSettingsLock(path.dirname(agentPaths.configFile)),
+    backupFilename: agentPaths.configFile + '.last-good',
+    backupKeys: BRC_SETTING_KEYS.filter((key) => key.startsWith('agent.')),
+  });
+  const agent = new AgentConfigManager(settingsStore,
+    new ConfigStorage(path.join(agentPaths.historyDirectory, 'state.json')),
+    new ConfigStorage(agentPaths.usageFile), { paths: agentPaths, env });
   const lifecycleLock = new LifecycleLock(paths);
   const configLock = new FileSettingsLock(paths.config);
   const manager = await SettingsManager.load(paths, env, {
@@ -90,9 +112,16 @@ test('real CLI waits for an Agent process holding the shared configuration lock'
   writeFileSync(env.BRC_CONFIG_FILE + '.last-good', initial);
   const sharedUrl = new URL('../packages/shared/dist/index.js', import.meta.url).href;
   const agentUrl = new URL('../packages/agent/dist/adapters/storage/config-manager.js', import.meta.url).href;
+  const storageUrl = new URL('../packages/agent/dist/adapters/storage/config-storage.js', import.meta.url).href;
+  const pathsUrl = new URL('../packages/agent/dist/adapters/storage/agent-paths.js', import.meta.url).href;
+  const packageUrl = new URL('../packages/agent/package.json', import.meta.url).href;
   const source = `
-    import { FileSettingsLock } from ${JSON.stringify(sharedUrl)};
+    import { createRequire } from 'node:module';
+    import path from 'node:path';
+    import { FileSettingsLock, YamlSettingsStore, BRC_SETTING_KEYS } from ${JSON.stringify(sharedUrl)};
     import { AgentConfigManager } from ${JSON.stringify(agentUrl)};
+    import { ConfigStorage } from ${JSON.stringify(storageUrl)};
+    import { resolveAgentPaths } from ${JSON.stringify(pathsUrl)};
     const original = FileSettingsLock.prototype.runExclusive;
     FileSettingsLock.prototype.runExclusive = function (operation, signal) {
       return original.call(this, async () => {
@@ -101,7 +130,18 @@ test('real CLI waits for an Agent process holding the shared configuration lock'
         return operation();
       }, signal);
     };
-    const agent = new AgentConfigManager({ env: process.env });
+    const paths = resolveAgentPaths(process.env);
+    const yaml = createRequire(${JSON.stringify(packageUrl)})('js-yaml');
+    const store = new YamlSettingsStore({
+      filename: paths.configFile,
+      codec: { parse: (data) => yaml.safeLoad(data), stringify: (data) => yaml.safeDump(data, { noRefs: true }) },
+      lock: new FileSettingsLock(path.dirname(paths.configFile)),
+      backupFilename: paths.configFile + '.last-good',
+      backupKeys: BRC_SETTING_KEYS.filter((key) => key.startsWith('agent.')),
+    });
+    const agent = new AgentConfigManager(store,
+      new ConfigStorage(path.join(paths.historyDirectory, 'state.json')),
+      new ConfigStorage(paths.usageFile), { paths, env: process.env });
     await agent.setValue('allowedDirectories', ['C:\\\\workspace']);
     process.disconnect();
   `;

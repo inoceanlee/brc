@@ -9,14 +9,14 @@ import {
     writePdf,
     getDefaultEditorMetadata,
     type FileResult,
-    type MultiFileResult
+    type MultiFileResult,
+    type FilesystemDependencies
 } from '../../filesystem/filesystem.js';
 import type { ReadOptions } from '../../filesystem/files/base.js';
 
 import { ServerResult } from '../../../core/types.js';
 import { withTimeout } from '../../system/timeout.js';
 import { createErrorResponse } from '../error-handlers.js';
-import { configManager } from '../../storage/config-manager.js';
 import { AGENT_DEFAULTS } from '../../../core/config.js';
 
 import {
@@ -71,7 +71,8 @@ function getErrorFromPath(path: string): string {
 /**
  * Handle read_file command
  */
-export async function handleReadFile(args: unknown): Promise<ServerResult> {
+export async function handleReadFile(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
+    const { configManager } = dependencies;
     // Backstop for the whole handler operation. The real control is the
     // 3-minute cancellable read timeout inside readFileFromDisk; this sits just
     // above it (so that one fires first, with cleanup + a useful error) but
@@ -80,7 +81,7 @@ export async function handleReadFile(args: unknown): Promise<ServerResult> {
     const HANDLER_TIMEOUT = 3.5 * 60 * 1000; // 3m30s
     // Add input validation
     if (args === null || args === undefined) {
-        return createErrorResponse('No arguments provided for read_file command');
+        return createErrorResponse('No arguments provided for read_file command', dependencies.capture);
     }
     const readFileOperation = async () => {
         const parsed = ReadFileArgsSchema.parse(args);
@@ -88,7 +89,7 @@ export async function handleReadFile(args: unknown): Promise<ServerResult> {
         // Get the configuration for file read limits
         const config = await configManager.getConfig();
         if (!config) {
-            return createErrorResponse('Configuration not available');
+            return createErrorResponse('Configuration not available', dependencies.capture);
         }
 
         const defaultLimit = config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
@@ -112,7 +113,7 @@ export async function handleReadFile(args: unknown): Promise<ServerResult> {
             ? parsed.path
             : resolveAbsolutePath(parsed.path);
 
-        const fileResult = await readFile(parsed.path, options);
+        const fileResult = await readFile(dependencies, parsed.path, options);
 
         // Handle PDF files
         if (fileResult.metadata?.isPdf) {
@@ -240,9 +241,9 @@ export async function handleReadFile(args: unknown): Promise<ServerResult> {
 /**
  * Handle read_multiple_files command
  */
-export async function handleReadMultipleFiles(args: unknown): Promise<ServerResult> {
+export async function handleReadMultipleFiles(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     const parsed = ReadMultipleFilesArgsSchema.parse(args);
-    const fileResults = await readMultipleFiles(parsed.paths);
+    const fileResults = await readMultipleFiles(dependencies, parsed.paths);
 
     // Create a text summary of all files
     const textSummary = fileResults.map(result => {
@@ -303,7 +304,8 @@ export async function handleReadMultipleFiles(args: unknown): Promise<ServerResu
 /**
  * Handle write_file command
  */
-export async function handleWriteFile(args: unknown): Promise<ServerResult> {
+export async function handleWriteFile(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
+    const { configManager } = dependencies;
     try {
         const modeProvided = !!(args && typeof args === 'object' && 'mode' in args);
         const parsed = WriteFileArgsSchema.parse(args);
@@ -316,7 +318,7 @@ export async function handleWriteFile(args: unknown): Promise<ServerResult> {
         if (!modeProvided) {
             let existing: Record<string, any> | null = null;
             try {
-                existing = await getFileInfo(parsed.path);
+                existing = await getFileInfo(dependencies, parsed.path);
             } catch {
                 // Missing file or invalid path — nothing to protect; the write
                 // itself will surface any real path error.
@@ -327,7 +329,7 @@ export async function handleWriteFile(args: unknown): Promise<ServerResult> {
                     `with content (${existing.size} bytes), and no 'mode' was specified — the default ` +
                     `mode 'rewrite' would REPLACE the entire file. Retry with an explicit mode: ` +
                     `'append' to add your content to the end of the existing file, or 'rewrite' ` +
-                    `to replace all existing content.`
+                    `to replace all existing content.`, dependencies.capture
                 );
             }
         }
@@ -347,7 +349,7 @@ export async function handleWriteFile(args: unknown): Promise<ServerResult> {
         }
 
         // Pass the mode parameter to writeFile
-        await writeFile(parsed.path, parsed.content, parsed.mode);
+        await writeFile(dependencies, parsed.path, parsed.content, parsed.mode);
 
         // Provide more informative message based on mode
         const modeMessage = parsed.mode === 'append' ? 'appended to' : 'wrote to';
@@ -362,34 +364,34 @@ export async function handleWriteFile(args: unknown): Promise<ServerResult> {
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 }
 
 /**
  * Handle create_directory command
  */
-export async function handleCreateDirectory(args: unknown): Promise<ServerResult> {
+export async function handleCreateDirectory(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     try {
         const parsed = CreateDirectoryArgsSchema.parse(args);
-        await createDirectory(parsed.path);
+        await createDirectory(dependencies, parsed.path);
         return {
             content: [{ type: "text", text: `Successfully created directory ${parsed.path}` }],
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 }
 
 /**
  * Handle list_directory command
  */
-export async function handleListDirectory(args: unknown): Promise<ServerResult> {
+export async function handleListDirectory(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     try {
         const startTime = Date.now();
         const parsed = ListDirectoryArgsSchema.parse(args);
-        const entries = await listDirectory(parsed.path, parsed.depth);
+        const entries = await listDirectory(dependencies, parsed.path, parsed.depth);
         const duration = Date.now() - startTime;
 
         const resultText = entries.join('\n');
@@ -407,23 +409,23 @@ export async function handleListDirectory(args: unknown): Promise<ServerResult> 
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 }
 
 /**
  * Handle move_file command
  */
-export async function handleMoveFile(args: unknown): Promise<ServerResult> {
+export async function handleMoveFile(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     try {
         const parsed = MoveFileArgsSchema.parse(args);
-        await moveFile(parsed.source, parsed.destination);
+        await moveFile(dependencies, parsed.source, parsed.destination);
         return {
             content: [{ type: "text", text: `Successfully moved ${parsed.source} to ${parsed.destination}` }],
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 }
 
@@ -457,10 +459,10 @@ function formatValue(value: unknown, indent: string = ''): string {
 /**
  * Handle get_file_info command
  */
-export async function handleGetFileInfo(args: unknown): Promise<ServerResult> {
+export async function handleGetFileInfo(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     try {
         const parsed = GetFileInfoArgsSchema.parse(args);
-        const info = await getFileInfo(parsed.path);
+        const info = await getFileInfo(dependencies, parsed.path);
 
         // Generic formatting for any file type
         const formattedText = Object.entries(info)
@@ -475,7 +477,7 @@ export async function handleGetFileInfo(args: unknown): Promise<ServerResult> {
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 }
 
@@ -484,16 +486,16 @@ export async function handleGetFileInfo(args: unknown): Promise<ServerResult> {
 /**
  * Handle write_pdf command
  */
-export async function handleWritePdf(args: unknown): Promise<ServerResult> {
+export async function handleWritePdf(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     try {
         const parsed = WritePdfArgsSchema.parse(args);
-        await writePdf(parsed.path, parsed.content, parsed.outputPath, parsed.options);
+        await writePdf(dependencies, parsed.path, parsed.content, parsed.outputPath, parsed.options);
         const targetPath = parsed.outputPath || parsed.path;
         return {
             content: [{ type: "text", text: `Successfully wrote PDF to ${targetPath}${parsed.outputPath ? `\nOriginal file: ${parsed.path}` : ''}` }],
         };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 }

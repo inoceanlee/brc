@@ -16,7 +16,7 @@ test('valid legacy device file migrates and is removed only after verified copy'
   mkdirSync(legacy);
   const source = path.join(legacy, 'device.json');
   writeFileSync(source, JSON.stringify(sample));
-  assert.equal(migrateCredentialFile(source, state), true);
+  assert.equal(migrateCredentialFile(source, state, new CredentialStore(legacy), new CredentialStore(state)), true);
   assert.equal(existsSync(source), false);
   assert.deepEqual(JSON.parse(readFileSync(path.join(state, 'device.json'), 'utf8')), sample);
 });
@@ -31,7 +31,7 @@ test('existing device credentials always win over old file', (t) => {
   const source = path.join(legacy, 'device.json');
   writeFileSync(source, JSON.stringify(sample));
   writeFileSync(path.join(state, 'device.json'), JSON.stringify({ ...sample, deviceToken: 'already-new' }));
-  assert.equal(migrateCredentialFile(source, state), false);
+  assert.equal(migrateCredentialFile(source, state, new CredentialStore(legacy), new CredentialStore(state)), false);
   assert.equal(existsSync(source), true);
   assert.equal(JSON.parse(readFileSync(path.join(state, 'device.json'), 'utf8')).deviceToken, 'already-new');
 });
@@ -42,7 +42,7 @@ test('malformed legacy credential is preserved without creating target', (t) => 
   const source = path.join(root, 'device.json');
   const state = path.join(root, 'new');
   writeFileSync(source, '{broken');
-  assert.equal(migrateCredentialFile(source, state), false);
+  assert.equal(migrateCredentialFile(source, state, new CredentialStore(root), new CredentialStore(state)), false);
   assert.equal(readFileSync(source, 'utf8'), '{broken');
   assert.equal(existsSync(path.join(state, 'device.json')), false);
 });
@@ -59,7 +59,7 @@ test('malformed destination credentials are not overwritten by legacy migration'
   const newFile = path.join(target, 'device.json');
   writeFileSync(oldFile, JSON.stringify(sample));
   writeFileSync(newFile, '{broken');
-  assert.equal(migrateCredentialFile(oldFile, target), false);
+  assert.equal(migrateCredentialFile(oldFile, target, new CredentialStore(legacy), new CredentialStore(target)), false);
   assert.equal(readFileSync(newFile, 'utf8'), '{broken');
   assert.equal(existsSync(oldFile), true);
 });

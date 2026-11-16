@@ -1,8 +1,22 @@
 import { platform } from 'os';
 import * as https from 'https';
 import { AsyncLocalStorage } from 'async_hooks';
-import { configManager, isTelemetryDisabledValue } from '../storage/config-manager.js';
-import { currentClient, currentCallIsRemote, currentRemoteClient } from '../../context.js';
+import { isTelemetryDisabledValue } from '../storage/config-manager.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { getSystemInfo } from '../system/system-info.js';
+
+export type Capture = (event: string, properties?: unknown) => Promise<void>;
+
+export interface CaptureDependencies {
+    env: NodeJS.ProcessEnv;
+    configManager: AgentConfigManager;
+    getContext: () => {
+        currentClient: { name: string; version: string } | null | undefined;
+        currentCallIsRemote: boolean;
+        currentRemoteClient: { name?: string; version?: string } | null | undefined;
+    };
+    getSystemInfo: typeof getSystemInfo;
+}
 
 // Execution context for tool calls fired programmatically by the widget UIs
 // (file preview, config editor), marked by args.origin === 'ui'. While code
@@ -28,8 +42,6 @@ try {
     // Continue without version info if not available
 }
 
-// Will be initialized when needed
-let uniqueUserId = 'unknown';
 
 // --- Telemetry Proxy (direct BigQuery ingestion) ---
 // TODO: Move proxy endpoints, auth header setup, request retry/fallback, and
@@ -47,10 +59,10 @@ const TELEMETRY_PROXY_FALLBACK_URL = 'https://dc-telemetry-proxy-83847352264.eur
  * one-off runs can suppress all analytics without mutating the user's config.
  * Set DESKTOP_COMMANDER_DISABLE_TELEMETRY to 1/true/yes/on to disable.
  */
-export function isTelemetryDisabledByEnv(): boolean {
+export function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv): boolean {
     // Better Remote Commander (BRC): upstream telemetry is OFF unless explicitly opted in with BRC_UPSTREAM_TELEMETRY=1
-    if (!['1', 'true'].includes((process.env.BRC_UPSTREAM_TELEMETRY ?? '').toLowerCase())) return true;
-    const raw = process.env.DESKTOP_COMMANDER_DISABLE_TELEMETRY;
+    if (!['1', 'true'].includes((env.BRC_UPSTREAM_TELEMETRY ?? '').toLowerCase())) return true;
+    const raw = env.DESKTOP_COMMANDER_DISABLE_TELEMETRY;
     if (!raw) return false;
     return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
@@ -91,11 +103,15 @@ export function sanitizeError(error: any): { message: string, code?: string } {
 }
 
 
+export function createCapture({ configManager, getContext, getSystemInfo, env }: CaptureDependencies) {
+let uniqueUserId = 'unknown';
+
 /**
  * Build the standard event properties used by the telemetry proxy.
  * Centralize telemetry event sanitization for the supported capture path.
  */
 const buildEventProperties = async (properties?: any) => {
+    const { currentClient, currentCallIsRemote, currentRemoteClient } = getContext();
     if (uniqueUserId === 'unknown') {
         uniqueUserId = await configManager.getOrCreateClientId();
     }
@@ -143,9 +159,8 @@ const buildEventProperties = async (properties?: any) => {
     }
 
     let isDXT = 'false';
-    if (process.env.MCP_DXT) isDXT = 'true';
+    if (env.MCP_DXT) isDXT = 'true';
 
-    const { getSystemInfo } = await import('../system/system-info.js');
     const systemInfo = getSystemInfo();
     const isContainer = systemInfo.docker.isContainer ? 'true' : 'false';
     const containerType = systemInfo.docker.containerType || 'none';
@@ -209,7 +224,7 @@ const buildEventProperties = async (properties?: any) => {
  */
 const sendToTelemetryProxy = async (event: string, eventProperties: any) => {
     try {
-        if (isTelemetryDisabledByEnv()) return;
+        if (isTelemetryDisabledByEnv(env)) return;
         const telemetryEnabled = await configManager.getValue('telemetryEnabled');
         if (isTelemetryDisabledValue(telemetryEnabled)) return;
 
@@ -264,8 +279,8 @@ const postTelemetryPayload = async (endpoint: string, payload: string): Promise<
 // MCP server, but events fired right before process exit (e.g. opt-out, feedback)
 // can be silently dropped. If we need delivery guarantees on short-lived paths,
 // expose an awaitable variant or flush-before-exit hook.
-export const capture = async (event: string, properties?: any) => {
-    if (isTelemetryDisabledByEnv()) return;
+const capture = async (event: string, properties?: unknown) => {
+    if (isTelemetryDisabledByEnv(env)) return;
     // Tool calls fired programmatically by the widget UIs must produce zero
     // telemetry — drop every event raised while serving one.
     if (isInsideUiOriginCall()) {
@@ -281,8 +296,8 @@ export const capture = async (event: string, properties?: any) => {
     })();
 }
 
-export const capture_call_tool = capture;
-export const capture_ui_event = capture;
+const capture_call_tool = capture;
+const capture_ui_event = capture;
 
 /**
  * Wrapper for capture() that automatically adds remote flag for remote-device telemetry
@@ -290,7 +305,7 @@ export const capture_ui_event = capture;
  * @param event Event name
  * @param properties Optional event properties
  */
-export const captureRemote = async (event: string, properties?: any) => {
+const captureRemote = async (event: string, properties?: Record<string, unknown>) => {
     // Create a copy of properties to avoid mutating the original
     const sanitizedProps = properties ? { ...properties } : {};
 
@@ -306,4 +321,7 @@ export const captureRemote = async (event: string, properties?: any) => {
         ...sanitizedProps,
         remote: String(true)
     });
+}
+
+return { capture, capture_call_tool, capture_ui_event, captureRemote };
 }

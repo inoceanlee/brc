@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSettingsLock, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, YamlSettingsStore, resolveSettings, type CliResult } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, type CliResult } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
-import { resolveAgentPaths } from './adapters/storage/agent-paths.js';
+import { resolveAgentSettings } from './adapters/storage/config-manager.js';
+import type { AgentConnectionServices } from './adapters/transport/connection.js';
 import { parseAgentInvocation, AgentUsageError } from './commands/parser.js';
 import { runAgentLocalCommand } from './commands/local.js';
 import { TokenInputError } from './adapters/terminal/secret-input.js';
@@ -19,24 +20,13 @@ const yaml = (value: unknown): string => {
   return codec.safeDump(value, { noRefs: true });
 };
 
-async function createAgentDiagnostics() {
-  const paths = resolveAgentPaths();
-  const codec = requireFromHere('js-yaml') as { safeLoad(value: string): unknown; safeDump(value: unknown, options: { noRefs: boolean }): string };
-  const settingsStore = new YamlSettingsStore({
-    filename: paths.configFile,
-    codec: { parse: (value) => codec.safeLoad(value), stringify: (value) => codec.safeDump(value, { noRefs: true }) },
-    lock: new FileSettingsLock(path.dirname(paths.configFile)),
-  });
-  const env = /^(false|0)$/i.test(process.env.BRC_DIAGNOSTICS_ENABLED ?? '')
-    ? Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-      !['BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS', 'BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS',
-        'BRC_DIAGNOSTICS_MAX_RECORD_BYTES', 'BRC_DIAGNOSTICS_RETENTION_DAYS'].includes(key)))
-    : process.env;
-  const resolved = resolveSettings((await settingsStore.read()).settings, env).settings;
+async function createAgentDiagnostics(services: AgentConnectionServices) {
+  const { paths, env } = services;
+  const resolved = resolveAgentSettings((await services.settingsStore.read()).settings, env);
   const settings = resolved.diagnostics;
-  const directory = process.env.BRC_DIAGNOSTICS_DIR;
-  const enabled = process.env.BRC_DIAGNOSTICS_ENABLED !== undefined && settings.enabled && !!directory;
-  const instanceId = process.env.BRC_MANAGED_ID ?? String(process.pid);
+  const directory = env.BRC_DIAGNOSTICS_DIR || path.join(paths.root, 'diagnostics');
+  const enabled = settings.enabled;
+  const instanceId = env.BRC_MANAGED_ID ?? String(process.pid);
   const functions = enabled ? new FunctionTiming() : undefined;
   if (functions) {
     for (const url of [
@@ -60,7 +50,7 @@ async function createAgentDiagnostics() {
     service: 'agent', instanceId, store, functions, resources, snapshotIntervalMs: settings.functionSnapshotMs,
   }) : undefined;
   const maxBytes = resolved.logs.rotateMiB * 1024 * 1024;
-  const log = functions ? new FileDiagnosticLog(path.join(resolveAgentPaths().logsDirectory, 'agent-diagnostics.log'), {
+  const log = functions ? new FileDiagnosticLog(path.join(paths.logsDirectory, 'agent-diagnostics.log'), {
     maxRecordBytes: settings.maxRecordBytes, maxBytes,
   }) : undefined;
   const runtime = createDiagnosticsRuntime({ enabled, component: 'agent', instanceId, functions, resources, session, log });
@@ -89,20 +79,20 @@ async function run(): Promise<CliResult | null> {
   if (invocation.command === 'connect' && invocation.preview) {
     return cliSuccess({ action: 'connect', changed: false, preview: true, relay: invocation.relay ?? null });
   }
-  if (invocation.command === 'config allow-dir' || invocation.command === 'connect') {
-    const { configureAgentServices } = await import('./composition.js');
-    configureAgentServices();
+  if (invocation.command === 'credentials logout' || (invocation.command === 'service install' && !invocation.preview)) {
+    const { createAgentCredentials } = await import('./index.js');
+    return runAgentLocalCommand(invocation, undefined, createAgentCredentials({ ...process.env }));
   }
-  if (invocation.command !== 'connect') return runAgentLocalCommand(invocation);
+  if (invocation.command !== 'connect' && (invocation.command !== 'config allow-dir' || invocation.preview)) {
+    return runAgentLocalCommand(invocation);
+  }
+  const { configureAgentServices } = await import('./index.js');
+  const services = await configureAgentServices();
+  if (invocation.command !== 'connect') return runAgentLocalCommand(invocation, services.configManager);
   const { runAgentConnection } = await import('./adapters/transport/connection.js');
-  const diagnostics = await createAgentDiagnostics();
+  const diagnostics = await createAgentDiagnostics(services);
   try {
-    await runAgentConnection(invocation, diagnostics, createServer(), {
-      token: process.env.BRC_CONTROL_TOKEN,
-      readyFile: process.env.BRC_CONTROL_READY_FILE,
-      id: process.env.BRC_MANAGED_ID,
-      service: process.env.BRC_MANAGED_SERVICE,
-    });
+    await runAgentConnection(invocation, services, diagnostics, createServer());
   } catch (error) {
     await diagnostics.stop();
     throw error;

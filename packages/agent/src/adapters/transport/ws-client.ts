@@ -8,7 +8,6 @@ import {
   DEFAULTS, BRC_PROTOCOL_VERSION, parseMessage,
   type AgentMessage, type RelayMessage, type CallMessage, type DeviceInfo, type ToolDefinition,
 } from 'brc-shared';
-import { setCurrentRemoteClient, setCurrentCallIsRemote } from '../../context.js';
 
 export interface WsClientOptions {
   relayUrl: string;          // https://host or wss://host
@@ -18,7 +17,7 @@ export interface WsClientOptions {
   agentVersion: string;
   coreVersion: string;
   tools: ToolDefinition[];
-  callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  callTool: (name: string, args: Record<string, unknown>, client?: { name?: string; version?: string } | null) => Promise<unknown>;
   log?: (level: 'info' | 'warn' | 'error' | 'debug', msg: string) => void;
   /** Called when the relay rejects our token. Return true if the caller takes over (no further reconnects). */
   onUnauthorized?: () => Promise<boolean>;
@@ -136,10 +135,8 @@ export class WsClient {
 
   private async handleCall(msg: CallMessage): Promise<void> {
     this.log('debug', `call ${msg.id} ${msg.tool}`);
-    setCurrentCallIsRemote(true);
-    setCurrentRemoteClient(msg.client ?? null);
     try {
-      const result = await this.opts.callTool(msg.tool, msg.args ?? {});
+      const result = await this.opts.callTool(msg.tool, msg.args ?? {}, msg.client ?? null);
       this.send({ type: 'result', id: msg.id, result: result as never });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

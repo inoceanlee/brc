@@ -1,12 +1,17 @@
-import { configManager } from '../storage/config-manager.js';
-import { hasFeature } from './ab-test.js';
-import { featureFlagManager } from '../network/feature-flags.js';
-import { openWelcomePage } from '../system/open-browser.js';
-import { logToStderr } from './logger.js';
-import { capture } from './capture.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { FeatureFlagManager } from '../network/feature-flags.js';
+
+export interface WelcomeOnboardingDependencies {
+  configManager: AgentConfigManager;
+  featureFlagManager: FeatureFlagManager;
+  hasFeature: (featureName: string) => Promise<boolean>;
+  openWelcomePage: (clientName?: string) => Promise<unknown>;
+  logToStderr: (level: 'debug' | 'info' | 'warning', message: string) => void;
+  capture: (event: string, properties?: Record<string, unknown>) => Promise<unknown> | unknown;
+}
 
 /** Consume a pending welcome page when this client must never receive it. */
-export async function skipWelcomePageOnboarding(): Promise<void> {
+export async function skipWelcomePageOnboarding({ configManager, logToStderr }: WelcomeOnboardingDependencies): Promise<void> {
   const pending = await configManager.getValue('pendingWelcomeOnboarding');
   if (!pending) {
     return;
@@ -16,7 +21,7 @@ export async function skipWelcomePageOnboarding(): Promise<void> {
   logToStderr('debug', 'Welcome page skipped');
 }
 
-function isWelcomePageClientExcluded(clientName?: string): boolean {
+function isWelcomePageClientExcluded(featureFlagManager: FeatureFlagManager, clientName?: string): boolean {
   const configuredClients = featureFlagManager.get('welcome_page_excluded_clients', []);
   if (!Array.isArray(configuredClients) || !clientName) {
     return false;
@@ -37,7 +42,8 @@ function isWelcomePageClientExcluded(clientName?: string): boolean {
  * 2. Users in the 'showOnboardingPage' A/B variant
  * 3. Haven't seen it yet
  */
-export async function handleWelcomePageOnboarding(clientName?: string): Promise<void> {
+export async function handleWelcomePageOnboarding(deps: WelcomeOnboardingDependencies, clientName?: string): Promise<void> {
+  const { configManager, featureFlagManager, hasFeature, openWelcomePage, logToStderr, capture } = deps;
   // Existing configs are migrated to false. Only configs created with the
   // eligibility marker may receive this welcome-page campaign.
   const eligible = await configManager.getValue('welcomeOnboardingEligible');
@@ -68,12 +74,12 @@ export async function handleWelcomePageOnboarding(clientName?: string): Promise<
   // file typo cannot permanently consume pending onboarding for new installs.
   const enabled = featureFlagManager.get('welcome_page_enabled', true) !== false;
   if (!enabled) {
-    await skipWelcomePageOnboarding();
+    await skipWelcomePageOnboarding(deps);
     return;
   }
 
-  if (isWelcomePageClientExcluded(clientName)) {
-    await skipWelcomePageOnboarding();
+  if (isWelcomePageClientExcluded(featureFlagManager, clientName)) {
+    await skipWelcomePageOnboarding(deps);
     return;
   }
 

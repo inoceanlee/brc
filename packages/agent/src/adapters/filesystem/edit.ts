@@ -15,20 +15,23 @@
  * 3. Unify the editRange() signature to handle both text search/replace and structured edits
  */
 
-import { getDefaultEditorMetadata, readFile, writeFile, readFileInternal, validatePath } from './filesystem.js';
+import { getDefaultEditorMetadata, readFile, writeFile, readFileInternal, validatePath, type FilesystemDependencies } from './filesystem.js';
 import fs from 'fs/promises';
 import { ServerResult } from '../../core/types.js';
 import { runFuzzySearchInWorker, getSimilarityRatio } from './fuzzy-search.js';
-import { capture } from '../telemetry/capture.js';
 import { createErrorResponse } from '../mcp/error-handlers.js';
 import { EditBlockArgsSchema } from "../../core/tools/schemas.js";
 import path from 'path';
 import { detectLineEnding, normalizeLineEndings } from './line-endings.js';
-import { configManager } from '../storage/config-manager.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';
-import { fuzzySearchLogger, type FuzzySearchLogEntry } from '../telemetry/fuzzySearchLogger.js';
+import type { FuzzySearchLogger, FuzzySearchLogEntry } from '../telemetry/fuzzySearchLogger.js';
 import { resolvePreviewFileType } from '../../core/ui/file-preview/shared/preview-file-types.js';
 import { resolveAbsolutePath } from '../mcp/handlers/filesystem-handlers.js';
+import type { FileHandler } from './files/base.js';
+
+export interface EditDependencies extends FilesystemDependencies {
+    fuzzySearchLogger: FuzzySearchLogger;
+}
 
 interface SearchReplace {
     search: string;
@@ -114,7 +117,8 @@ function getCharacterCodeData(expected: string, actual: string): {
     };
 }
 
-export async function performSearchReplace(filePath: string, block: SearchReplace, expectedReplacements: number = 1, origin?: 'ui' | 'llm'): Promise<ServerResult> {
+export async function performSearchReplace(dependencies: EditDependencies, filePath: string, block: SearchReplace, expectedReplacements: number = 1, origin?: 'ui' | 'llm'): Promise<ServerResult> {
+    const { configManager, fuzzySearchLogger, capture } = dependencies;
     // Get file extension for telemetry using path module
     const fileExtension = path.extname(filePath).toLowerCase();
     
@@ -142,8 +146,8 @@ export async function performSearchReplace(filePath: string, block: SearchReplac
     
 
     // Read file directly to preserve line endings - critical for edit operations
-    const validPath = await validatePath(filePath);
-    const content = await readFileInternal(validPath, 0, Number.MAX_SAFE_INTEGER);
+    const validPath = await validatePath(dependencies, filePath);
+    const content = await readFileInternal(dependencies, validPath, 0, Number.MAX_SAFE_INTEGER);
     
     // Make sure content is a string
     if (typeof content !== 'string') {
@@ -201,7 +205,7 @@ export async function performSearchReplace(filePath: string, block: SearchReplac
 RECOMMENDATION: For large search/replace operations, consider breaking them into smaller chunks with fewer lines.`;
         }
         
-        await writeFile(filePath, newContent);
+        await writeFile(dependencies, filePath, newContent);
         capture('server_edit_block_exact_success', {fileExtension: fileExtension, expectedReplacements, hasWarning: warningMessage !== ""});
         const resolvedEditPath = resolveAbsolutePath(filePath);
 
@@ -260,7 +264,7 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
 
         // Perform fuzzy search in a worker thread so the main event loop stays
         // responsive to pings and parallel tool calls during the scan
-        const fuzzyResult = await runFuzzySearchInWorker(content, block.search);
+        const fuzzyResult = await runFuzzySearchInWorker(capture, content, block.search);
         const similarity = getSimilarityRatio(block.search, fuzzyResult.value);
         
         // Calculate execution time in milliseconds
@@ -412,7 +416,7 @@ function highlightDifferences(expected: string, actual: string): string {
  *    - Supports chunking for large datasets (e.g., 1000 rows at a time)
 
  */
-export async function handleEditBlock(args: unknown): Promise<ServerResult> {
+export async function handleEditBlock(args: unknown, dependencies: EditDependencies): Promise<ServerResult> {
     const parsed = EditBlockArgsSchema.parse(args);
 
     // Note: Check for truthy range to handle empty strings from AI clients that send all optional params
@@ -421,14 +425,13 @@ export async function handleEditBlock(args: unknown): Promise<ServerResult> {
 
     // Validate path and resolve handler once — used by both dispatch paths below
     let validatedPath: string;
-    let handler: Awaited<ReturnType<typeof import('./files/factory.js').getFileHandler>>;
+    let handler: FileHandler;
     try {
-        validatedPath = await validatePath(parsed.file_path);
-        const { getFileHandler } = await import('./files/factory.js');
-        handler = await getFileHandler(validatedPath);
+        validatedPath = await validatePath(dependencies, parsed.file_path);
+        handler = await dependencies.fileHandlers.getFileHandler(validatedPath);
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        return createErrorResponse(errorMessage);
+        return createErrorResponse(errorMessage, dependencies.capture);
     }
 
     const hasEditRange = 'editRange' in handler && typeof handler.editRange === 'function';
@@ -466,16 +469,16 @@ export async function handleEditBlock(args: unknown): Promise<ServerResult> {
                 };
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
-                return createErrorResponse(errorMessage);
+                return createErrorResponse(errorMessage, dependencies.capture);
             }
         }
 
-        return createErrorResponse(`Range-based editing not supported for ${parsed.file_path}. For text files, use old_string and new_string parameters instead. If your client requires range/content parameters, set them to empty strings ("").`);
+        return createErrorResponse(`Range-based editing not supported for ${parsed.file_path}. For text files, use old_string and new_string parameters instead. If your client requires range/content parameters, set them to empty strings ("").`, dependencies.capture);
     }
 
     // Path 2: Text replacement — old_string + new_string
     if (parsed.old_string === undefined || parsed.new_string === undefined) {
-        return createErrorResponse(`Text replacement requires both old_string and new_string parameters`);
+        return createErrorResponse(`Text replacement requires both old_string and new_string parameters`, dependencies.capture);
     }
 
     // If the handler implements editRange it owns text-replacement for its file type
@@ -508,14 +511,14 @@ export async function handleEditBlock(args: unknown): Promise<ServerResult> {
             }
 
             const errorMsg = result.errors?.map(e => e.error).join('; ') || 'Unknown error';
-            return createErrorResponse(errorMsg);
+            return createErrorResponse(errorMsg, dependencies.capture);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            return createErrorResponse(errorMessage);
+            return createErrorResponse(errorMessage, dependencies.capture);
         }
     }
 
-    return performSearchReplace(parsed.file_path, {
+    return performSearchReplace(dependencies, parsed.file_path, {
         search: parsed.old_string,
         replace: parsed.new_string
     }, parsed.expected_replacements, parsed.origin);

@@ -3,12 +3,28 @@ import { test } from 'node:test';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pairDevice, loadCredentials } from '../packages/agent/dist/adapters/transport/pairing.js';
+import { pairDevice } from '../packages/agent/dist/adapters/transport/pairing.js';
 import { CredentialStore } from '../packages/agent/dist/adapters/storage/credential-store.js';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+
+test('credential preview does not initialize or modify history', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'brc-credential-preview-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const directory = path.join(root, 'data', 'agent');
+  mkdirSync(directory, { recursive: true });
+  const history = path.join(directory, 'tool-history.json');
+  writeFileSync(history, '{damaged private history');
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  const child = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../packages/agent/dist/cli.js', import.meta.url)), 'credentials', 'logout', '--preview',
+  ], { env: { ...env, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' }, encoding: 'utf8', timeout: 8000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(readFileSync(history, 'utf8'), '{damaged private history');
+});
 const start = { device_code: 'code', user_code: 'USER', verification_uri: 'https://relay.example/verify', verification_uri_complete: 'https://relay.example/verify?code=USER', expires_in: 30, interval: 2 };
 
 async function scenario(t, responses, options = {}) {
@@ -19,6 +35,8 @@ async function scenario(t, responses, options = {}) {
   const originalNow = Date.now;
   const file = path.join(home, 'data', 'agent', 'device.json');
   mkdirSync(path.dirname(file), { recursive: true });
+  const store = new CredentialStore(path.dirname(file));
+  const credentials = { filename: file, load: () => store.load(), save: (value) => store.save(value) };
   const requests = [];
   const delays = [];
   let now = 1_000_000;
@@ -47,7 +65,7 @@ async function scenario(t, responses, options = {}) {
     rmSync(home, { recursive: true, force: true });
   });
   const logs = [];
-  return { file, requests, delays, logs, run: () => pairDevice({ relayUrl: 'https://relay.example/', name: 'test agent', deviceId: 'local-id', openBrowser: false, log: (message) => logs.push(message) }) };
+  return { file, requests, delays, logs, store, run: () => pairDevice({ relayUrl: 'https://relay.example/', name: 'test agent', deviceId: 'local-id', openBrowser: false, credentials, log: (message) => logs.push(message) }) };
 }
 
 test('pending and slow_down preserve polling protocol and save approved credentials', async (t) => {
@@ -64,7 +82,7 @@ test('pending and slow_down preserve polling protocol and save approved credenti
   assert.deepEqual(credentials, { relayUrl: 'https://relay.example', deviceId: 'approved-id', deviceToken: 'token', name: 'test agent', pairedAt: credentials.pairedAt });
   assert.ok(Number.isFinite(Date.parse(credentials.pairedAt)));
   assert.deepEqual(JSON.parse(readFileSync(s.file, 'utf8')), credentials);
-  assert.deepEqual(loadCredentials(), credentials);
+  assert.deepEqual(s.store.load(), credentials);
   assert.ok(s.logs.some((line) => line.includes('USER')));
   assert.ok(s.logs.some((line) => line.includes('credentials saved')));
 });
@@ -93,7 +111,7 @@ test('saved device credentials remain readable', async (t) => {
   const s = await scenario(t, []);
   const legacy = { relayUrl: 'https://old.example', deviceId: 'old-id', deviceToken: 'old-token', name: 'old', pairedAt: '2020-01-01T00:00:00.000Z' };
   writeFileSync(s.file, JSON.stringify(legacy));
-  assert.deepEqual(loadCredentials(), legacy);
+  assert.deepEqual(s.store.load(), legacy);
 });
 test('automatic pairing rejects an existing valid credential before contacting relay', async (t) => {
   const s = await scenario(t, []);

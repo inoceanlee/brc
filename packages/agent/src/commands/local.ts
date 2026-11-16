@@ -1,8 +1,9 @@
 import { createInterface } from 'node:readline/promises';
 import { cliFailure, cliSuccess, type CliResult } from 'brc-shared';
 import { VERSION } from '../core/version.js';
-import { clearCredentials, loadCredentials, hasSavedCredentials } from '../adapters/transport/pairing.js';
+import type { AgentCredentials } from '../composition.js';
 import type { AgentInvocation } from './parser.js';
+import type { AgentConfigManager } from '../adapters/storage/config-manager.js';
 
 const COMMANDS = [
   'connect', 'credentials logout', 'service install', 'service uninstall',
@@ -56,7 +57,7 @@ function completion(shell: string): string | null {
   return null;
 }
 
-export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliResult> {
+export async function runAgentLocalCommand(inv: AgentInvocation, configManager?: AgentConfigManager, credentials?: AgentCredentials): Promise<CliResult> {
   switch (inv.command) {
     case 'help': return cliSuccess(inv.format === 'json' ? { name: 'brc-agent', commands: COMMANDS } : HELP);
     case 'version': return cliSuccess(inv.format === 'json' ? { name: 'brc-agent', version: VERSION } : 'brc-agent ' + VERSION);
@@ -66,7 +67,8 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
       return script === null ? invalid('Shell must be powershell, bash, zsh, or fish.', 'brc-agent completion powershell') : cliSuccess(script);
     }
     case 'credentials logout': {
-      const existing = hasSavedCredentials();
+      if (!credentials) throw new Error('Agent credentials are not initialized.');
+      const existing = credentials.exists();
       if (inv.preview) return cliSuccess({ action: 'credentials logout', wouldRemove: existing, removed: false });
       if (!existing) return cliSuccess({ action: 'credentials logout', removed: false });
       if (!inv.yes) {
@@ -78,7 +80,7 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
         }
         if (!await confirmChange('Remove saved BRC Agent device credentials?')) return cliSuccess({ action: 'credentials logout', removed: false, cancelled: true });
       }
-      return cliSuccess({ action: 'credentials logout', removed: clearCredentials() });
+      return cliSuccess({ action: 'credentials logout', removed: credentials.clear() });
     }
     case 'service install':
     case 'service uninstall': {
@@ -95,7 +97,8 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
           return cliSuccess({ action: inv.command, changed: false, cancelled: true });
         }
       }
-      if (installing && !loadCredentials()) return invalid('Pair the device before installing the service.', 'brc-agent connect --relay URL');
+      if (installing && !credentials) throw new Error('Agent credentials are not initialized.');
+      if (installing && !credentials?.load()) return invalid('Pair the device before installing the service.', 'brc-agent connect --relay URL');
       const { installService, uninstallService } = await import('../adapters/service/service.js');
       const detail = installing
         ? installService(inv.allowDirectories.flatMap((directory) => ['--allow-dir', directory]))
@@ -104,7 +107,7 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
     }
     case 'config allow-dir': {
       if (inv.preview) return cliSuccess({ action: inv.command, wouldSet: inv.allowDirectories, changed: false });
-      const { configManager } = await import('../adapters/storage/config-manager.js');
+      if (!configManager) throw new Error('Agent configuration is not initialized.');
       await configManager.setUserSetting('allowedDirectories', inv.allowDirectories);
       return cliSuccess({ action: inv.command, allowedDirectories: inv.allowDirectories, changed: true });
     }

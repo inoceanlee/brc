@@ -1,10 +1,8 @@
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs/promises';
-import { validatePath } from '../filesystem/filesystem.js';
-import { capture } from '../telemetry/capture.js';
+import { validatePath, type FilesystemDependencies } from '../filesystem/filesystem.js';
 import { getRipgrepPath } from './ripgrep-resolver.js';
-import { isExcelFile } from '../filesystem/files/index.js';
 import PizZip from 'pizzip';
 
 export interface SearchResult {
@@ -50,6 +48,34 @@ export interface SearchSessionOptions {
  */export class SearchManager {
   private sessions = new Map<string, SearchSession>();
   private sessionCounter = 0;
+  private cleanupInterval: NodeJS.Timeout | null = null;
+  private initialCleanupTimer: NodeJS.Timeout | null = null;
+  private stopped = false;
+  private readonly backgroundSearches = new Set<Promise<void>>();
+
+  constructor(private readonly dependencies: FilesystemDependencies) {}
+
+  private startCleanupIfNeeded(): void {
+    if (this.cleanupInterval) return;
+    this.cleanupInterval = setInterval(() => this.cleanupSessions(), 5 * 60 * 1000);
+    this.initialCleanupTimer = setTimeout(() => {
+      this.initialCleanupTimer = null;
+      this.cleanupSessions();
+    }, 1000);
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    clearInterval(this.cleanupInterval ?? undefined);
+    clearTimeout(this.initialCleanupTimer ?? undefined);
+    this.cleanupInterval = null;
+    this.initialCleanupTimer = null;
+    for (const session of this.sessions.values()) {
+      if (!session.isComplete && !session.process.killed) session.process.kill('SIGTERM');
+    }
+    this.sessions.clear();
+    await Promise.allSettled([...this.backgroundSearches]);
+  }
 
   /**
    * Start a new search session (like start_process)
@@ -64,10 +90,12 @@ export interface SearchSessionOptions {
     totalResults: number;
     runtime: number;
   }> {
+    if (this.stopped) throw new Error('Search manager is stopped.');
     const sessionId = `search_${++this.sessionCounter}_${Date.now()}`;
     
     // Validate path first
-    const validPath = await validatePath(options.rootPath);
+    const validPath = await validatePath(this.dependencies, options.rootPath);
+    if (this.stopped) throw new Error('Search manager is stopped.');
 
     // Build ripgrep arguments
     const args = this.buildRipgrepArgs({ ...options, rootPath: validPath });
@@ -79,6 +107,7 @@ export interface SearchSessionOptions {
     } catch (err) {
       throw new Error(`Failed to locate ripgrep binary: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (this.stopped) throw new Error('Search manager is stopped.');
     
     // Start ripgrep process
     const rgProcess = spawn(rgPath, args, { windowsHide: true });  // Prevent visible console windows on Windows
@@ -108,7 +137,7 @@ export interface SearchSessionOptions {
     this.setupProcessHandlers(session);
 
     // Start cleanup interval now that we have a session
-    startCleanupIfNeeded();
+    this.startCleanupIfNeeded();
 
     // Set up timeout if specified and auto-terminate
     // For exact filename searches, use a shorter default timeout
@@ -138,7 +167,7 @@ export interface SearchSessionOptions {
       }
     });
 
-    capture('search_session_started', {
+    this.dependencies.capture('search_session_started', {
       sessionId,
       searchType: options.searchType,
       hasTimeout: !!timeoutMs,
@@ -154,7 +183,7 @@ export interface SearchSessionOptions {
       this.shouldIncludeExcelSearch(options.filePattern, validPath);
 
     if (shouldSearchExcel) {
-      this.searchExcelFiles(
+      const background = this.searchExcelFiles(
         validPath,
         options.pattern,
         options.ignoreCase !== false,
@@ -169,8 +198,10 @@ export interface SearchSessionOptions {
         }
       }).catch((err) => {
         // Log Excel search errors but don't fail the whole search
-        capture('excel_search_error', { error: err instanceof Error ? err.message : String(err) });
+        this.dependencies.capture('excel_search_error', { error: err instanceof Error ? err.message : String(err) });
       });
+      this.backgroundSearches.add(background);
+      void background.then(() => this.backgroundSearches.delete(background), () => this.backgroundSearches.delete(background));
     }
 
     // For content searches, also search DOCX files
@@ -178,7 +209,7 @@ export interface SearchSessionOptions {
       this.shouldIncludeDocxSearch(options.filePattern, validPath);
 
     if (shouldSearchDocx) {
-      this.searchDocxFiles(
+      const background = this.searchDocxFiles(
         validPath,
         options.pattern,
         options.ignoreCase !== false,
@@ -191,8 +222,10 @@ export interface SearchSessionOptions {
           session.totalMatches++;
         }
       }).catch((err) => {
-        capture('docx_search_error', { error: err instanceof Error ? err.message : String(err) });
+        this.dependencies.capture('docx_search_error', { error: err instanceof Error ? err.message : String(err) });
       });
+      this.backgroundSearches.add(background);
+      void background.then(() => this.backgroundSearches.delete(background), () => this.backgroundSearches.delete(background));
     }
 
     // Wait for first chunk of data or early completion instead of fixed delay
@@ -453,6 +486,7 @@ export interface SearchSessionOptions {
    * Find all Excel files in a directory recursively
    */
   private async findExcelFiles(rootPath: string): Promise<string[]> {
+    const fileHandlers = this.dependencies.fileHandlers;
     const excelFiles: string[] = [];
 
     async function walk(dir: string): Promise<void> {
@@ -467,7 +501,7 @@ export interface SearchSessionOptions {
             if (!entry.name.startsWith('.') && entry.name !== 'node_modules') {
               await walk(fullPath);
             }
-          } else if (entry.isFile() && isExcelFile(entry.name)) {
+          } else if (entry.isFile() && fileHandlers.isExcelFile(entry.name)) {
             excelFiles.push(fullPath);
           }
         }
@@ -479,7 +513,7 @@ export interface SearchSessionOptions {
     // Check if rootPath is a file or directory
     try {
       const stats = await fs.stat(rootPath);
-      if (stats.isFile() && isExcelFile(rootPath)) {
+      if (stats.isFile() && fileHandlers.isExcelFile(rootPath)) {
         return [rootPath];
       } else if (stats.isDirectory()) {
         await walk(rootPath);
@@ -845,7 +879,7 @@ export interface SearchSessionOptions {
         const meaningfulErrors = filteredErrors.join('\n').trim();
         if (meaningfulErrors) {
           session.error = (session.error || '') + meaningfulErrors + '\n';
-          capture('search_session_error', {
+          this.dependencies.capture('search_session_error', {
             sessionId: session.id,
             error: meaningfulErrors.substring(0, 200)
           });
@@ -884,7 +918,7 @@ export interface SearchSessionOptions {
         session.isError = false;
       }
 
-      capture('search_session_completed', {
+      this.dependencies.capture('search_session_completed', {
         sessionId: session.id,
         exitCode: code,
         totalResults: session.totalMatches + session.totalContextLines,
@@ -999,25 +1033,3 @@ export interface SearchSessionOptions {
   }
 }
 
-// Global search manager instance
-export let searchManager: SearchManager;
-export function attachSearchManager(instance: SearchManager): void { searchManager = instance; }
-
-// Cleanup management - run on fixed schedule
-let cleanupInterval: NodeJS.Timeout | null = null;
-
-/**
- * Start cleanup interval - now runs on fixed schedule
- */
-function startCleanupIfNeeded(): void {
-  if (!cleanupInterval) {
-    cleanupInterval = setInterval(() => {
-      searchManager.cleanupSessions();
-    }, 5 * 60 * 1000);
-    
-    // Also check immediately after a short delay (let search process finish)
-    setTimeout(() => {
-      searchManager.cleanupSessions();
-    }, 1000);
-  }
-}

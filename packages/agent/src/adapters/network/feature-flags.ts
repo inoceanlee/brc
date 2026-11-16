@@ -1,8 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
-import { resolveAgentPaths } from '../storage/agent-paths.js';
-import { logger } from '../telemetry/logger.js';
+import type { AgentLogger } from '../telemetry/logger.js';
 
 interface FeatureFlags {
   version?: string;
@@ -22,11 +21,11 @@ export class FeatureFlagManager {
   private resolveFreshFetch: (() => void) | null = null;
   private loadedFromCache: boolean = false;
 
-  constructor() {
-    this.cachePath = resolveAgentPaths().featureFlagFile;
+  constructor(cachePath: string, private readonly logger: AgentLogger, env: NodeJS.ProcessEnv) {
+    this.cachePath = cachePath;
     
     // Use production flags (v2 supports weighted variants)
-    this.flagUrl = process.env.DC_FLAG_URL || 
+    this.flagUrl = env.DC_FLAG_URL ||
       'https://desktopcommander.app/flags/v2/production.json';
     
     // Set up promise for waiting on fresh fetch
@@ -50,7 +49,7 @@ export class FeatureFlagManager {
           this.resolveFreshFetch();
         }
       }).catch(err => {
-        logger.debug('Initial flag fetch failed:', err.message);
+        this.logger.debug('Initial flag fetch failed:', err.message);
         // Still resolve the promise so waiters don't hang forever
         if (this.resolveFreshFetch) {
           this.resolveFreshFetch();
@@ -60,7 +59,7 @@ export class FeatureFlagManager {
       // Start periodic refresh every 5 minutes
       this.refreshInterval = setInterval(() => {
         this.fetchFlags().catch(err => {
-          logger.debug('Periodic flag fetch failed:', err.message);
+          this.logger.debug('Periodic flag fetch failed:', err.message);
         });
       }, this.cacheMaxAge);
       
@@ -68,9 +67,9 @@ export class FeatureFlagManager {
       // This is critical for proper cleanup when MCP client disconnects
       this.refreshInterval.unref();
       
-      logger.info(`Feature flags initialized (refresh every ${this.cacheMaxAge / 1000}s)`);
+      this.logger.info(`Feature flags initialized (refresh every ${this.cacheMaxAge / 1000}s)`);
     } catch (error) {
-      logger.warning('Failed to initialize feature flags:', error);
+      this.logger.warning('Failed to initialize feature flags:', error);
     }
   }
 
@@ -96,7 +95,7 @@ export class FeatureFlagManager {
       await this.fetchFlags();
       return true;
     } catch (error) {
-      logger.error('Manual refresh failed:', error);
+      this.logger.error('Manual refresh failed:', error);
       return false;
     }
   }
@@ -138,7 +137,7 @@ export class FeatureFlagManager {
   private async loadFromCache(): Promise<void> {
     try {
       if (!existsSync(this.cachePath)) {
-        logger.debug('No feature flag cache found');
+        this.logger.debug('No feature flag cache found');
         this.loadedFromCache = false;
         return;
       }
@@ -150,10 +149,10 @@ export class FeatureFlagManager {
         this.flags = config.flags;
         this.lastFetch = Date.now();
         this.loadedFromCache = true;
-        logger.debug(`Loaded ${Object.keys(this.flags).length} feature flags from cache`);
+        this.logger.debug(`Loaded ${Object.keys(this.flags).length} feature flags from cache`);
       }
     } catch (error) {
-      logger.warning('Failed to load feature flags from cache:', error);
+      this.logger.warning('Failed to load feature flags from cache:', error);
       this.loadedFromCache = false;
     }
   }
@@ -207,7 +206,7 @@ export class FeatureFlagManager {
         await this.saveToCache(config);
       }
     } catch (error: any) {
-      logger.debug('Failed to fetch feature flags:', error.message);
+      this.logger.debug('Failed to fetch feature flags:', error.message);
       // Continue with cached values
     } finally {
       clearTimeout(abortTimeout);
@@ -230,7 +229,7 @@ export class FeatureFlagManager {
       await fs.writeFile(this.cachePath, JSON.stringify(config, null, 2), 'utf8');
       // Don't log here - this runs async and can cause issues with MCP clients
     } catch (error) {
-      logger.warning('Failed to save feature flags to cache:', error);
+      this.logger.warning('Failed to save feature flags to cache:', error);
     }
   }
 
@@ -245,6 +244,3 @@ export class FeatureFlagManager {
   }
 }
 
-// Export singleton instance
-export let featureFlagManager: FeatureFlagManager;
-export function attachFeatureFlagManager(instance: FeatureFlagManager): void { featureFlagManager = instance; }

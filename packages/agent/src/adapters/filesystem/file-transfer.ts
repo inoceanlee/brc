@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable, Transform, type TransformCallback } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { validatePath } from './filesystem.js';
+import { validatePath, type FilesystemDependencies } from './filesystem.js';
 
 const TMPFILES_UPLOAD_URL = 'https://tmpfiles.org/api/v1/upload';
 const MAX_PLAINTEXT_BYTES = 99_000_000;
@@ -14,9 +14,7 @@ const FILE_AAD = Buffer.from('BRCX1:file');
 const WRAP_AAD = Buffer.from('BRCX1:key');
 const WRAP_INFO = Buffer.from('brc-file-transfer-v1');
 
-type ReceiveKey = { privateKey: KeyObject; expiresAt: number };
-
-const receiveKeys = new Map<string, ReceiveKey>();
+export type ReceiveKeys = Map<string, { privateKey: KeyObject; expiresAt: number }>;
 
 type TransferEnvelopeV1 = {
   v: 1;
@@ -127,7 +125,7 @@ function tempFilePath(suffix: string): string {
   return path.join(os.tmpdir(), 'brc-' + randomBytes(16).toString('hex') + suffix);
 }
 
-export function prepareFileReceive(ttlSeconds = 3600): {
+export function prepareFileReceive(receiveKeys: ReceiveKeys, ttlSeconds = 3600): {
   receiveId: string;
   recipientPublicKey: string;
   expiresAt: number;
@@ -228,11 +226,12 @@ async function uploadEncryptedFile(encryptedPath: string, expireSeconds: number)
   return page.toString();
 }
 export async function sendFileTransfer(
+  dependencies: FilesystemDependencies,
   sourcePath: string,
   recipientPublicKey: string,
   expireSeconds = 3600,
 ): Promise<{ transferToken: string; size: number; sha256: string; expiresAt: number }> {
-  const validSource = await validatePath(sourcePath);
+  const validSource = await validatePath(dependencies, sourcePath);
   const stat = await fs.stat(validSource);
   if (!stat.isFile()) throw new Error('Source path must be a file.');
   if (stat.size > MAX_PLAINTEXT_BYTES) {
@@ -323,6 +322,8 @@ async function downloadEncryptedFile(url: string): Promise<string> {
 }
 
 export async function receiveFileTransfer(
+  dependencies: FilesystemDependencies,
+  receiveKeys: ReceiveKeys,
   receiveId: string,
   transferToken: string,
   destinationPath: string,
@@ -339,7 +340,7 @@ export async function receiveFileTransfer(
     throw new Error('The temporary file-transfer token has expired.');
   }
 
-  const validDestination = await validatePath(destinationPath);
+  const validDestination = await validatePath(dependencies, destinationPath);
   try {
     const current = await fs.stat(validDestination);
     if (current.isDirectory()) throw new Error('Destination path points to a directory.');

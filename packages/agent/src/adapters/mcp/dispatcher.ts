@@ -6,57 +6,89 @@ import * as handlers from './handlers/index.js';
 import { getConfig, setConfigValue } from './tools/config.js';
 import { getUsageStats } from './handlers/usage.js';
 import { buildToolDefinitions, EXCLUDED_TOOLS, type ToolDefinition } from './tool-definitions.js';
-import { usageTracker } from '../telemetry/usageTracker.js';
-import { toolHistory } from '../telemetry/toolHistory.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
+import type { FeatureFlagManager } from '../network/feature-flags.js';
+import type { SearchManager } from '../system/search-manager.js';
+import type { ToolHistory } from '../telemetry/toolHistory.js';
+import type { UsageTracker } from '../telemetry/usageTracker.js';
+import type { FuzzySearchLogger } from '../telemetry/fuzzySearchLogger.js';
+import type { FilesystemDependencies } from '../filesystem/filesystem.js';
+import type { TerminalDependencies } from '../terminal/improved-process-tools.js';
+import type { TransferDependencies } from './handlers/transfer-handlers.js';
 import type { ToolResult } from 'brc-shared';
 
 type Args = Record<string, unknown>;
 type Handler = (args: Args) => Promise<unknown>;
+export interface ToolDispatcher {
+  callTool(name: string, args: Args): Promise<ToolResult>;
+  listTools(): ToolDefinition[];
+  hasTool(name: string): boolean;
+  stop(): Promise<void>;
+}
 
+
+export interface ToolDispatcherDependencies {
+  configManager: AgentConfigManager;
+  featureFlagManager: FeatureFlagManager;
+  searchManager: SearchManager;
+  toolHistory: ToolHistory;
+  usageTracker: UsageTracker;
+  fuzzySearchLogger: FuzzySearchLogger;
+  filesystem: FilesystemDependencies;
+  terminal: TerminalDependencies;
+  transfer: TransferDependencies;
+  currentClient: { name: string; version: string };
+  logHistoryFailure: () => void;
+  trackToolCall: (name: string) => Promise<void>;
+}
+
+export function createToolDispatcher(deps: ToolDispatcherDependencies): ToolDispatcher {
+const pending = new Set<Promise<ToolResult>>();
+let stopping = false;
 const TOOL_HANDLERS: Record<string, Handler> = {
-  get_config: () => getConfig(),
-  set_config_value: (a) => setConfigValue(a),
-  get_usage_stats: () => getUsageStats(),
-  get_recent_tool_calls: (a) => handlers.handleGetRecentToolCalls(a),
-  start_process: (a) => handlers.handleStartProcess(a),
-  read_process_output: (a) => handlers.handleReadProcessOutput(a),
-  interact_with_process: (a) => handlers.handleInteractWithProcess(a),
-  force_terminate: (a) => handlers.handleForceTerminate(a),
-  list_sessions: () => handlers.handleListSessions(),
+  get_config: () => getConfig(deps),
+  set_config_value: (a) => setConfigValue(a, deps.configManager),
+  get_usage_stats: () => getUsageStats(deps.usageTracker),
+  get_recent_tool_calls: (a) => handlers.handleGetRecentToolCalls(a, deps.toolHistory),
+  start_process: (a) => handlers.handleStartProcess(a, deps.terminal),
+  read_process_output: (a) => handlers.handleReadProcessOutput(a, deps.terminal),
+  interact_with_process: (a) => handlers.handleInteractWithProcess(a, deps.terminal),
+  force_terminate: (a) => handlers.handleForceTerminate(a, deps.terminal),
+  list_sessions: () => handlers.handleListSessions(deps.terminal),
   list_processes: () => handlers.handleListProcesses(),
   kill_process: (a) => handlers.handleKillProcess(a),
-  read_file: (a) => handlers.handleReadFile(a),
-  read_multiple_files: (a) => handlers.handleReadMultipleFiles(a),
-  write_file: (a) => handlers.handleWriteFile(a),
-  write_pdf: (a) => handlers.handleWritePdf(a),
-  create_directory: (a) => handlers.handleCreateDirectory(a),
-  list_directory: (a) => handlers.handleListDirectory(a),
-  move_file: (a) => handlers.handleMoveFile(a),
-  prepare_file_transfer: (a) => handlers.handlePrepareFileTransfer(a),
-  send_file_transfer: (a) => handlers.handleSendFileTransfer(a),
-  receive_file_transfer: (a) => handlers.handleReceiveFileTransfer(a),
-  get_file_info: (a) => handlers.handleGetFileInfo(a),
-  edit_block: (a) => handlers.handleEditBlock(a),
-  start_search: (a) => handlers.handleStartSearch(a),
-  get_more_search_results: (a) => handlers.handleGetMoreSearchResults(a),
-  stop_search: (a) => handlers.handleStopSearch(a),
-  list_searches: () => handlers.handleListSearches(),
+  read_file: (a) => handlers.handleReadFile(a, deps.filesystem),
+  read_multiple_files: (a) => handlers.handleReadMultipleFiles(a, deps.filesystem),
+  write_file: (a) => handlers.handleWriteFile(a, deps.filesystem),
+  write_pdf: (a) => handlers.handleWritePdf(a, deps.filesystem),
+  create_directory: (a) => handlers.handleCreateDirectory(a, deps.filesystem),
+  list_directory: (a) => handlers.handleListDirectory(a, deps.filesystem),
+  move_file: (a) => handlers.handleMoveFile(a, deps.filesystem),
+  prepare_file_transfer: (a) => handlers.handlePrepareFileTransfer(a, deps.transfer),
+  send_file_transfer: (a) => handlers.handleSendFileTransfer(a, deps.filesystem),
+  receive_file_transfer: (a) => handlers.handleReceiveFileTransfer(a, deps.transfer),
+  get_file_info: (a) => handlers.handleGetFileInfo(a, deps.filesystem),
+  edit_block: (a) => handlers.handleEditBlock(a, { ...deps.filesystem, fuzzySearchLogger: deps.fuzzySearchLogger }),
+  start_search: (a) => handlers.handleStartSearch(a, deps.searchManager, deps.filesystem.capture),
+  get_more_search_results: (a) => handlers.handleGetMoreSearchResults(a, deps.searchManager),
+  stop_search: (a) => handlers.handleStopSearch(a, deps.searchManager),
+  list_searches: () => handlers.handleListSearches(deps.searchManager),
 };
 
 let cachedDefs: ToolDefinition[] | null = null;
 
-export function listTools(): ToolDefinition[] {
+function listTools(): ToolDefinition[] {
   if (!cachedDefs) {
     cachedDefs = buildToolDefinitions().filter((t) => t.name in TOOL_HANDLERS && !EXCLUDED_TOOLS.has(t.name));
   }
   return cachedDefs;
 }
 
-export function hasTool(name: string): boolean {
+function hasTool(name: string): boolean {
   return name in TOOL_HANDLERS;
 }
 
-export async function callTool(name: string, args: Args): Promise<ToolResult> {
+async function executeTool(name: string, args: Args): Promise<ToolResult> {
   const handler = TOOL_HANDLERS[name];
   if (!handler) {
     return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
@@ -65,19 +97,43 @@ export async function callTool(name: string, args: Args): Promise<ToolResult> {
   let result: ToolResult;
   try {
     result = (await handler(args ?? {})) as ToolResult;
-    const tracking = result.isError ? usageTracker.trackFailure(name) : usageTracker.trackSuccess(name);
+    const tracking = result.isError ? deps.usageTracker.trackFailure(name) : deps.usageTracker.trackSuccess(name);
     void tracking.catch((error: unknown) => console.error('Failed to track tool usage:', error));
   } catch (err) {
-    void usageTracker.trackFailure(name).catch((error: unknown) => console.error('Failed to track tool usage:', error));
+    void deps.usageTracker.trackFailure(name).catch((error: unknown) => console.error('Failed to track tool usage:', error));
     const message = err instanceof Error ? err.message : String(err);
     result = { content: [{ type: 'text', text: `Error in ${name}: ${message}` }], isError: true };
   }
+  try {
+    await deps.trackToolCall(name);
+  } catch {
+    process.stderr.write('Agent tool-call metadata logging failed.\n');
+  }
   if (name !== 'get_recent_tool_calls' && name !== 'track_ui_event') {
     try {
-      toolHistory?.addCall(name, {}, { content: [], isError: result.isError }, Date.now() - started);
+      deps.toolHistory.addCall(name, {}, { content: [], isError: result.isError }, Date.now() - started);
     } catch {
-      // History must not change the tool result.
+      try {
+        deps.logHistoryFailure();
+      } catch {
+        // Diagnostics must not alter the tool result.
+      }
     }
   }
   return result;
+}
+function callTool(name: string, args: Args): Promise<ToolResult> {
+  if (stopping) return Promise.resolve({ content: [{ type: 'text', text: 'Agent is stopping.' }], isError: true });
+  const call = executeTool(name, args);
+  pending.add(call);
+  void call.then(() => pending.delete(call), () => pending.delete(call));
+  return call;
+}
+
+async function stop(): Promise<void> {
+  stopping = true;
+  await Promise.allSettled([...pending]);
+}
+
+return { callTool, listTools, hasTool, stop };
 }

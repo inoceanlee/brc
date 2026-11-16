@@ -1,8 +1,6 @@
-import { configManager, ServerConfig } from '../../storage/config-manager.js';
+import type { AgentConfigManager } from '../../storage/config-manager.js';
 import { SetConfigValueArgsSchema } from '../../../core/tools/schemas.js';
 import { getSystemInfo } from '../../system/system-info.js';
-import { currentClient } from '../../../context.js';
-import { featureFlagManager } from '../../network/feature-flags.js';
 import { access, readFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import {
@@ -10,6 +8,13 @@ import {
   CONFIG_FIELD_KEYS,
   isConfigFieldKey,
 } from '../../../core/config-field-definitions.js';
+import type { FeatureFlagManager } from '../../network/feature-flags.js';
+
+export interface ConfigToolDependencies {
+  configManager: AgentConfigManager;
+  featureFlagManager: FeatureFlagManager;
+  currentClient: { name: string; version: string };
+}
 
 const ALLOWED_CONFIG_KEYS = new Set(CONFIG_FIELD_KEYS);
 
@@ -87,7 +92,7 @@ async function detectAvailableShells(systemInfo: ReturnType<typeof getSystemInfo
 /**
  * Get the entire config including system information
  */
-export async function getConfig() {
+export async function getConfig({ configManager, featureFlagManager, currentClient }: ConfigToolDependencies) {
   try {
     const config = await configManager.getConfig();
 
@@ -153,7 +158,7 @@ export async function getConfig() {
 /**
  * Set a specific config value
  */
-export async function setConfigValue(args: unknown) {
+export async function setConfigValue(args: unknown, configManager: AgentConfigManager) {
   try {
     const parsed = SetConfigValueArgsSchema.safeParse(args);
     if (!parsed.success) {

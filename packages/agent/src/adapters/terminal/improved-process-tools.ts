@@ -1,25 +1,28 @@
-import { terminalManager, MAX_BUFFERED_OUTPUT_CHARS } from './terminal-manager.js';
-import { commandManager } from './command-manager.js';
+import { MAX_BUFFERED_OUTPUT_CHARS, type TerminalManager } from './terminal-manager.js';
+import type { CommandManager } from './command-manager.js';
 import { StartProcessArgsSchema, ReadProcessOutputArgsSchema, InteractWithProcessArgsSchema, ForceTerminateArgsSchema, ListSessionsArgsSchema } from '../../core/tools/schemas.js';
-import { capture } from "../telemetry/capture.js";
 import { ServerResult } from '../../core/types.js';
 import { analyzeProcessState, cleanProcessOutput, formatProcessStateMessage, ProcessState } from '../system/process-detection.js';
 import * as os from 'os';
-import { configManager } from '../storage/config-manager.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';
 import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+export interface TerminalDependencies {
+  configManager: Pick<AgentConfigManager, 'getConfig'>;
+  commandManager: CommandManager;
+  terminalManager: TerminalManager;
+  capture: (event: string, properties?: unknown) => Promise<void>;
+}
+
 // Get the directory where the MCP is installed (for ES module imports)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const mcpRoot = path.resolve(__dirname, '..', '..');
 
-// Track virtual Node sessions (PIDs that are actually Node fallback sessions)
-const virtualNodeSessions = new Map<number, { timeout_ms: number }>();
-let virtualPidCounter = -1000; // Use negative PIDs for virtual sessions
 
 /**
  * Execute Node.js code via temp file (fallback when Python unavailable)
@@ -96,7 +99,7 @@ async function executeNodeCode(code: string, timeout_ms: number = 30000): Promis
  * Start a new process (renamed from execute_command)
  * Includes early detection of process waiting for input
  */
-export async function startProcess(args: unknown): Promise<ServerResult> {
+export async function startProcess(args: unknown, { configManager, commandManager, terminalManager, capture }: TerminalDependencies): Promise<ServerResult> {
   const parsed = StartProcessArgsSchema.safeParse(args);
   if (!parsed.success) {
     capture('server_start_process_failed');
@@ -130,8 +133,7 @@ export async function startProcess(args: unknown): Promise<ServerResult> {
 
   // Handle node:local - runs Node.js code directly on MCP server
   if (commandToRun.trim() === 'node:local') {
-    const virtualPid = virtualPidCounter--;
-    virtualNodeSessions.set(virtualPid, { timeout_ms: parsed.data.timeout_ms || 30000 });
+    const virtualPid = terminalManager.createVirtualNodeSession(parsed.data.timeout_ms || 30000);
 
     return {
       content: [{
@@ -240,7 +242,7 @@ function formatTimingInfo(timing: any): string {
  * Read output from a running process with file-like pagination
  * Supports offset/length parameters for controlled reading
  */
-export async function readProcessOutput(args: unknown): Promise<ServerResult> {
+export async function readProcessOutput(args: unknown, { configManager, terminalManager }: TerminalDependencies): Promise<ServerResult> {
   const parsed = ReadProcessOutputArgsSchema.safeParse(args);
   if (!parsed.success) {
     return {
@@ -386,7 +388,7 @@ export async function readProcessOutput(args: unknown): Promise<ServerResult> {
  * Interact with a running process (renamed from send_input)
  * Automatically detects when process is ready and returns output
  */
-export async function interactWithProcess(args: unknown): Promise<ServerResult> {
+export async function interactWithProcess(args: unknown, { configManager, terminalManager, capture }: TerminalDependencies): Promise<ServerResult> {
   const parsed = InteractWithProcessArgsSchema.safeParse(args);
   if (!parsed.success) {
     capture('server_interact_with_process_failed', {
@@ -411,8 +413,8 @@ export async function interactWithProcess(args: unknown): Promise<ServerResult> 
   const maxOutputLines = config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
 
   // Check if this is a virtual Node session (node:local)
-  if (virtualNodeSessions.has(pid)) {
-    const session = virtualNodeSessions.get(pid)!;
+  const session = terminalManager.getVirtualNodeSession(pid);
+  if (session) {
     capture('server_interact_with_process_node_fallback', {
       pid: pid,
       inputLength: input.length
@@ -659,7 +661,7 @@ export async function interactWithProcess(args: unknown): Promise<ServerResult> 
 /**
  * Force terminate a process
  */
-export async function forceTerminate(args: unknown): Promise<ServerResult> {
+export async function forceTerminate(args: unknown, { terminalManager }: TerminalDependencies): Promise<ServerResult> {
   const parsed = ForceTerminateArgsSchema.safeParse(args);
   if (!parsed.success) {
     return {
@@ -671,8 +673,7 @@ export async function forceTerminate(args: unknown): Promise<ServerResult> {
   const pid = parsed.data.pid;
 
   // Handle virtual Node.js sessions (node:local)
-  if (virtualNodeSessions.has(pid)) {
-    virtualNodeSessions.delete(pid);
+  if (terminalManager.removeVirtualNodeSession(pid)) {
     return {
       content: [{
         type: "text",
@@ -695,11 +696,11 @@ export async function forceTerminate(args: unknown): Promise<ServerResult> {
 /**
  * List active sessions
  */
-export async function listSessions(): Promise<ServerResult> {
+export async function listSessions({ terminalManager }: TerminalDependencies): Promise<ServerResult> {
   const sessions = terminalManager.listActiveSessions();
 
   // Include virtual Node.js sessions
-  const virtualSessions = Array.from(virtualNodeSessions.entries()).map(([pid, session]) => ({
+  const virtualSessions = Array.from(terminalManager.listVirtualNodeSessions()).map(([pid, session]) => ({
     pid,
     type: 'node:local',
     timeout_ms: session.timeout_ms

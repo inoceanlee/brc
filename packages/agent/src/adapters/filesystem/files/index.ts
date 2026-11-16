@@ -7,7 +7,7 @@
 export * from './base.js';
 
 // Factory function
-export { getFileHandler, isExcelFile, isImageFile } from './factory.js';
+export { FileHandlerFactory } from './factory.js';
 
 // File handlers
 export { TextFileHandler } from './text.js';

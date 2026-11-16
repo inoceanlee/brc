@@ -4,15 +4,22 @@ import os from 'os';
 import fetch from 'cross-fetch';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { capture } from '../telemetry/capture.js';
+import type { AgentConfigManager } from '../storage/config-manager.js';
 import { withTimeout, runWithAbortableTimeout } from '../system/timeout.js';
-import { configManager } from '../storage/config-manager.js';
+import type { Capture } from '../telemetry/capture.js';
+import type { SearchManager } from '../system/search-manager.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';
-import { getFileHandler, TextFileHandler } from './files/index.js';
+import { TextFileHandler, type FileHandlerFactory } from './files/index.js';
 import type { ReadOptions, FileResult, PdfPageItem } from './files/base.js';
 import { isPdfFile } from "../../core/tools/mime-types.js";
 import { parsePdfToMarkdown, editPdf, PdfOperations, PdfMetadata, parseMarkdownToPdf } from './pdf/index.js';
 import { isBinaryFile } from 'isbinaryfile';
+
+export interface FilesystemDependencies {
+    configManager: AgentConfigManager;
+    capture: Capture;
+    fileHandlers: FileHandlerFactory;
+}
 
 // CONSTANTS SECTION - Consolidate all timeouts and thresholds
 const FILE_OPERATION_TIMEOUTS = {
@@ -61,7 +68,7 @@ function getFileExtension(filePath: string): string {
  * Get default read length from configuration
  * @returns Default number of lines to read
  */
-async function getDefaultReadLength(): Promise<number> {
+async function getDefaultReadLength(configManager: AgentConfigManager): Promise<number> {
     const config = await configManager.getConfig();
     return config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
 }
@@ -109,7 +116,7 @@ function buildPermissionError(filePath: string, errCode: string | undefined): Er
 }
 
 // Initialize allowed directories from configuration
-async function getAllowedDirs(): Promise<string[]> {
+async function getAllowedDirs(configManager: AgentConfigManager): Promise<string[]> {
     let allowedDirectories;
     const config = await configManager.getConfig();
     if (config.allowedDirectories && Array.isArray(config.allowedDirectories)) {
@@ -169,9 +176,9 @@ async function validateParentDirectories(directoryPath: string): Promise<boolean
  * @param pathToCheck Path to check
  * @returns boolean True if path is allowed
  */
-async function isPathAllowed(pathToCheck: string): Promise<boolean> {
+async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: string): Promise<boolean> {
     // If root directory is allowed, all paths are allowed
-    const allowedDirectories = await getAllowedDirs();
+    const allowedDirectories = await getAllowedDirs(configManager);
     if (allowedDirectories.includes('/') || allowedDirectories.length === 0) {
         return true;
     }
@@ -221,7 +228,8 @@ async function isPathAllowed(pathToCheck: string): Promise<boolean> {
  * @returns Promise<string> The validated path
  * @throws Error if the path or its parent directories don't exist or if the path is not allowed
  */
-export async function validatePath(requestedPath: string): Promise<string> {
+export async function validatePath(dependencies: FilesystemDependencies, requestedPath: string): Promise<string> {
+    const { configManager, capture } = dependencies;
     const validationOperation = async (): Promise<string> => {
         // Expand home directory if present
         const expandedPath = expandHome(requestedPath);
@@ -284,13 +292,13 @@ export async function validatePath(requestedPath: string): Promise<string> {
         const pathForNextCheck = resolvedRealPath ?? absoluteOriginal;
 
         // Check if path is allowed
-        if (!(await isPathAllowed(pathForNextCheck))) {
+        if (!(await isPathAllowed(configManager, pathForNextCheck))) {
             capture('server_path_validation_error', {
                 error: 'Path not allowed',
-                allowedDirsCount: (await getAllowedDirs()).length
+                allowedDirsCount: (await getAllowedDirs(configManager)).length
             });
 
-            throw new Error(`Path not allowed: ${requestedPath}. Must be within one of these directories: ${(await getAllowedDirs()).join(', ')}`);
+            throw new Error(`Path not allowed: ${requestedPath}. Must be within one of these directories: ${(await getAllowedDirs(configManager)).join(', ')}`);
         }
 
         // SECURITY: Always return the resolved path (with symlinks resolved) so that
@@ -425,9 +433,11 @@ export async function readFileFromUrl(url: string): Promise<FileResult> {
  * @returns File content or file result with metadata
  */
 export async function readFileFromDisk(
+    dependencies: FilesystemDependencies,
     filePath: string,
     options?: ReadOptions
 ): Promise<FileResult> {
+    const { configManager, capture } = dependencies;
     const { offset = 0, sheet, range } = options ?? {};
     let { length } = options ?? {};
 
@@ -438,10 +448,10 @@ export async function readFileFromDisk(
 
     // Get default length from config if not provided
     if (length === undefined) {
-        length = await getDefaultReadLength();
+        length = await getDefaultReadLength(configManager);
     }
 
-    const validPath = await validatePath(filePath);
+    const validPath = await validatePath(dependencies, filePath);
 
     // Get file extension for telemetry
     const fileExtension = getFileExtension(validPath);
@@ -451,7 +461,7 @@ export async function readFileFromDisk(
         const stats = await fs.stat(validPath);
         if (stats.isDirectory()) {
             const dirListOp = async () => {
-                const entries = await listDirectory(validPath);
+                const entries = await listDirectory(dependencies, validPath);
                 const listing = entries.join('\n');
                 return {
                     content: `This is a directory, not a file. Use the list_directory tool instead of read_file for directories.\n\n${listing}`,
@@ -502,7 +512,7 @@ export async function readFileFromDisk(
     // (fd/thread freed) rather than leaked until the OS call returns.
     const readOperation = async (signal: AbortSignal) => {
         // Get appropriate handler for this file type (async - includes binary detection)
-        const handler = await getFileHandler(validPath);
+        const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
         // Use handler to read the file
         const result = await handler.read(validPath, {
@@ -567,13 +577,14 @@ export async function readFileFromDisk(
  * @returns File content or file result with metadata
  */
 export async function readFile(
+    dependencies: FilesystemDependencies,
     filePath: string,
     options?: ReadOptions
 ): Promise<FileResult> {
     const { isUrl, offset, length, sheet, range } = options ?? {};
     return isUrl
         ? readFileFromUrl(filePath)
-        : readFileFromDisk(filePath, { offset, length, sheet, range });
+        : readFileFromDisk(dependencies, filePath, { offset, length, sheet, range });
 }
 
 /**
@@ -585,13 +596,14 @@ export async function readFile(
  * @param length Maximum number of lines to read (default: from config or 1000)
  * @returns File content without status headers, with preserved line endings
  */
-export async function readFileInternal(filePath: string, offset: number = 0, length?: number): Promise<string> {
+export async function readFileInternal(dependencies: FilesystemDependencies, filePath: string, offset: number = 0, length?: number): Promise<string> {
+    const { configManager } = dependencies;
     // Get default length from config if not provided
     if (length === undefined) {
-        length = await getDefaultReadLength();
+        length = await getDefaultReadLength(configManager);
     }
 
-    const validPath = await validatePath(filePath);
+    const validPath = await validatePath(dependencies, filePath);
 
     // Get file extension and MIME type
     const fileExtension = getFileExtension(validPath);
@@ -630,8 +642,9 @@ export async function readFileInternal(filePath: string, offset: number = 0, len
     return selectedLines.join('');
 }
 
-export async function writeFile(filePath: string, content: string, mode: 'rewrite' | 'append' = 'rewrite'): Promise<void> {
-    const validPath = await validatePath(filePath);
+export async function writeFile(dependencies: FilesystemDependencies, filePath: string, content: string, mode: 'rewrite' | 'append' = 'rewrite'): Promise<void> {
+    const { capture } = dependencies;
+    const validPath = await validatePath(dependencies, filePath);
 
     // Get file extension for telemetry
     const fileExtension = getFileExtension(validPath);
@@ -649,7 +662,7 @@ export async function writeFile(filePath: string, content: string, mode: 'rewrit
     });
 
     // Get appropriate handler for this file type (async - includes binary detection)
-    const handler = await getFileHandler(validPath);
+    const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
     // Use handler to write the file
     await handler.write(validPath, content, mode);
@@ -665,12 +678,12 @@ export interface MultiFileResult {
     payload?: FileResultPayloads;
 }
 
-export async function readMultipleFiles(paths: string[]): Promise<MultiFileResult[]> {
+export async function readMultipleFiles(dependencies: FilesystemDependencies, paths: string[]): Promise<MultiFileResult[]> {
     return Promise.all(
         paths.map(async (filePath: string) => {
             try {
-                const validPath = await validatePath(filePath);
-                const fileResult = await readFile(validPath);
+                const validPath = await validatePath(dependencies, filePath);
+                const fileResult = await readFile(dependencies, validPath);
                 // Handle content conversion properly for images vs text
                 let content: string;
                 if (typeof fileResult.content === 'string') {
@@ -707,13 +720,13 @@ export async function readMultipleFiles(paths: string[]): Promise<MultiFileResul
     );
 }
 
-export async function createDirectory(dirPath: string): Promise<void> {
-    const validPath = await validatePath(dirPath);
+export async function createDirectory(dependencies: FilesystemDependencies, dirPath: string): Promise<void> {
+    const validPath = await validatePath(dependencies, dirPath);
     await fs.mkdir(validPath, { recursive: true });
 }
 
-export async function listDirectory(dirPath: string, depth: number = 2): Promise<string[]> {
-    const validPath = await validatePath(dirPath);
+export async function listDirectory(dependencies: FilesystemDependencies, dirPath: string, depth: number = 2): Promise<string[]> {
+    const validPath = await validatePath(dependencies, dirPath);
     const results: string[] = [];
 
     const MAX_NESTED_ITEMS = 100; // Maximum items to show per nested directory
@@ -759,7 +772,7 @@ export async function listDirectory(dirPath: string, depth: number = 2): Promise
             if (entry.isDirectory() && currentDepth > 1) {
                 try {
                     // Validate the path before recursing
-                    await validatePath(fullPath);
+                    await validatePath(dependencies, fullPath);
                     await listRecursive(fullPath, currentDepth - 1, displayPath, false);
                 } catch (error) {
                     // If validation fails or we can't access it, it will be marked as denied
@@ -780,16 +793,16 @@ export async function listDirectory(dirPath: string, depth: number = 2): Promise
     return results;
 }
 
-export async function moveFile(sourcePath: string, destinationPath: string): Promise<void> {
-    const validSourcePath = await validatePath(sourcePath);
-    const validDestPath = await validatePath(destinationPath);
+export async function moveFile(dependencies: FilesystemDependencies, sourcePath: string, destinationPath: string): Promise<void> {
+    const validSourcePath = await validatePath(dependencies, sourcePath);
+    const validDestPath = await validatePath(dependencies, destinationPath);
     await fs.rename(validSourcePath, validDestPath);
 }
 
-export async function searchFiles(rootPath: string, pattern: string): Promise<string[]> {
+export async function searchFiles(dependencies: FilesystemDependencies, searchManager: SearchManager, rootPath: string, pattern: string): Promise<string[]> {
+    const { capture } = dependencies;
     // Use the new search manager for better performance
     // This provides a temporary compatibility layer until we fully migrate to search sessions
-    const { searchManager } = await import('../system/search-manager.js');
 
     try {
         const result = await searchManager.startSearch({
@@ -849,12 +862,13 @@ export async function searchFiles(rootPath: string, pattern: string): Promise<st
             error: error instanceof Error ? error.message : 'Unknown error'
         });
 
-        return await searchFilesNodeJS(rootPath, pattern);
+        return await searchFilesNodeJS(dependencies, rootPath, pattern);
     }
 }
 
 // Keep the original Node.js implementation as fallback
-async function searchFilesNodeJS(rootPath: string, pattern: string): Promise<string[]> {
+async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath: string, pattern: string): Promise<string[]> {
+    const { capture } = dependencies;
     const results: string[] = [];
 
     async function search(currentPath: string): Promise<void> {
@@ -869,7 +883,7 @@ async function searchFilesNodeJS(rootPath: string, pattern: string): Promise<str
             const fullPath = path.join(currentPath, entry.name);
 
             try {
-                await validatePath(fullPath);
+                await validatePath(dependencies, fullPath);
 
                 if (entry.name.toLowerCase().includes(pattern.toLowerCase())) {
                     results.push(fullPath);
@@ -886,7 +900,7 @@ async function searchFilesNodeJS(rootPath: string, pattern: string): Promise<str
 
     try {
         // Validate root path before starting search
-        const validPath = await validatePath(rootPath);
+        const validPath = await validatePath(dependencies, rootPath);
         await search(validPath);
 
         // Log only the count of found files, not their paths
@@ -910,8 +924,8 @@ async function searchFilesNodeJS(rootPath: string, pattern: string): Promise<str
     }
 }
 
-export async function getFileInfo(filePath: string): Promise<Record<string, any>> {
-    const validPath = await validatePath(filePath);
+export async function getFileInfo(dependencies: FilesystemDependencies, filePath: string): Promise<Record<string, any>> {
+    const validPath = await validatePath(dependencies, filePath);
 
     // Get fs.stat as a fallback for any missing fields
     const stats = await fs.stat(validPath);
@@ -928,7 +942,7 @@ export async function getFileInfo(filePath: string): Promise<Record<string, any>
     };
 
     // Get appropriate handler for this file type (async - includes binary detection)
-    const handler = await getFileHandler(validPath);
+    const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
     // Use handler to get file info, with fallback
     let fileInfo;
@@ -999,12 +1013,14 @@ export async function getFileInfo(filePath: string): Promise<Record<string, any>
  * @param options Options for PDF generation or modification. For modification, can include `sourcePdf`.
  */
 export async function writePdf(
+    dependencies: FilesystemDependencies,
     filePath: string,
     content: string | PdfOperations[],
     outputPath?: string,
     options: any = {}
 ): Promise<void> {
-    const validPath = await validatePath(filePath);
+    const { capture } = dependencies;
+    const validPath = await validatePath(dependencies, filePath);
     const fileExtension = getFileExtension(validPath);
 
     if (typeof content === 'string') {
@@ -1017,12 +1033,12 @@ export async function writePdf(
 
         const pdfBuffer = await parseMarkdownToPdf(content, options);
         // Use outputPath if provided, otherwise overwrite input file
-        const targetPath = outputPath ? await validatePath(outputPath) : validPath;
+        const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
         await fs.writeFile(targetPath, pdfBuffer);
     } else if (Array.isArray(content)) {
 
         // Use outputPath if provided, otherwise overwrite input file
-        const targetPath = outputPath ? await validatePath(outputPath) : validPath;
+        const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
 
         const operations: PdfOperations[] = [];
 
@@ -1030,7 +1046,7 @@ export async function writePdf(
         for (const o of content) {
             if (o.type === 'insert') {
                 if (o.sourcePdfPath) {
-                    o.sourcePdfPath = await validatePath(o.sourcePdfPath);
+                    o.sourcePdfPath = await validatePath(dependencies, o.sourcePdfPath);
                 }
             }
             operations.push(o);

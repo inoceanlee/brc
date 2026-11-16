@@ -1,7 +1,7 @@
-import { toolHistory } from '../../telemetry/toolHistory.js';
+import type { ToolHistory } from '../../telemetry/toolHistory.js';
 import { GetRecentToolCallsArgsSchema, TrackUiEventArgsSchema } from '../../../core/tools/schemas.js';
 import { ServerResult } from '../../../core/types.js';
-import { capture_ui_event } from '../../telemetry/capture.js';
+import type { Capture } from '../../telemetry/capture.js';
 
 type TrackUiEventParams = Record<string, string | number | boolean | null>;
 
@@ -16,7 +16,7 @@ export function buildTrackUiEventCapturePayload(event: string, component: string
 /**
  * Handle get_recent_tool_calls command
  */
-export async function handleGetRecentToolCalls(args: unknown): Promise<ServerResult> {
+export async function handleGetRecentToolCalls(args: unknown, toolHistory: ToolHistory): Promise<ServerResult> {
   try {
     const parsed = GetRecentToolCallsArgsSchema.parse(args);
     
@@ -53,7 +53,7 @@ export async function handleGetRecentToolCalls(args: unknown): Promise<ServerRes
 /**
  * Handle track_ui_event command
  */
-export async function handleTrackUiEvent(args: unknown): Promise<ServerResult> {
+export async function handleTrackUiEvent(args: unknown, capture_ui_event: Capture): Promise<ServerResult> {
   try {
     const parsed = TrackUiEventArgsSchema.parse(args);
 

@@ -3,8 +3,7 @@ import path from 'path';
 import { CommandExecutionResult, ActiveSession, TimingInfo, OutputEvent } from '../../core/types.js';
 import { TerminalSession } from './types.js';
 import { DEFAULT_COMMAND_TIMEOUT } from '../../core/config.js';
-import { configManager } from '../storage/config-manager.js';
-import {capture} from "../telemetry/capture.js";
+import type { AgentConfigManager } from '../storage/config-manager.js';
 import { analyzeProcessState } from '../system/process-detection.js';
 import { randomBytes } from 'node:crypto';
 import os from 'node:os';
@@ -172,6 +171,31 @@ export function resolveDynamicShellPath(configuredShell?: string | boolean): str
 export class TerminalManager {
   private sessions: Map<number, TerminalSession> = new Map();
   private completedSessions: Map<number, CompletedSession> = new Map();
+  private virtualNodeSessions = new Map<number, { timeout_ms: number }>();
+  private virtualPidCounter = -1000;
+
+  constructor(
+    private readonly configManager: Pick<AgentConfigManager, 'getConfig'>,
+    private readonly capture: (event: string, properties?: unknown) => Promise<void>
+  ) {}
+
+  createVirtualNodeSession(timeout_ms: number): number {
+    const pid = this.virtualPidCounter--;
+    this.virtualNodeSessions.set(pid, { timeout_ms });
+    return pid;
+  }
+
+  getVirtualNodeSession(pid: number): { timeout_ms: number } | undefined {
+    return this.virtualNodeSessions.get(pid);
+  }
+
+  removeVirtualNodeSession(pid: number): boolean {
+    return this.virtualNodeSessions.delete(pid);
+  }
+
+  listVirtualNodeSessions(): IterableIterator<[number, { timeout_ms: number }]> {
+    return this.virtualNodeSessions.entries();
+  }
   
   /**
    * Send input to a running process
@@ -204,7 +228,7 @@ export class TerminalManager {
     let shellToUse: string | boolean | undefined = shell;
     if (!shellToUse) {
       try {
-        const config = await configManager.getConfig();
+        const config = await this.configManager.getConfig();
         shellToUse = config.defaultShell || true;
       } catch (error) {
         // If there's an error getting the config, fall back to default
@@ -846,7 +870,7 @@ export class TerminalManager {
       } catch (error) {
         // Convert error to string, handling both Error objects and other types
         const errorMessage = error instanceof Error ? error.message : String(error);
-        capture('server_request_error', {error: errorMessage, message: `Failed to terminate process ${pid}:`});
+        this.capture('server_request_error', {error: errorMessage, message: `Failed to terminate process ${pid}:`});
         return false;
       }
   }
@@ -864,6 +888,3 @@ export class TerminalManager {
     return Array.from(this.completedSessions.values());
   }
 }
-
-export let terminalManager: TerminalManager;
-export function attachTerminalManager(instance: TerminalManager): void { terminalManager = instance; }

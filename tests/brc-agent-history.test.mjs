@@ -11,10 +11,10 @@ import { pathToFileURL } from 'node:url';
 
 const root = await mkdtemp(path.join(os.tmpdir(), 'brc-history-'));
 process.env.BRC_DATA_ROOT = path.join(root, 'home');
-const { configureAgentServices } = await import('../packages/agent/dist/composition.js');
-configureAgentServices();
-const { toolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-const { fuzzySearchLogger } = await import('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js');
+process.env.BRC_CONFIG_FILE = path.join(root, 'config', 'brc.yaml');
+const { configureAgentServices } = await import('../packages/agent/dist/index.js');
+const services = await configureAgentServices();
+const { toolHistory, fuzzySearchLogger, dispatcher } = services;
 const { resolveAgentPaths } = await import('../packages/agent/dist/adapters/storage/agent-paths.js');
 const { ToolHistoryStorage } = await import('../packages/agent/dist/adapters/telemetry/toolHistoryStorage.js');
 const file = path.join(resolveAgentPaths().historyDirectory, 'tool-history.json');
@@ -81,9 +81,9 @@ test('simultaneous additions retain their order in the persisted queue', async (
 test('history initialization reports lock contention instead of exposing an empty cache', () => {
   const directory = path.join(root, 'locked-startup');
   const storage = new ToolHistoryStorage(path.join(directory, 'data', 'agent'));
-  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/composition.js')).href;
+  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/index.js')).href;
   storage.withLock(() => {
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(moduleUrl)}); m.configureAgentServices();`], {
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(moduleUrl)}); await m.configureAgentServices();`], {
       env: { ...process.env, BRC_DATA_ROOT: directory },
       encoding: 'utf8',
       timeout: 10000,
@@ -245,7 +245,7 @@ test('history store persists a valid JSON document at the canonical agent data p
 });
 
 test('dispatcher exposes successful and failed calls without private content', async () => {
-  const { callTool } = await import('../packages/agent/dist/adapters/mcp/dispatcher.js');
+  const { callTool } = dispatcher;
   const secret = 'history-dispatch-private-content';
   const success = await callTool('list_searches', {});
   assert.notEqual(success.isError, true);
@@ -263,7 +263,7 @@ test('dispatcher exposes successful and failed calls without private content', a
 });
 
 test('history failures do not alter dispatcher results', async () => {
-  const { callTool } = await import('../packages/agent/dist/adapters/mcp/dispatcher.js');
+  const { callTool } = dispatcher;
   const original = toolHistory.addCall;
   toolHistory.addCall = () => { throw new Error('history unavailable'); };
   try {
@@ -271,6 +271,67 @@ test('history failures do not alter dispatcher results', async () => {
     assert.notEqual(result.isError, true);
   } finally {
     toolHistory.addCall = original;
+  }
+});
+
+test('injected dispatchers isolate history and report sanitized recording failures', async (t) => {
+  const { createToolDispatcher } = await import('../packages/agent/dist/adapters/mcp/dispatcher.js');
+  const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
+  const { CommandManager } = await import('../packages/agent/dist/adapters/terminal/command-manager.js');
+  const { TerminalManager } = await import('../packages/agent/dist/adapters/terminal/terminal-manager.js');
+  const { VERSION } = await import('../packages/agent/dist/core/version.js');
+  const firstStorage = new ToolHistoryStorage(path.join(root, 'dispatcher-first'));
+  const secondStorage = new ToolHistoryStorage(path.join(root, 'dispatcher-second'));
+  const firstHistory = new ToolHistory(firstStorage, resolveAgentPaths(), process.env, () => {});
+  const secondHistory = new ToolHistory(secondStorage, resolveAgentPaths(), process.env, () => {});
+  t.after(async () => {
+    await firstHistory.cleanup();
+    await secondHistory.cleanup();
+  });
+  const failures = [];
+  const filesystem = { configManager: services.configManager, capture: services.capture, fileHandlers: services.fileHandlers };
+  const terminal = {
+    ...filesystem,
+    commandManager: new CommandManager(services.configManager, services.capture),
+    terminalManager: new TerminalManager(services.configManager, services.capture),
+  };
+  const createDispatcher = (history) => createToolDispatcher({
+    ...services,
+    filesystem,
+    terminal,
+    transfer: { ...filesystem, receiveKeys: new Map() },
+    currentClient: { name: 'brc-agent', version: VERSION },
+    toolHistory: history,
+    logHistoryFailure: (...args) => failures.push(args),
+    trackToolCall: async () => {},
+  });
+  const first = createDispatcher(firstHistory);
+  const second = createDispatcher(secondHistory);
+  const secret = 'dispatcher-private-argument-body';
+  const expected = await first.callTool('list_searches', { privateArgument: secret });
+  assert.notEqual(expected.isError, true);
+  await first.callTool('list_searches', {});
+  await second.callTool('list_searches', {});
+  assert.equal(firstHistory.getRecentCalls({}).length, 2);
+  assert.equal(secondHistory.getRecentCalls({}).length, 1);
+  await firstHistory.cleanup();
+  await secondHistory.cleanup();
+  const firstRecords = JSON.parse(await readFile(firstStorage.file, 'utf8'));
+  const secondRecords = JSON.parse(await readFile(secondStorage.file, 'utf8'));
+  assert.equal(firstRecords.length, 2);
+  assert.equal(secondRecords.length, 1);
+  assert.doesNotMatch(JSON.stringify(firstRecords), /dispatcher-private-argument-body/);
+  assert.doesNotMatch(JSON.stringify(secondRecords), /dispatcher-private-argument-body/);
+  const original = firstHistory.addCall;
+  firstHistory.addCall = () => { throw new Error(secret); };
+  try {
+    const result = await first.callTool('list_searches', { privateArgument: secret });
+    assert.deepEqual(result, expected);
+    assert.equal(failures.length, 1);
+    assert.doesNotMatch(JSON.stringify(failures), /dispatcher-private-argument-body/);
+    assert.equal(secondHistory.getRecentCalls({}).length, 1);
+  } finally {
+    firstHistory.addCall = original;
   }
 });
 
@@ -294,7 +355,7 @@ test('startup recovers a legacy file left after an interrupted migration', async
   const legacy = path.join(destination, 'tool-history.jsonl');
   await writeFile(legacy, JSON.stringify(record) + '\n');
   const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-  const independent = new ToolHistory();
+  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {});
   t.after(() => independent.cleanup());
   assert.equal(independent.getRecentCalls({ maxResults: 10 }).length, 1);
   assert.doesNotMatch(await readFile(path.join(destination, 'tool-history.json'), 'utf8'), /recover-private/);
@@ -323,7 +384,7 @@ test('failed migration retains the original legacy history for recovery', async 
   syncBuiltinESMExports();
   try {
     const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-    assert.throws(() => new ToolHistory(), /disk failure/);
+    assert.throws(() => new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {}), /disk failure/);
   } finally {
     fs.renameSync = originalRename;
     syncBuiltinESMExports();
@@ -350,7 +411,7 @@ test('startup rewrites existing history without sensitive fields', async (t) => 
     extra: 'old-private-extra',
   }]));
   const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-  const independent = new ToolHistory();
+  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {});
   t.after(() => independent.cleanup());
   const stored = await readFile(canonical, 'utf8');
   assert.doesNotMatch(stored, /old-private-/);
@@ -377,7 +438,7 @@ test('existing JSONL history migrates into a private JSON record collection', as
     output: { content: [{ type: 'text', text: 'private-record-data' }] },
   }) + '\n');
   const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-  const independent = new ToolHistory();
+  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {});
   t.after(() => independent.cleanup());
   const records = independent.getRecentCalls({ maxResults: 10 });
   assert.equal(records.length, 1);
