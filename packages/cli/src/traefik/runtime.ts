@@ -237,7 +237,12 @@ export async function runManagedTraefikService(
     const traefikRoot = process.env.BRC_TRAEFIK_ROOT;
     const configDirectory = process.env.BRC_TRAEFIK_CONFIG_DIR;
     const logFile = process.env.BRC_LOG_FILE;
-    if (logFile) managedLog = createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024);
+    if (logFile) managedLog = createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024, (error) => {
+      logFailure = error;
+      process.exitCode = 1;
+      diagnostics?.log('Traefik managed log write failed.', { level: 'error', error });
+      console.error(`Traefik managed log write failed: ${error.message}`);
+    });
     if (process.env.BRC_MANAGED_SERVICE !== 'traefik' || !traefikRoot || !configDirectory || !logFile) {
       throw new Error('Traefik service is missing its managed runtime configuration.');
     }
