@@ -472,7 +472,7 @@ async function main(): Promise<void> {
         await time('database-check', async () => relayDatabase.assertExists());
         await time('lifecycle-lock', () => serviceManager.withLock(async (operations) => {
           signal?.throwIfAborted();
-          await time('restart-stop', () => operations.stop());
+          await time('restart-stop', () => operations.stop(signal));
           try {
             signal?.throwIfAborted();
             await time('restart-config', async () => traefikManager.writeConfigWithLockHeld(await loadSettings(), undefined, signal));

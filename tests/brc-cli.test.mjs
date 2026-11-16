@@ -700,3 +700,39 @@ console.log(JSON.stringify({ exitCode, aborted, cleaned, error: errors[0] }));
   assert.equal(error.exit_code, 1);
   assert.match(error.message, /timed out after 25 ms/i);
 });
+
+test('restart timeout reaches the locked stop before starting services', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-restart-cancel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workflowUrl = new URL('../packages/cli/dist/core/lifecycle/workflow.js', import.meta.url).href;
+  const databaseUrl = new URL('../packages/cli/dist/adapters/storage/relay-database.js', import.meta.url).href;
+  const probe = `
+const { ServiceManager } = await import(${JSON.stringify(workflowUrl)});
+const { RelayDatabase } = await import(${JSON.stringify(databaseUrl)});
+RelayDatabase.prototype.assertExists = () => {};
+ServiceManager.prototype.withLock = async function (operation) {
+  return operation({
+    stop: async (signal) => {
+      if (!signal) throw new Error('stop did not receive cancellation');
+      await new Promise((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason);
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+    start: async () => { throw new Error('restart started after cancellation'); },
+  });
+};
+process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'restart', '--timeout=25ms', '--json'];
+await import(${cliUrl});
+`;
+  const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+    encoding: 'utf8', windowsHide: true, timeout: 5000,
+    env: { ...inheritedEnv, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.stdout, '');
+  const error = JSON.parse(result.stderr);
+  assert.match(error.message, /timed out/i);
+  assert.doesNotMatch(error.message, /did not receive cancellation|started after cancellation/);
+});
