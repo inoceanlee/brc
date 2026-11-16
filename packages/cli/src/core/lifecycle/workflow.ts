@@ -88,7 +88,7 @@ export class ServiceManager {
         const current = prechecked ?? await this.stage('precheck', service.name, () => this.processes.status(service));
         if (isActive(current) || (service.name === 'agent' && current.state === 'pairing')) continue;
         if (!isStartable(current)) {
-          throw new Error(`Cannot start ${service.name}: ${current.detail}`);
+          throw Object.assign(new Error(`Cannot start ${service.name}: ${current.detail}`), { exitCode: 5 });
         }
         await this.stage('spawn-ready', service.name, () => this.processes.start(service, signal));
         started.push(service);
@@ -112,18 +112,32 @@ export class ServiceManager {
   private async stopUnlocked(signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
     const failures: Error[] = [];
+    const checkCancellation = (): void => {
+      if (!signal?.aborted) return;
+      if (!failures.length) signal.throwIfAborted();
+      const reason = signal.reason;
+      const exitCode = reason && typeof reason === 'object' && 'exitCode' in reason && (reason.exitCode === 130 || reason.exitCode === 143)
+        ? reason.exitCode : 130;
+      throw Object.assign(new AggregateError([...failures, reason], `Service stop cancelled after failures: ${failures.map((failure) => failure.message).join('; ')}`), { exitCode });
+    };
     for (const service of [...this.services].reverse()) {
-      signal?.throwIfAborted();
+      checkCancellation();
       try {
-        const current = await this.processes.status(service);
-        signal?.throwIfAborted();
-        if (current.state !== 'stopped') await this.processes.stop(service, signal);
+        await this.processes.status(service);
+        checkCancellation();
+        await this.processes.stop(service, signal);
       } catch (error) {
-        signal?.throwIfAborted();
-        failures.push(error instanceof Error ? error : new Error(String(error)));
+        checkCancellation();
+        const failure = error instanceof Error ? error : new Error(String(error));
+        failures.push(Object.assign(new Error(`${service.name}: ${failure.message}`, { cause: failure }), {
+          exitCode: 'exitCode' in failure ? failure.exitCode : undefined,
+        }));
       }
     }
-    signal?.throwIfAborted();
-    if (failures.length) throw new AggregateError(failures, 'One or more managed services could not be stopped safely.');
+    checkCancellation();
+    if (failures.length) {
+      const exitCode = failures.some((failure) => 'exitCode' in failure && failure.exitCode === 5) ? 5 : 1;
+      throw Object.assign(new AggregateError(failures, `Managed services could not be stopped safely: ${failures.map((failure) => failure.message).join('; ')}`), { exitCode });
+    }
   }
 }

@@ -18,7 +18,7 @@ function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 }
 function exitStatus(error: unknown): number | undefined {
-  return error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'number' ? error.code : undefined;
 }
 function parseProcessIdentity(value: unknown): ProcessIdentity {
   if (!value || typeof value !== 'object' || Array.isArray(value)
