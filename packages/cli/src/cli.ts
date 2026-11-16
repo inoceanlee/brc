@@ -242,7 +242,7 @@ async function dispatch(
         return renderOutput(cliFailure({ code: 'CLEANUP_FAILED', exitCode: 1, message: 'BRC cleanup failed.',
           run: 'brc clean', retryable: true, details: report }), parsed, deps);
       }
-      return renderOutput(cliSuccess(report ?? { command: 'clean', status: 'success' }), parsed, deps);
+      return renderOutput(cliSuccess({ command: 'clean', status: 'success', ...report }), parsed, deps);
     case 'uninstall':
       skipAutomaticCleanup();
       return completeCommand(await deps.commands.uninstall({
