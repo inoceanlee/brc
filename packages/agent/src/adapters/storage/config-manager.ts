@@ -2,9 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { lstat, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import lockfile from 'proper-lockfile';
 import {
-  DEFAULT_SETTINGS, YamlSettingsStore, resolveSettings, withSettingValue,
+  BRC_SETTING_KEYS, DEFAULT_SETTINGS, FileSettingsLock, YamlSettingsStore, resolveSettings, withSettingValue,
   type BrcSettings, type BrcSettingKey, type SettingsStorePort,
 } from 'brc-shared';
 import { parseEditableValue, type ConfigFieldKey } from '../../core/config-field-definitions.js';
@@ -73,26 +72,6 @@ function hasExplicitYamlKey(document: unknown, key: BrcSettingKey): boolean {
   return true;
 }
 
-class AgentSettingsLock {
-  constructor(private readonly directory: string) {}
-
-  async runExclusive<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-    if (signal?.aborted) throw signal.reason ?? new Error('Settings mutation cancelled.');
-    const { mkdir } = await import('node:fs/promises');
-    await mkdir(this.directory, { recursive: true });
-    const release = await lockfile.lock(this.directory, {
-      realpath: true, stale: 30_000, update: 10_000,
-      retries: { retries: 50, factor: 1.2, minTimeout: 10, maxTimeout: 100 },
-    });
-    try {
-      if (signal?.aborted) throw signal.reason ?? new Error('Settings mutation cancelled.');
-      return await operation();
-    } finally {
-      await release();
-    }
-  }
-}
-
 export class AgentConfigManager {
   private readonly options: AgentConfigOptions;
   private readonly paths: AgentPaths;
@@ -108,7 +87,9 @@ export class AgentConfigManager {
     this.settingsStore = new YamlSettingsStore({
       filename: this.paths.configFile,
       codec: { parse: (data) => yaml.safeLoad(data), stringify: (data) => yaml.safeDump(data, { noRefs: true }) },
-      lock: new AgentSettingsLock(path.dirname(this.paths.configFile)),
+      lock: new FileSettingsLock(path.dirname(this.paths.configFile)),
+      backupFilename: this.paths.configFile + '.last-good',
+      backupKeys: BRC_SETTING_KEYS.filter((key) => key.startsWith('agent.')),
     });
     this.stateStorage = new ConfigStorage(path.join(this.paths.historyDirectory, 'state.json'));
     this.usageStorage = new ConfigStorage(this.paths.usageFile);

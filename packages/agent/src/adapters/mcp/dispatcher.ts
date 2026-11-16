@@ -4,7 +4,7 @@
  */
 import * as handlers from './handlers/index.js';
 import { getConfig, setConfigValue } from './tools/config.js';
-import { getUsageStats } from '../../core/tools/usage.js';
+import { getUsageStats } from './handlers/usage.js';
 import { buildToolDefinitions, EXCLUDED_TOOLS, type ToolDefinition } from './tool-definitions.js';
 import { usageTracker } from '../telemetry/usageTracker.js';
 import type { ToolResult } from 'brc-shared';

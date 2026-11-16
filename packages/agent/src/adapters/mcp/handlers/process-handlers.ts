@@ -1,7 +1,7 @@
 import { 
     listProcesses,
     killProcess
-} from '../../../core/tools/process.js';
+} from '../../system/process-tools.js';
 
 import { 
     KillProcessArgsSchema

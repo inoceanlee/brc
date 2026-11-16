@@ -9,17 +9,13 @@ test('cancelled pairing does not call the Relay or save credentials', async (t) 
   const root = mkdtempSync(path.join(tmpdir(), 'brc-agent-abort-'));
   const fetchBefore = globalThis.fetch;
   const oldRoot = process.env.BRC_DATA_ROOT;
-  const oldHome = process.env.BRC_HOME;
   t.after(() => {
     globalThis.fetch = fetchBefore;
     if (oldRoot === undefined) delete process.env.BRC_DATA_ROOT;
     else process.env.BRC_DATA_ROOT = oldRoot;
-    if (oldHome === undefined) delete process.env.BRC_HOME;
-    else process.env.BRC_HOME = oldHome;
     rmSync(root, { force: true, recursive: true });
   });
   process.env.BRC_DATA_ROOT = root;
-  process.env.BRC_HOME = root;
   let requests = 0;
   globalThis.fetch = async () => { requests += 1; throw new Error('unexpected network request'); };
   const abort = new AbortController();

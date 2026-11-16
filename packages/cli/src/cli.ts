@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { appendTraceSummary, startDiagnostics, TraceRecorder, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type TraceSummary } from 'brc-shared';
+import { appendTraceSummary, startDiagnostics, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type TraceSummary } from 'brc-shared';
 import { readProductVersion } from './config/product.js';
 import { readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
 import { COMMAND_SPECS, helpText, parseCommand, UsageError, type CliCommandName, type ParsedCommand } from './commands/parser.js';
@@ -309,8 +309,12 @@ async function main(): Promise<void> {
   const serviceParentEnv = parsed?.noTelemetry ? { ...process.env, DO_NOT_TRACK: '1' } : process.env;
   const lifecycleLock = new LifecycleLock(paths);
   let configTraefikManager: TraefikManager | undefined;
+  const sharedConfigLock = new FileSettingsLock(paths.config);
   const settingsManager = await SettingsManager.load(paths, process.env, {
-    lock: lifecycleLock,
+    lock: {
+      runExclusive: (operation, signal) => lifecycleLock.runExclusive(
+        () => sharedConfigLock.runExclusive(operation, signal), signal),
+    },
     readOnly: parsed?.preview === true,
     apply: async (settings, previous, signal) => {
       if (!traefikSettingsChanged(previous, settings)) return;

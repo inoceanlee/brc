@@ -1,10 +1,10 @@
-reference-desktop-commander/
+/reference-desktop-commander/
 node_modules/
 dist/
 .env
 *.log
-data/
-dist-pack/
+/data/
+/dist-pack/
 native/**/target/
-artifacts/releases/
-tools/
+/artifacts/releases/
+/tools/

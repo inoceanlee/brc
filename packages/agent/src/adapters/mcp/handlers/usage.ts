@@ -1,5 +1,5 @@
-import { ServerResult } from '../types.js';
-import { usageTracker } from '../../adapters/telemetry/usageTracker.js';
+import { ServerResult } from '../../../core/types.js';
+import { usageTracker } from '../../telemetry/usageTracker.js';
 
 /**
  * Get usage statistics for debugging and analysis

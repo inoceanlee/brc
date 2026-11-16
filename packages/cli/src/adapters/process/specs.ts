@@ -10,7 +10,7 @@ import type { ManagedServiceSpec } from '../../core/lifecycle/ports.js';
 function childEnvironment(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...parent };
   for (const name of [
-    'BRC_DATA_ROOT', 'BRC_HOME', 'BRC_DB', 'BRC_RELAY', 'BRC_NAME', 'BRC_TOKEN', 'BRC_DEVICE_ID', 'BRC_LOG_FILE',
+    'BRC_DATA_ROOT', 'BRC_HOME', 'BRC_CONFIG_FILE', 'BRC_DB', 'BRC_RELAY', 'BRC_NAME', 'BRC_TOKEN', 'BRC_DEVICE_ID', 'BRC_LOG_FILE',
     'BRC_TRAEFIK_ROOT', 'BRC_TRAEFIK_CONFIG_DIR', 'BRC_TRAEFIK_PORT', 'BRC_TRAEFIK_HEALTH_PORT', 'BRC_RELAY_PORT', 'BRC_LOG_ROTATE_MIB',
     'BRC_ADMIN_USER', 'BRC_ADMIN_PASSWORD', 'BRC_SESSION_SECRET', 'BRC_PRODUCT_VERSION', 'PORT', 'HOST', 'PUBLIC_URL', 'TRUST_PROXY',
     'BRC_DIAGNOSTICS_ENABLED', 'BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS', 'BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS',
@@ -82,7 +82,8 @@ export function createDefaultServices(
     ...baseEnv,
     ...diagnosticEnvironment(settings, paths),
     BRC_LOG_ROTATE_MIB: String(settings.logs.rotateMiB),
-    BRC_HOME: paths.config,
+    BRC_DATA_ROOT: paths.root,
+    BRC_CONFIG_FILE: path.join(paths.config, 'brc.yaml'),
     BRC_LOG_FILE: path.join(paths.logs, 'agent.log'),
     BRC_RELAY: proxyUrl,
     BRC_NAME: parentEnv.BRC_NAME ?? os.hostname(),

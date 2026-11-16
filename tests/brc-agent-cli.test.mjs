@@ -17,7 +17,7 @@ function run(args, options = {}) {
   const base = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
   const result = spawnSync(process.execPath, [binary, ...args], {
     encoding: 'utf8', timeout: 5000, input: options.input ?? '',
-    env: { ...base, CI: 'true', DO_NOT_TRACK: '1', BRC_DATA_ROOT: root, BRC_HOME: root, BRC_UPSTREAM_TELEMETRY: '0', ...options.env },
+    env: { ...base, CI: 'true', DO_NOT_TRACK: '1', BRC_DATA_ROOT: root, BRC_UPSTREAM_TELEMETRY: '0', ...options.env },
   });
   const present = existsSync(file);
   const stored = present ? JSON.parse(readFileSync(file, 'utf8')) : null;

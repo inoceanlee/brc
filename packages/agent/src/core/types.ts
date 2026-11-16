@@ -1,4 +1,3 @@
-import { ChildProcess } from 'child_process';
 import type { PreviewFileType } from './ui/file-preview/shared/preview-file-types.js';
 
 declare global {
@@ -10,19 +9,6 @@ export interface ProcessInfo {
   command: string;
   cpu: string;
   memory: string;
-}
-
-export interface TerminalSession {
-  pid: number;
-  process: ChildProcess;
-  outputLines: string[];      // Line-based buffer (persistent, capped — oldest lines evicted)
-  lastReadIndex: number;      // Track where "new" output starts for default reads
-  isBlocked: boolean;
-  startTime: Date;
-  bufferedChars: number;      // Joined length of outputLines (content + separators)
-  evictedLines: number;       // Lines dropped from the front to enforce the buffer cap
-  evictedChars: number;       // Joined length of evicted lines (keeps snapshot offsets absolute)
-  inputEncoding?: string;
 }
 
 export interface CommandExecutionResult {

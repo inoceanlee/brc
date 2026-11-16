@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, watch as watchFile } from 'node:fs';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { DEFAULT_SETTINGS, resolveSettings, type BrcSettings } from '../core/settings.js';
+import { DEFAULT_SETTINGS, resolveSettings, withSettingValue, type BrcSettingKey, type BrcSettings } from '../core/settings.js';
 import type { SettingsSnapshot, SettingsStorePort } from '../core/ports.js';
 
 export interface SettingsCodec {
@@ -18,6 +18,9 @@ export interface YamlSettingsStoreOptions {
   filename: string;
   codec: SettingsCodec;
   lock: SettingsLock;
+  /** Keep selected settings in the CLI last-good checkpoint without promoting unrelated pending edits. */
+  backupFilename?: string;
+  backupKeys?: readonly BrcSettingKey[];
 }
 
 function fileRevision(contents: string): string {
@@ -89,6 +92,32 @@ export class YamlSettingsStore implements SettingsStorePort {
     const info = await lstat(directory);
     if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Settings directory is not a plain directory.');
     const contents = this.options.codec.stringify(fileSettings);
+    await this.writeAtomic(filename, contents);
+    if (this.options.backupFilename && this.options.backupKeys?.length) {
+      const backup = await this.readBackup(this.options.backupFilename);
+      let updated = backup;
+      for (const key of this.options.backupKeys) {
+        const value = key.split('.').reduce<unknown>((current, segment) =>
+          (current as Record<string, unknown>)[segment], fileSettings);
+        updated = withSettingValue(updated, key, value as never);
+      }
+      await this.writeAtomic(this.options.backupFilename, this.options.codec.stringify(updated));
+    }
+    return { settings: fileSettings, revision: fileRevision(contents) };
+  }
+
+  private async readBackup(filename: string): Promise<BrcSettings> {
+    try {
+      const info = await lstat(filename);
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error('Backup settings path is not a plain file.');
+      return resolveSettings(this.options.codec.parse(await readFile(filename, 'utf8')), {}).fileSettings;
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') throw error;
+      return structuredClone(DEFAULT_SETTINGS);
+    }
+  }
+
+  private async writeAtomic(filename: string, contents: string): Promise<void> {
     const temporary = filename + '.' + randomUUID() + '.tmp';
     try {
       await writeFile(temporary, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
@@ -96,6 +125,5 @@ export class YamlSettingsStore implements SettingsStorePort {
     } finally {
       await rm(temporary, { force: true });
     }
-    return { settings: fileSettings, revision: fileRevision(contents) };
   }
 }

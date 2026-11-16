@@ -157,7 +157,7 @@ try {
   };
 } catch (error) {
   relayStore?.close();
-  console.error(`Relay startup failed: ${error instanceof Error ? error.message : String(error)}`);
+  log('error', `Relay startup failed: ${error instanceof Error ? error.message : String(error)}`);
   await closeLogs();
   process.exit(1);
 }

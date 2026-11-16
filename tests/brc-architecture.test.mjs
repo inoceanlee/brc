@@ -72,81 +72,7 @@ const PACKAGE_NAMES = ['cli', 'relay', 'agent', 'shared'];
 const EXTERNAL_IO = /^(?:node:)?(?:fs(?:\/promises)?|net|http|https|child_process|dgram|os|worker_threads|tty|readline|console|stream|process)(?:\/.*)?$/;
 const EXTERNAL_SDK = /^(?:express|ws|better-sqlite3|sqlite3|proper-lockfile|@modelcontextprotocol\/|@sqlite\/)/;
 const SERVICE_TYPES = /(?:Manager|Store|Service|Server|Sampler|Session|Controller|Provider|Tracker|Hub|Transport|Client|Dispatcher|Recorder|Logger)$/;
-const LEGACY_ARCHITECTURE_VIOLATIONS = [
-  "agent/adapters/telemetry/fuzzySearchLogger.ts: module-level service singleton FuzzySearchLogger",
-  "agent/adapters/telemetry/usageTracker.ts: module-level service singleton UsageTracker",
-  "agent/adapters/terminal/terminal-manager.ts: module-level service singleton TerminalManager",
-  "agent/core/command-manager.ts: core constructs CommandManager",
-  "agent/core/config-manager.ts: core constructs ConfigManager",
-  "agent/core/config-manager.ts: core imports external dependency fs",
-  "agent/core/config-manager.ts: core imports external dependency os",
-  "agent/core/config-storage.ts: core imports external dependency fs",
-  "agent/core/config-storage.ts: core imports external dependency fs/promises",
-  "agent/core/config-storage.ts: core imports external dependency proper-lockfile",
-  "agent/core/config.ts: core imports external dependency fs",
-  "agent/core/config.ts: core imports external dependency os",
-  "agent/core/handlers/filesystem-handlers.ts: core imports adapter ../../adapters/filesystem/files/base.js",
-  "agent/core/handlers/filesystem-handlers.ts: core imports external dependency os",
-  "agent/core/handlers/history-handlers.ts: core imports adapter ../../adapters/telemetry/toolHistory.js",
-  "agent/core/handlers/transfer-handlers.ts: core imports adapter ../../adapters/filesystem/file-transfer.js",
-  "agent/core/search-manager.ts: core constructs SearchManager",
-  "agent/core/search-manager.ts: core imports adapter ../adapters/filesystem/files/index.js",
-  "agent/core/search-manager.ts: core imports adapter ../adapters/system/ripgrep-resolver.js",
-  "agent/core/search-manager.ts: core imports external dependency child_process",
-  "agent/core/search-manager.ts: core imports external dependency fs/promises",
-  "agent/core/tool-definitions.ts: core imports adapter ../adapters/system/system-info.js",
-  "agent/core/tools/config.ts: core imports adapter ../../adapters/system/system-info.js",
-  "agent/core/tools/config.ts: core imports external dependency node:fs",
-  "agent/core/tools/config.ts: core imports external dependency node:fs/promises",
-  "agent/core/tools/edit.ts: core imports adapter ../../adapters/filesystem/files/factory.js",
-  "agent/core/tools/edit.ts: core imports adapter ../../adapters/telemetry/fuzzySearchLogger.js",
-  "agent/core/tools/edit.ts: core imports external dependency fs/promises",
-  "agent/core/tools/feedback.ts: core imports adapter ../../adapters/telemetry/usageTracker.js",
-  "agent/core/tools/feedback.ts: core imports external dependency child_process",
-  "agent/core/tools/feedback.ts: core imports external dependency os",
-  "agent/core/tools/filesystem.ts: core imports adapter ../../adapters/filesystem/files/base.js",
-  "agent/core/tools/filesystem.ts: core imports adapter ../../adapters/filesystem/files/index.js",
-  "agent/core/tools/filesystem.ts: core imports external dependency child_process",
-  "agent/core/tools/filesystem.ts: core imports external dependency fs/promises",
-  "agent/core/tools/filesystem.ts: core imports external dependency os",
-  "agent/core/tools/fuzzySearch.ts: core imports external dependency worker_threads",
-  "agent/core/tools/improved-process-tools.ts: core imports adapter ../../adapters/system/process-detection.js",
-  "agent/core/tools/improved-process-tools.ts: core imports adapter ../../adapters/terminal/terminal-manager.js",
-  "agent/core/tools/improved-process-tools.ts: core imports external dependency child_process",
-  "agent/core/tools/improved-process-tools.ts: core imports external dependency fs/promises",
-  "agent/core/tools/improved-process-tools.ts: core imports external dependency os",
-  "agent/core/tools/pdf/manipulations.ts: core imports external dependency fs/promises",
-  "agent/core/tools/pdf/markdown.ts: core imports external dependency fs",
-  "agent/core/tools/pdf/markdown.ts: core imports external dependency fs/promises",
-  "agent/core/tools/process.ts: core imports external dependency child_process",
-  "agent/core/tools/process.ts: core imports external dependency os",
-  "agent/core/tools/prompts.ts: core imports adapter ../../adapters/telemetry/usageTracker.js",
-  "agent/core/tools/prompts.ts: core imports external dependency fs/promises",
-  "agent/core/tools/usage.ts: core imports adapter ../../adapters/telemetry/usageTracker.js",
-  "agent/core/types.ts: core imports external dependency child_process",
-  "agent/core/utils/capture.ts: core imports adapter ../../adapters/system/system-info.js",
-  "agent/core/utils/capture.ts: core imports external dependency https",
-  "agent/core/utils/capture.ts: core imports external dependency os",
-  "agent/core/utils/dockerPrompt.ts: core imports adapter ../../adapters/telemetry/usageTracker.js",
-  "agent/core/utils/feature-flags.ts: core constructs FeatureFlagManager",
-  "agent/core/utils/feature-flags.ts: core imports adapter ../../adapters/telemetry/logger.js",
-  "agent/core/utils/feature-flags.ts: core imports external dependency fs",
-  "agent/core/utils/feature-flags.ts: core imports external dependency fs/promises",
-  "agent/core/utils/welcome-onboarding.ts: core imports adapter ../../adapters/system/open-browser.js",
-  "agent/core/utils/welcome-onboarding.ts: core imports adapter ../../adapters/telemetry/logger.js",
-  "cli/core/lifecycle/workflow.ts: core constructs ProcessManager",
-  "cli/core/lifecycle/workflow.ts: core imports adapter ../../adapters/process/controller.js",
-  "cli/core/lifecycle/workflow.ts: core imports adapter ../../adapters/storage/lock.js",
-  "relay/core/auth/provider.ts: core constructs RelayClientsStore",
-  "relay/core/auth/provider.ts: core imports adapter ../../adapters/storage/sqlite.js",
-  "relay/core/auth/provider.ts: core imports external dependency @modelcontextprotocol/sdk/server/auth/clients.js",
-  "relay/core/auth/provider.ts: core imports external dependency @modelcontextprotocol/sdk/server/auth/errors.js",
-  "relay/core/auth/provider.ts: core imports external dependency @modelcontextprotocol/sdk/server/auth/provider.js",
-  "relay/core/auth/provider.ts: core imports external dependency @modelcontextprotocol/sdk/server/auth/types.js",
-  "relay/core/auth/provider.ts: core imports external dependency @modelcontextprotocol/sdk/shared/auth.js",
-  "relay/core/auth/provider.ts: core imports external dependency express",
-  "relay/core/auth/sessions.ts: core imports external dependency express",
-];
+const LEGACY_ARCHITECTURE_VIOLATIONS = [];
 
 function inCore(relative) {
   return /(?:^|\/)core\//.test(relative);
@@ -215,7 +141,7 @@ function unexpectedArchitectureViolations(actual, baseline) {
   return actual.filter((entry) => !allowed.has(entry));
 }
 
-test('removing an approved legacy violation does not block independent package work', () => {
+test('architecture gate rejects any violation when the baseline is empty', () => {
   const removed = LEGACY_ARCHITECTURE_VIOLATIONS.slice(1);
   assert.deepEqual(unexpectedArchitectureViolations(removed, LEGACY_ARCHITECTURE_VIOLATIONS), []);
   assert.deepEqual(

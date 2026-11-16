@@ -150,7 +150,7 @@ try {
     })}`, { cause: error });
   }
 
-  const agent = start('agent', [agentCli, '--relay', base, '--name', 'e2e-agent', '--no-browser'], { BRC_HOME: path.join(scratch, 'agent-home'), BRC_PRODUCT_VERSION: productVersion });
+  const agent = start('agent', [agentCli, 'connect', '--relay', base, '--name', 'e2e-agent', '--no-browser'], { BRC_DATA_ROOT: path.join(scratch, 'agent-data'), BRC_PRODUCT_VERSION: productVersion });
   const code = await waitFor(() => agent.out.match(/code: ([A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1], 20_000, 'pairing code');
 
   let r = await fetch(`${base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username: 'admin', password: pass, returnTo: '/' }) });

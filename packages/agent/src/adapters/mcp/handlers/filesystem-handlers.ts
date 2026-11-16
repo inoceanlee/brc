@@ -14,7 +14,7 @@ import {
 import type { ReadOptions } from '../../filesystem/files/base.js';
 
 import { ServerResult } from '../../../core/types.js';
-import { withTimeout } from '../../../core/tools/with-timeout.js';
+import { withTimeout } from '../../system/timeout.js';
 import { createErrorResponse } from '../error-handlers.js';
 import { configManager } from '../../storage/config-manager.js';
 import { AGENT_DEFAULTS } from '../../../core/config.js';

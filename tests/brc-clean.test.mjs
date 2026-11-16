@@ -419,8 +419,10 @@ test('Agent activity logs stay bounded during continuous writes', async (t) => {
   const trackToolsUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/trackTools.js', import.meta.url).href);
   const fuzzyLoggerUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/fuzzySearchLogger.js', import.meta.url).href);
   const source = `
+import { configureAgentServices } from ${JSON.stringify(new URL('../packages/agent/dist/composition.js', import.meta.url).href)};
 import { trackToolCall } from ${trackToolsUrl};
 import { fuzzySearchLogger } from ${fuzzyLoggerUrl};
+configureAgentServices();
 const payload = 'x'.repeat(1024 * 1024);
 for (let i = 0; i < 4; i++) await trackToolCall('test', { payload });
 const entry = {
@@ -434,22 +436,28 @@ for (let i = 0; i < 3; i++) await fuzzySearchLogger.log(entry);
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
     encoding: 'utf8',
     windowsHide: true,
-    env: { ...process.env, BRC_HOME: brcPaths.config },
+    env: { ...process.env, BRC_DATA_ROOT: brcPaths.root },
   });
 
   assert.equal(result.status, 0, result.stderr);
   const logs = [
-    path.join(brcPaths.config, 'claude_tool_call.log'),
-    path.join(brcPaths.config, 'claude_tool_call.log.1'),
-    path.join(brcPaths.config, 'logs', 'fuzzy-search.log'),
-    path.join(brcPaths.config, 'logs', 'fuzzy-search.log.1'),
+    path.join(brcPaths.logs, 'agent-tool-calls.log'),
+    path.join(brcPaths.logs, 'agent-tool-calls.log.1'),
+    path.join(brcPaths.logs, 'fuzzy-search.log'),
+    path.join(brcPaths.logs, 'fuzzy-search.log.1'),
   ];
   let total = 0;
   for (const filename of logs) {
-    const size = (await stat(filename)).size;
+    let size = 0;
+    try {
+      size = (await stat(filename)).size;
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
     assert.ok(size <= 4 * MIB, `${filename} exceeded the per-file limit`);
     total += size;
   }
+  await stat(logs[0]);
   assert.ok(total <= 16 * MIB);
 });
 

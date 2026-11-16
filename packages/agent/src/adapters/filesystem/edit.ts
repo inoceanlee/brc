@@ -23,7 +23,7 @@ import { capture } from '../telemetry/capture.js';
 import { createErrorResponse } from '../mcp/error-handlers.js';
 import { EditBlockArgsSchema } from "../../core/tools/schemas.js";
 import path from 'path';
-import { detectLineEnding, normalizeLineEndings } from '../../core/tools/line-ending-handler.js';
+import { detectLineEnding, normalizeLineEndings } from './line-endings.js';
 import { configManager } from '../storage/config-manager.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';
 import { fuzzySearchLogger, type FuzzySearchLogEntry } from '../telemetry/fuzzySearchLogger.js';

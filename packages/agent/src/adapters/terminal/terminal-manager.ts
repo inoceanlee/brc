@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
-import { TerminalSession, CommandExecutionResult, ActiveSession, TimingInfo, OutputEvent } from '../../core/types.js';
+import { CommandExecutionResult, ActiveSession, TimingInfo, OutputEvent } from '../../core/types.js';
+import { TerminalSession } from './types.js';
 import { DEFAULT_COMMAND_TIMEOUT } from '../../core/config.js';
 import { configManager } from '../storage/config-manager.js';
 import {capture} from "../telemetry/capture.js";

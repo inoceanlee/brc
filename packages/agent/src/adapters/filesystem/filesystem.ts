@@ -5,7 +5,7 @@ import fetch from 'cross-fetch';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { capture } from '../telemetry/capture.js';
-import { withTimeout, runWithAbortableTimeout } from '../../core/tools/with-timeout.js';
+import { withTimeout, runWithAbortableTimeout } from '../system/timeout.js';
 import { configManager } from '../storage/config-manager.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';
 import { getFileHandler, TextFileHandler } from './files/index.js';

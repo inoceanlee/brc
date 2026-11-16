@@ -7,7 +7,6 @@ import path from 'node:path';
 
 const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-privacy-'));
 process.env.BRC_DATA_ROOT = root;
-process.env.BRC_HOME = root;
 process.env.DO_NOT_TRACK = '1';
 const { configureAgentServices } = await import('../packages/agent/dist/composition.js');
 configureAgentServices();

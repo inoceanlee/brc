@@ -7,9 +7,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
+import { createServer } from 'node:http';
 import { RelayDatabase } from '../packages/cli/dist/adapters/storage/relay-database.js';
-import { buildRelay } from '../packages/relay/dist/adapters/http/app.js';
-import { SqliteStore, hashPassword, verifyPassword, sha256 } from '../packages/relay/dist/adapters/storage/sqlite.js';
+import { mountRelayRoutes } from '../packages/relay/dist/adapters/http/app.js';
+import { RelayOAuthProvider, RelayClientsStore } from '../packages/relay/dist/adapters/http/oauth-provider.js';
+import { Sessions, HmacSessionSigner } from '../packages/relay/dist/adapters/http/sessions.js';
+import { SessionPolicy } from '../packages/relay/dist/core/auth/sessions.js';
+import { LoginLimiter } from '../packages/relay/dist/core/auth/rate-limit.js';
+import { DeviceHub } from '../packages/relay/dist/adapters/transport/device-hub.js';
+import { registerDeviceSocket } from '../packages/relay/dist/adapters/transport/websocket.js';
+import { consentPage } from '../packages/relay/dist/adapters/http/pages/html.js';
+import { SqliteStore, hashPassword, verifyPassword, sha256, randomToken } from '../packages/relay/dist/adapters/storage/sqlite.js';
+
+const requireRelay = createRequire(new URL('../packages/relay/package.json', import.meta.url));
+const express = requireRelay('express');
+const { WebSocketServer } = requireRelay('ws');
 
 const legacySchema = `
 CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -59,6 +72,58 @@ function config(dbFile, sessionSecret = 'shared-session-secret') {
     audit: { retentionDays: 30, maxEntries: 50_000 },
     relayVersion: 'test',
   };
+}
+
+function buildRelay(cfg, log) {
+  const store = SqliteStore.open(cfg.dbFile);
+  try {
+    if (!cfg.audit) throw new Error('Relay audit settings are required for service startup.');
+    if (cfg.adminPassword) store.upsertUser(cfg.adminUser, cfg.adminPassword);
+    else store.getAdministrator();
+    const sessionSecret = cfg.sessionSecret || store.getSessionSecret();
+    const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner(sessionSecret)), cfg.publicUrl.startsWith('https://'));
+    const hub = new DeviceHub(cfg.relayVersion, log);
+    const currentUserId = (response) => {
+      const userId = sessions.userId(response.req);
+      return userId && store.getUser(userId) ? userId : null;
+    };
+    const tokens = { randomToken, sha256 };
+    const clientsStore = new RelayClientsStore(store, tokens);
+    const provider = new RelayOAuthProvider({
+      store,
+      tokens,
+      currentUserId,
+      renderLogin: (response, returnTo) => response.redirect('/auth/login?returnTo=' + encodeURIComponent(returnTo)),
+      renderConsent: (response, pendingId, client, scopes) => response.type('html').send(
+        consentPage(pendingId, client.client_name ?? client.client_id, client.redirect_uris?.[0] ?? '', scopes),
+      ),
+      issuer: cfg.publicUrl,
+    }, clientsStore);
+    const app = express();
+    const limiter = new LoginLimiter();
+    mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log });
+    const http = createServer(app);
+    const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
+    registerDeviceSocket(http, wss, hub, store, cfg.publicUrl, log);
+    const housekeeping = setInterval(() => store.vacuumExpired(cfg.audit), 10 * 60_000);
+    housekeeping.unref();
+    const authCleanup = setInterval(() => { provider.prunePending(); limiter.prune(); }, 60_000);
+    authCleanup.unref();
+    return {
+      http,
+      close: async () => {
+        clearInterval(housekeeping);
+        clearInterval(authCleanup);
+        hub.close();
+        wss.close();
+        await new Promise((resolve) => http.close(() => resolve()));
+        store.close();
+      },
+    };
+  } catch (error) {
+    store.close();
+    throw error;
+  }
 }
 
 function sessionCookie(userId, secret) {
