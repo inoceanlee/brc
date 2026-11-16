@@ -187,9 +187,8 @@ function ownershipViolations(source, prefix, relative) {
   }
   function visit(node) {
     if (ts.isNewExpression(node)) {
-      const className = ts.isIdentifier(node.expression) ? node.expression.text
-        : ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : '';
-      if (className !== 'AbortController' && SERVICE_TYPES.test(className)) {
+      const className = serviceConstructionName(node);
+      if (className) {
         let parent = node.parent;
         let retained = false;
         while (parent && parent !== source) {
@@ -264,11 +263,27 @@ function sharedAdapterImports(source, adapterNames) {
   return found;
 }
 
+function isNodeAsyncContext(node) {
+  const expression = node.expression;
+  return node.getSourceFile().statements.some((statement) => {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)
+      || !['async_hooks', 'node:async_hooks'].includes(statement.moduleSpecifier.text)) return false;
+    const bindings = statement.importClause?.namedBindings;
+    if (bindings && ts.isNamedImports(bindings) && ts.isIdentifier(expression)) {
+      return bindings.elements.some((item) => (item.propertyName ?? item.name).text === 'AsyncLocalStorage'
+        && item.name.text === expression.text);
+    }
+    return Boolean(bindings && ts.isNamespaceImport(bindings) && ts.isPropertyAccessExpression(expression)
+      && ts.isIdentifier(expression.expression) && expression.expression.text === bindings.name.text
+      && expression.name.text === 'AsyncLocalStorage');
+  });
+}
+
 function serviceConstructionName(node) {
   if (!ts.isNewExpression(node)) return '';
   const name = ts.isIdentifier(node.expression) ? node.expression.text
     : ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : '';
-  return name !== 'AbortController' && SERVICE_TYPES.test(name) ? name : '';
+  return name !== 'AbortController' && !isNodeAsyncContext(node) && SERVICE_TYPES.test(name) ? name : '';
 }
 
 async function architectureViolations() {
@@ -386,11 +401,33 @@ test('core import gate detects actual package internals and permits public entry
 
 test('shared public entry distinguishes adapter values and core contracts', async () => {
   const source = ts.createSourceFile('sample.ts', `
-    import { startDiagnostics as start, FileSnapshotStore, DEFAULT_SETTINGS } from 'brc-shared';
+    import { FileSnapshotStore, DEFAULT_SETTINGS } from 'brc-shared';
     import type { DiagnosticLogPort } from 'brc-shared';
   `, ts.ScriptTarget.Latest, true);
-  assert.deepEqual(sharedAdapterImports(source, await sharedAdapterExports()), ['startDiagnostics', 'FileSnapshotStore']);
+  assert.deepEqual(sharedAdapterImports(source, await sharedAdapterExports()), ['FileSnapshotStore']);
 });
+test('node async context is not a long-lived external service', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    import { AsyncLocalStorage as ContextStorage } from 'node:async_hooks';
+    import * as hooks from 'async_hooks';
+    const context = new ContextStorage();
+    class Adapter {
+      context = new hooks.AsyncLocalStorage();
+      store = new FileSnapshotStore();
+    }
+  `, ts.ScriptTarget.Latest, true);
+  assert.deepEqual(ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts'), [
+    'agent/adapters/sample.ts: nested service construction FileSnapshotStore@7',
+  ]);
+  const other = ts.createSourceFile('sample.ts', `
+    import { AsyncLocalStorage } from './external.js';
+    class Adapter { context = new AsyncLocalStorage(); }
+  `, ts.ScriptTarget.Latest, true);
+  assert.deepEqual(ownershipViolations(other, 'agent/adapters/sample.ts', 'adapters/sample.ts'), [
+    'agent/adapters/sample.ts: nested service construction AsyncLocalStorage@3',
+  ]);
+});
+
 test('core construction detects namespace-qualified services', () => {
   const source = ts.createSourceFile('core.ts', 'new services.SearchManager(); new AbortController();', ts.ScriptTarget.Latest, true);
   const names = [];
