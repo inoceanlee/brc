@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { AuthStorePort } from '../../core/auth/ports.js';
+import type { RelayStorePort } from '../../core/auth/ports.js';
 
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
@@ -78,7 +78,7 @@ const USER_REFERENCE_TABLES = [
   },
 ];
 
-export class SqliteStore implements AuthStorePort {
+export class SqliteStore implements RelayStorePort {
   readonly #db: DatabaseSync;
 
   static open(file: string): SqliteStore {

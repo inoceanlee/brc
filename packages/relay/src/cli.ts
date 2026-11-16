@@ -15,7 +15,7 @@ import { LoginLimiter } from './core/auth/rate-limit.js';
 import { DeviceHub } from './adapters/transport/device-hub.js';
 import { registerDeviceSocket } from './adapters/transport/websocket.js';
 import { consentPage } from './adapters/http/pages/html.js';
-import { SqliteStore, randomToken, sha256 } from './adapters/storage/sqlite.js';
+import { SqliteStore, randomToken, sha256, verifyPassword } from './adapters/storage/sqlite.js';
 
 const cfg = loadConfig();
 const settings = resolveSettings({ version: 1 }, process.env).settings;
@@ -135,7 +135,7 @@ try {
   }, clientsStore);
   const limiter = new LoginLimiter();
   const app = express();
-  mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log });
+  mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log, verifyPassword });
   const http = createServer(app);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   registerDeviceSocket(http, wss, hub, store, cfg.publicUrl, log);

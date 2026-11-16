@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import express from '../packages/relay/node_modules/express/index.js';
-import { SqliteStore, randomToken, sha256 } from '../packages/relay/dist/adapters/storage/sqlite.js';
+import { SqliteStore, randomToken, sha256, verifyPassword } from '../packages/relay/dist/adapters/storage/sqlite.js';
 import { RelayClientsStore, RelayOAuthProvider } from '../packages/relay/dist/adapters/http/oauth-provider.js';
 import { HmacSessionSigner, Sessions } from '../packages/relay/dist/adapters/http/sessions.js';
 import { SessionPolicy } from '../packages/relay/dist/core/auth/sessions.js';
@@ -28,7 +28,7 @@ test('HTTP OAuth metadata, authentication and isolated device pairing routes', a
       renderLogin: () => {}, renderConsent: () => {},
     }, new RelayClientsStore(store, tokens));
     mountRelayRoutes({
-      app, cfg, store, hub, provider, limiter: new LoginLimiter(),
+      app, cfg, store, hub, provider, limiter: new LoginLimiter(), verifyPassword,
       sessions: new Sessions(new SessionPolicy(new HmacSessionSigner('secret')), false),
       log: () => {},
     });

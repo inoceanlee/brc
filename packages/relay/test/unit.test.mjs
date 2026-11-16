@@ -10,6 +10,66 @@ import { SqliteStore, randomToken, sha256, verifyPassword, hashPassword } from '
 import { RelayOAuthProvider, RelayClientsStore } from '../dist/adapters/http/oauth-provider.js';
 import { LoginLimiter } from '../dist/core/auth/rate-limit.js';
 import { DeviceHub } from '../dist/adapters/transport/device-hub.js';
+import express from 'express';
+import { createServer } from 'node:http';
+import { mountRelayRoutes } from '../dist/adapters/http/app.js';
+import { loadConfig } from '../dist/adapters/http/config.js';
+import { HmacSessionSigner, Sessions } from '../dist/adapters/http/sessions.js';
+import { SessionPolicy } from '../dist/core/auth/sessions.js';
+
+test('HTTP login uses injected password verifier and preserves pairing approval', async () => {
+  const store = SqliteStore.open(':memory:');
+  const user = store.upsertUser('admin', 'stored-password');
+  const app = express();
+  const cfg = loadConfig({ PUBLIC_URL: 'http://127.0.0.1:1' });
+  const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner('test-secret')), false);
+  const hub = new DeviceHub('test', () => {});
+  const tokens = { randomToken, sha256 };
+  const provider = new RelayOAuthProvider({
+    store, tokens, currentUserId: () => null, renderLogin: () => {}, renderConsent: () => {}, issuer: cfg.publicUrl,
+  }, new RelayClientsStore(store, tokens));
+  mountRelayRoutes({
+    app, cfg, store, hub, sessions, provider, limiter: new LoginLimiter(), log: () => {},
+    verifyPassword: (password, hash) => password === 'injected-password' && hash === user.password_hash,
+  });
+  const server = createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const login = await fetch(`${base}/auth/login`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: 'admin', password: 'injected-password' }),
+    });
+    assert.equal(login.status, 302);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const start = await fetch(`${base}/device/start`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client_name: 'agent' }),
+    });
+    const code = await start.json();
+    const approve = await fetch(`${base}/device/approve`, {
+      method: 'POST', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ user_code: code.user_code, decision: 'allow' }),
+    });
+    assert.equal(approve.status, 200);
+    const poll = await fetch(`${base}/device/poll`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device_code: code.device_code, device_id: 'test-device' }),
+    });
+    const paired = await poll.json();
+    assert.equal(poll.status, 200);
+    assert.equal(store.getDeviceByToken(paired.device_token)?.user_id, user.id);
+    const again = await fetch(`${base}/device/poll`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device_code: code.device_code }),
+    });
+    assert.equal(again.status, 400);
+  } finally {
+    hub.close();
+    await new Promise((resolve) => server.close(resolve));
+    store.close();
+  }
+});
 
 test('password hashing round-trips and rejects wrong password', () => {
   const h = hashPassword('s3cret');
