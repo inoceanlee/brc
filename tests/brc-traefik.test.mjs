@@ -18,7 +18,8 @@ import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapter
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
 import { TraefikManager } from '../packages/cli/dist/traefik/manager.js';
-import { waitForConfigGeneration } from '../packages/cli/dist/traefik/runtime.js';
+import { runManagedTraefikService, waitForConfigGeneration } from '../packages/cli/dist/traefik/runtime.js';
+import { createDiagnosticsRuntime } from '../packages/shared/dist/diagnostics/runtime.js';
 import { renderConfig } from '../packages/cli/dist/traefik/core.js';
 import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
 import { TraefikOutput } from '../packages/cli/dist/traefik/output.js';
@@ -810,6 +811,73 @@ async function websocketStatus(port, pathname = '/ws', headers = {}) {
 }
 
 const realTraefikSkip = TEST_BINARY ? false : 'Set BRC_TRAEFIK_TEST_BINARY to an official Traefik v3.7+ executable.';
+test('managed Traefik health degrades on diagnostic log failure', { skip: realTraefikSkip, timeout: 30_000 }, async (t) => {
+  const { root, paths: brcPaths } = await makeRoot(t);
+  const versionResult = spawnSync(TEST_BINARY, ['version'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(versionResult.status, 0, versionResult.stderr);
+  const version = versionResult.stdout.match(/Version:\s*v?(\d+\.\d+\.\d+)/)?.[1];
+  assert.ok(version);
+  const versionDir = path.join(brcPaths.traefik, 'versions', version);
+  await mkdir(versionDir, { recursive: true });
+  await copyFile(TEST_BINARY, path.join(versionDir, process.platform === 'win32' ? 'traefik.exe' : 'traefik'));
+  await writeFile(path.join(brcPaths.traefik, 'versions.json'), JSON.stringify({ version: 1, current: version, previous: null }));
+  const [relayPort, proxyPort, healthPort] = await reservePorts(3);
+  const settings = settingsFor({ BRC_RELAY_PORT: String(relayPort), BRC_TRAEFIK_PORT: String(proxyPort), BRC_TRAEFIK_HEALTH_PORT: String(healthPort) });
+  const manager = new TraefikManager(brcPaths, settings, makeLifecycle());
+  await manager.writeConfig();
+  const readyFile = path.join(root, 'control.json');
+  const variables = {
+    BRC_MANAGED_SERVICE: 'traefik', BRC_MANAGED_ID: 'test-traefik',
+    BRC_TRAEFIK_ROOT: brcPaths.traefik, BRC_TRAEFIK_CONFIG_DIR: path.join(brcPaths.traefik, 'config'),
+    BRC_TRAEFIK_HEALTH_PORT: String(healthPort), BRC_LOG_FILE: path.join(root, 'traefik.log'),
+  };
+  const previous = Object.fromEntries(Object.keys(variables).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, variables);
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+  const failure = new Error('diagnostic write failed');
+  const diagnostics = createDiagnosticsRuntime({
+    enabled: true, component: 'traefik',
+    log: { async write() { throw failure; }, async flush() {} },
+  });
+  const running = runManagedTraefikService(settings, diagnostics, {
+    controlServer: createServer(),
+    controlIdentity: { token: 'test-control-token', readyFile, id: 'test-traefik', service: 'traefik' },
+  });
+  try {
+    let ready;
+    for (let attempt = 0; attempt < 200; attempt++) {
+      try { ready = JSON.parse(await readFile(readyFile, 'utf8')); break; } catch { await sleep(50); }
+    }
+    assert.ok(ready, 'Traefik control server did not start');
+    let health;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      health = await (await fetch(`http://127.0.0.1:${ready.port}/health`, {
+        headers: { authorization: 'Bearer test-control-token' },
+      })).json();
+      if (health.state === 'degraded') break;
+      await sleep(50);
+    }
+    assert.equal(health.state, 'degraded');
+    assert.match(health.detail, /diagnostic write failed/);
+    assert.equal(await httpStatus(healthPort, '/ping'), 200);
+    await fetch(`http://127.0.0.1:${ready.port}/shutdown`, {
+      method: 'POST', headers: { authorization: 'Bearer test-control-token' },
+    });
+    await running;
+    await assert.rejects(diagnostics.stop(), failure);
+  } finally {
+    if (process.env.BRC_TRAEFIK_ROOT === brcPaths.traefik) {
+      const ready = await readFile(readyFile, 'utf8').then(JSON.parse).catch(() => undefined);
+      if (ready) await fetch(`http://127.0.0.1:${ready.port}/shutdown`, {
+        method: 'POST', headers: { authorization: 'Bearer test-control-token' },
+      }).catch(() => undefined);
+    }
+  }
+});
 test('official Traefik routes all paths and shares global rate and in-flight limits', { skip: realTraefikSkip }, async (t) => {
   const { root, paths: brcPaths } = await makeRoot(t, { cleanup: false });
   let backend;

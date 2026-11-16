@@ -36,6 +36,7 @@ test('disabled diagnostics leave supplied adapters untouched', async () => {
   await runtime.captureSnapshot();
   await runtime.stop();
   assert.equal(runtime.enabled, false);
+  assert.equal(runtime.getLogFailure(), undefined);
 });
 
 test('diagnostics flushes queued records before a snapshot and on shutdown', async () => {
@@ -89,4 +90,33 @@ test('diagnostics reports a failed log write after later writes succeed', async 
   await assert.rejects(runtime.stop(), failure);
   assert.equal(writes, 2);
   assert.equal(stopped, true);
+});
+
+test('stop shares cleanup and preserves all failures including first log error', async () => {
+  const first = new Error('first write');
+  const resource = new Error('resource stop');
+  const session = new Error('session stop');
+  const flush = new Error('flush');
+  const calls = [];
+  const runtime = createDiagnosticsRuntime({
+    enabled: true, component: 'cli',
+    resources: { start() {}, stop() { calls.push('resource'); throw resource; } },
+    session: { start() {}, async capture() {}, async stop() { calls.push('session'); throw session; } },
+    log: {
+      async write() { throw first; },
+      async flush() { calls.push('flush'); throw flush; },
+    },
+  });
+  runtime.log('failure');
+  await runtime.captureSnapshot();
+  assert.equal(runtime.getLogFailure(), first);
+  const one = runtime.stop();
+  const two = runtime.stop();
+  assert.equal(one, two);
+  await assert.rejects(one, (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [resource, session, flush, first]);
+    return true;
+  });
+  assert.deepEqual(calls, ['resource', 'session', 'flush']);
 });

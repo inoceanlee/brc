@@ -74,7 +74,12 @@ test('connection uses instance control environment and skips disabled diagnostic
     process.env.BRC_CONTROL_TOKEN = 'wrong-token';
     const result = await services.dispatcher.callTool('get_config', {});
     if (result.isError) throw new Error('Config tool failed with diagnostics disabled');
-    await runAgentConnection(parseAgentInvocation(['connect', '--no-browser']), services, createDiagnosticsRuntime({ enabled: false, component: 'agent' }), createServer());
+    const diagnostics = createDiagnosticsRuntime({
+      enabled: true, component: 'agent',
+      log: { write: async () => { throw new Error('diagnostic sink failed'); }, flush: async () => {} },
+    });
+    diagnostics.log('event');
+    await runAgentConnection(parseAgentInvocation(['connect', '--no-browser']), services, diagnostics, createServer());
   `;
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
   const child = spawn(process.execPath, ['--input-type=module', '-e', script], {
@@ -103,6 +108,11 @@ test('connection uses instance control environment and skips disabled diagnostic
   assert.ok(existsSync(ready), errors);
   assert.equal(JSON.parse(readFileSync(ready, 'utf8')).id, 'instance-id');
   assert.equal(existsSync(wrong), false);
+  const health = await fetch(`http://127.0.0.1:${JSON.parse(readFileSync(ready, 'utf8')).port}/health`, {
+    headers: { authorization: 'Bearer instance-token' },
+  });
+  assert.equal(health.status, 503);
+  assert.equal((await health.json()).detail, 'Agent diagnostic logging failed.');
 });
 
 test('direct connection stores enabled diagnostic snapshots under its data root', async (t) => {

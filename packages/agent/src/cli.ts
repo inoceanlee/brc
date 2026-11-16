@@ -94,7 +94,15 @@ async function run(): Promise<CliResult | null> {
   try {
     await runAgentConnection(invocation, services, diagnostics, createServer());
   } catch (error) {
-    await diagnostics.stop();
+    try {
+      await diagnostics.stop();
+    } catch (shutdownError) {
+      if (shutdownError !== error && !(error instanceof AggregateError && error.errors.includes(shutdownError))) {
+        const primary = error instanceof Error ? error.message : String(error);
+        const secondary = shutdownError instanceof Error ? shutdownError.message : String(shutdownError);
+        throw new AggregateError([error, shutdownError], `${primary}; diagnostics shutdown failed: ${secondary}`, { cause: error });
+      }
+    }
     throw error;
   }
   return null;
@@ -107,7 +115,8 @@ try {
     stderr: (data) => process.stderr.write(data),
   });
 } catch (error) {
-  const usage = error instanceof AgentUsageError || error instanceof TokenInputError;
+  const primary = error instanceof AggregateError && error.cause ? error.cause : error;
+  const usage = primary instanceof AgentUsageError || primary instanceof TokenInputError;
   const result = cliFailure({
     code: usage ? 'INVALID_USAGE' : 'AGENT_ERROR',
     exitCode: usage ? 2 : 1,

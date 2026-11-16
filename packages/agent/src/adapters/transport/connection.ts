@@ -95,7 +95,7 @@ export async function runAgentConnection(
   let control: ManagedControlServer | undefined;
   let client: WsClient | undefined;
   let awaitingPairing = false;
-  let stopping = false;
+  let stopPromise: Promise<void> | undefined;
   const log = (level: 'info' | 'warn' | 'error' | 'debug', message: string): void => {
     if (level === 'debug' && !inv.debug) return;
     diagnostics.log(message, { level, source: { file: 'agent/connection.ts', function: 'log' } });
@@ -103,9 +103,7 @@ export async function runAgentConnection(
   };
   const unbindHistoryFailure = services.bindHistoryFailureReporter((message) => log('error', message));
   const abort = new AbortController();
-  const stop = async (signal?: 'SIGINT' | 'SIGTERM') => {
-    if (stopping) return;
-    stopping = true;
+  const stop = (signal?: 'SIGINT' | 'SIGTERM'): Promise<void> => stopPromise ??= (async () => {
     abort.abort(new Error('Agent shutdown requested.'));
     client?.stop();
     const pendingCalls = Promise.all([services.dispatcher.stop(), services.searchManager.stop()]);
@@ -137,7 +135,7 @@ export async function runAgentConnection(
       unbindLog();
       if (signal) process.exit(signal === 'SIGINT' ? 130 : 143);
     }
-  };
+  })();
   process.once('SIGINT', () => { void stop('SIGINT'); });
   process.once('SIGTERM', () => { void stop('SIGTERM'); });
   try {
@@ -151,11 +149,15 @@ export async function runAgentConnection(
         log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exitCode = 1;
       },
-      health: () => awaitingPairing
-        ? { state: 'pairing', detail: 'Agent awaits pairing approval.' }
-        : client?.connected
-          ? { state: 'running', detail: 'Agent connected to Relay.' }
-          : { state: 'degraded', detail: 'Agent is not connected to Relay.' },
+      health: () => {
+        const failure = diagnostics.getLogFailure();
+        if (failure) return { state: 'degraded', detail: 'Agent diagnostic logging failed.' };
+        return awaitingPairing
+          ? { state: 'pairing', detail: 'Agent awaits pairing approval.' }
+          : client?.connected
+            ? { state: 'running', detail: 'Agent connected to Relay.' }
+            : { state: 'degraded', detail: 'Agent is not connected to Relay.' };
+      },
       stop: () => stop(),
     });
     let creds: DeviceCredentials;
@@ -190,7 +192,13 @@ export async function runAgentConnection(
     });
     client.start();
   } catch (error) {
-    await stop();
+    try {
+      await stop();
+    } catch (shutdownError) {
+      const primary = error instanceof Error ? error.message : String(error);
+      const secondary = shutdownError instanceof Error ? shutdownError.message : String(shutdownError);
+      throw new AggregateError([error, shutdownError], `${primary}; Agent shutdown failed: ${secondary}`, { cause: error });
+    }
     throw error;
   }
 }

@@ -225,7 +225,7 @@ function environmentPort(name: string): number {
 
 export async function runManagedTraefikService(
   settings: Readonly<BrcSettings> = DEFAULT_SETTINGS,
-  diagnostics?: Pick<InjectedDiagnosticsRuntime, 'log'>,
+  diagnostics?: Pick<InjectedDiagnosticsRuntime, 'log' | 'getLogFailure'>,
   options: TraefikRuntimeOptions = {},
 ): Promise<void> {
   const managedLog = options.managedLog;
@@ -264,7 +264,7 @@ export async function runManagedTraefikService(
         );
       },
     });
-    logSink.on('error', (error: Error) => { logFailure = error; });
+    logSink.on('error', (error: Error) => { logFailure ??= error; });
     child = spawn(executable, [`--configFile=${configFile}`], { cwd: traefikRoot, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const childClosed = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
       child?.once('close', (code, signal) => resolve([code, signal]));
@@ -302,7 +302,7 @@ export async function runManagedTraefikService(
         process.exitCode = 1;
       },
       health: async () => {
-        const failure = logFailure ?? options.managedLogError?.();
+        const failure = logFailure ?? options.managedLogError?.() ?? diagnostics?.getLogFailure();
         if (failure) return { state: 'degraded', detail: `Traefik log output failed: ${failure.message}` };
         if (!child || child.exitCode !== null || child.signalCode !== null) return { state: 'degraded', detail: 'Traefik process exited.' };
         const status = await requestStatus(healthPort, '/ping');
@@ -340,12 +340,18 @@ export async function runManagedTraefikService(
       await waitForChildExit(child, settings.runtime.shutdownTimeoutMs);
     }
   } finally {
-    await binaryMonitor?.stop().catch((error: unknown) => diagnostics?.log(`Traefik binary resource sampling stopped: ${errorMessage(error)}`, { level: 'warn' }));
-    await control?.close();
+    const errors: unknown[] = [];
+    try { await binaryMonitor?.stop(); } catch (error) { errors.push(error); }
+    try { await control?.close(); } catch (error) { errors.push(error); }
     if (logSink && !logSink.destroyed) {
-      logSink.end();
-      await finished(logSink).catch(() => undefined);
+      try {
+        logSink.end();
+        await finished(logSink);
+      } catch (error) { if (error !== logFailure) errors.push(error); }
     }
-    await managedLog?.close();
+    try { await managedLog?.close(); } catch (error) { errors.push(error); }
+    if (logFailure) errors.push(logFailure);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'Traefik shutdown failed.');
   }
 }

@@ -65,16 +65,21 @@ const diagnostics = createDiagnosticsRuntime({
 });
 const managedLogFile = process.env.BRC_LOG_FILE;
 let pendingLogWrites = Promise.resolve();
+let managedLogFailure: Error | undefined;
 function writeManagedLog(line: string): void {
   if (!managedLogFile) return;
   pendingLogWrites = pendingLogWrites.then(() =>
     appendRotatingLog(managedLogFile, line + '\n', settings.logs.rotateMiB * 1024 * 1024)
-  ).catch(() => undefined);
+  ).catch((error: unknown) => { managedLogFailure ??= error instanceof Error ? error : new Error(String(error)); });
 }
 async function closeLogs(): Promise<void> {
+  const errors: unknown[] = [];
   await pendingLogWrites;
-  await diagnostics.stop();
-  probe?.uninstall();
+  try { await diagnostics.stop(); } catch (error) { errors.push(error); }
+  try { probe?.uninstall(); } catch (error) { errors.push(error); }
+  if (managedLogFailure) errors.push(managedLogFailure);
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Relay log shutdown failed.');
 }
 if (process.argv.includes('--initialize')) {
   try {
@@ -152,12 +157,17 @@ try {
   relay = {
     http,
     close: async () => {
-      clearInterval(housekeeping);
-      clearInterval(authCleanup);
-      hub.close();
-      wss.close();
-      await new Promise<void>((resolve) => http.close(() => resolve()));
-      store.close();
+      const errors: unknown[] = [];
+      try { clearInterval(housekeeping); } catch (error) { errors.push(error); }
+      try { clearInterval(authCleanup); } catch (error) { errors.push(error); }
+      try { hub.close(); } catch (error) { errors.push(error); }
+      try { wss.close(); } catch (error) { errors.push(error); }
+      try {
+        await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()));
+      } catch (error) { errors.push(error); }
+      try { store.close(); } catch (error) { errors.push(error); }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, 'Relay resource shutdown failed.');
     },
   };
 } catch (error) {
@@ -173,15 +183,16 @@ log('info', `brc-relay listening on ${cfg.host}:${cfg.port}`);
 log('info', `public URL ${cfg.publicUrl}  MCP: ${cfg.publicUrl}/mcp  pair: ${cfg.publicUrl}/device/verify`);
 
 let control: ManagedControlServer | undefined;
-let stopping = false;
-const stop = async (sig?: string) => {
-  if (stopping) return;
-  stopping = true;
+let stopping: Promise<void> | undefined;
+const stop = (sig?: string): Promise<void> => stopping ??= (async () => {
+  const errors: unknown[] = [];
   if (sig) log('info', `${sig} received, shutting down`);
-  await control?.close();
-  await relay.close();
-  await closeLogs();
-};
+  try { await control?.close(); } catch (error) { errors.push(error); }
+  try { await relay.close(); } catch (error) { errors.push(error); }
+  try { await closeLogs(); } catch (error) { errors.push(error); }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'Relay shutdown failed.');
+})();
 process.on('SIGINT', () => { void stop('SIGINT').catch((error: unknown) => log('error', String(error))); });
 process.on('SIGTERM', () => { void stop('SIGTERM').catch((error: unknown) => log('error', String(error))); });
 control = await startManagedControlServer({
@@ -195,6 +206,8 @@ control = await startManagedControlServer({
     process.exitCode = 1;
   },
   health: async () => {
+    const failure = diagnostics.getLogFailure() ?? managedLogFailure;
+    if (failure) return { state: 'degraded', detail: `Relay log output failed: ${failure.message}` };
     try {
       const response = await fetch(`http://127.0.0.1:${cfg.port}/health`);
       return response.ok

@@ -35,21 +35,24 @@ export interface InjectedDiagnosticsRuntime {
   enabled: boolean;
   functions?: FunctionTiming;
   log(message: string, options?: DiagnosticMessageOptions): void;
+  getLogFailure(): Error | undefined;
   captureSnapshot(status?: 'running' | 'exited'): Promise<void>;
   stop(): Promise<void>;
 }
 
 export function createDiagnosticsRuntime(options: InjectedDiagnosticsOptions): InjectedDiagnosticsRuntime {
   if (!options.enabled) {
-    return { enabled: false, log: () => undefined, captureSnapshot: async () => undefined, stop: async () => undefined };
+    return { enabled: false, log: () => undefined, getLogFailure: () => undefined, captureSnapshot: async () => undefined, stop: async () => undefined };
   }
   options.resources?.start();
   options.session?.start();
   let pending = Promise.resolve();
   let logFailure: Error | undefined;
+  let stopPromise: Promise<void> | undefined;
   return {
     enabled: true,
     functions: options.functions,
+    getLogFailure: () => logFailure,
     log(message, logOptions = {}) {
       if (!options.log) return;
       const error = logOptions.error;
@@ -71,12 +74,17 @@ export function createDiagnosticsRuntime(options: InjectedDiagnosticsOptions): I
       await pending;
       await options.session?.capture(status);
     },
-    async stop() {
-      options.resources?.stop();
-      await options.session?.stop();
-      await pending;
-      await options.log?.flush();
-      if (logFailure) throw logFailure;
+    stop() {
+      return stopPromise ??= (async () => {
+        const errors: unknown[] = [];
+        try { options.resources?.stop(); } catch (error) { errors.push(error); }
+        try { await options.session?.stop(); } catch (error) { errors.push(error); }
+        await pending;
+        try { await options.log?.flush(); } catch (error) { errors.push(error); }
+        if (logFailure && !errors.includes(logFailure)) errors.push(logFailure);
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) throw new AggregateError(errors, 'Diagnostics shutdown failed.');
+      })();
     },
   };
 }
