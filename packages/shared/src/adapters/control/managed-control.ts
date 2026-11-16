@@ -104,7 +104,13 @@ export async function startManagedControlServer(options: {
   }));
   const closeServer = () => new Promise<void>((resolve, reject) => {
     if (!server.listening) return resolve();
-    server.close((error) => error ? reject(error) : resolve());
+    const deadline = setTimeout(() => server.closeAllConnections(), 1_000);
+    deadline.unref();
+    server.close((error) => {
+      clearTimeout(deadline);
+      if (error) reject(error);
+      else resolve();
+    });
   });
 
   await new Promise<void>((resolve, reject) => {
