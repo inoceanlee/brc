@@ -116,22 +116,24 @@ export class ServiceManager {
       if (!signal?.aborted) return;
       if (!failures.length) signal.throwIfAborted();
       const reason = signal.reason;
-      const exitCode = reason && typeof reason === 'object' && 'exitCode' in reason && (reason.exitCode === 130 || reason.exitCode === 143)
-        ? reason.exitCode : 130;
-      throw Object.assign(new AggregateError([...failures, reason], `Service stop cancelled after failures: ${failures.map((failure) => failure.message).join('; ')}`), { exitCode });
+      const exitCode = reason && typeof reason === 'object' && 'exitCode' in reason && typeof reason.exitCode === 'number'
+        ? reason.exitCode : 1;
+      throw Object.assign(new AggregateError([...failures, reason], `Service stop interrupted: ${failures.map((failure) => failure.message).join('; ')}; ${reason instanceof Error ? reason.message : String(reason)}`), { exitCode });
     };
     for (const service of [...this.services].reverse()) {
       checkCancellation();
       try {
-        await this.processes.status(service);
+        const current = await this.processes.status(service);
         checkCancellation();
-        await this.processes.stop(service, signal);
+        if (current.state !== 'stopped') await this.processes.stop(service, signal);
       } catch (error) {
-        checkCancellation();
         const failure = error instanceof Error ? error : new Error(String(error));
-        failures.push(Object.assign(new Error(`${service.name}: ${failure.message}`, { cause: failure }), {
-          exitCode: 'exitCode' in failure ? failure.exitCode : undefined,
-        }));
+        if (!signal?.aborted || (error !== signal.reason && failure.name !== 'AbortError')) {
+          failures.push(Object.assign(new Error(`${service.name}: ${failure.message}`, { cause: failure }), {
+            exitCode: 'exitCode' in failure ? failure.exitCode : undefined,
+          }));
+        }
+        checkCancellation();
       }
     }
     checkCancellation();

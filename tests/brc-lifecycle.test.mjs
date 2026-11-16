@@ -13,6 +13,7 @@ import { inspectProcesses } from '../packages/cli/dist/adapters/process/identity
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
+import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
 import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
 import { startManagedControlServer } from '../packages/shared/dist/managed-control.js';
 
@@ -134,6 +135,12 @@ test('batch inspection validates and deduplicates process IDs', async () => {
   assert.equal(identities.get(2147483647), null);
 });
 
+test('process inspection honors cancellation before launching an inspector', async () => {
+  const controller = new AbortController();
+  controller.abort(new Error('inspection cancelled'));
+  await assert.rejects(inspectProcesses([process.pid], controller.signal), /inspection cancelled/);
+});
+
 test('macOS inspection reports a missing PID as exited', { skip: process.platform !== 'darwin' }, async () => {
   assert.equal(await inspectProcess(2147483647), null);
 });
@@ -157,6 +164,10 @@ test('Linux zombie is treated as exited without signaling its parent', { skip: p
     if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z ')) break;
     await sleep(10);
   }
+  const record = await readFile(filename, 'utf8');
+  await cleanRuntime(harness.paths);
+  await assert.rejects(readFile(filename), { code: 'ENOENT' });
+  await writeFile(filename, record);
   await harness.manager.stop(harness.spec);
   await assert.rejects(readFile(filename), { code: 'ENOENT' });
   assert.equal(parent.exitCode, null);
@@ -215,6 +226,70 @@ test('creation time mismatch alone does not authorize replacing a live service',
   } finally {
     await writeFile(filename, original);
   }
+});
+
+test('multiple damaged identity fields do not authorize replacement of a live service', async (t) => {
+  const harness = await makeHarness(t);
+  await harness.manager.start(harness.spec);
+  const filename = path.join(harness.paths.runtime, 'relay.json');
+  const original = await readFile(filename, 'utf8');
+  const altered = { ...JSON.parse(original), id: '11111111-2222-3333-4444-555555555555', createdAt: 'corrupt', commandLine: 'damaged' };
+  await writeFile(filename, JSON.stringify(altered));
+  try {
+    await assert.rejects(harness.manager.start(harness.spec), (error) => error.exitCode === 5);
+    assert.deepEqual(JSON.parse(await readFile(filename, 'utf8')), altered);
+    process.kill(altered.pid, 0);
+  } finally {
+    await writeFile(filename, original);
+  }
+});
+
+test('identity inspection failure during shutdown retains record and reports conflict', async (t) => {
+  let shutdown = false;
+  let inspected = false;
+  const harness = await makeHarness(t, { mode: 'hang', processOptions: { inspectProcess: async (pid) => {
+    if (shutdown && inspected) throw new Error('inspection failed');
+    if (shutdown) inspected = true;
+    return inspectProcess(pid);
+  }}});
+  await harness.manager.start(harness.spec);
+  const filename = path.join(harness.paths.runtime, 'relay.json');
+  const original = await readFile(filename, 'utf8');
+  shutdown = true;
+  try {
+    await assert.rejects(harness.manager.stop(harness.spec), (error) => error.exitCode === 5 && /inspection failed/.test(error.message));
+    assert.equal(await readFile(filename, 'utf8'), original);
+    process.kill(JSON.parse(original).pid, 0);
+  } finally {
+    shutdown = false;
+  }
+});
+
+test('timeout after a stop failure keeps the failure and does not become cancellation', async () => {
+  const controller = new AbortController();
+  const processes = {
+    status: async (spec) => ({ name: spec.name, state: 'running', pid: 1, detail: '' }),
+    stop: async (spec) => {
+      if (spec.name === 'agent') throw new Error('agent failed');
+      controller.abort(new Error('command timed out'));
+      throw new Error('traefik stop failed');
+    },
+  };
+  const services = ['traefik', 'agent'].map((name) => ({ name, entrypoint: '/test', workspaceRoot: '/', cwd: '/' }));
+  const manager = new ServiceManager(paths(os.tmpdir()), services, processes, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (run) => run() });
+  await assert.rejects(manager.stop(controller.signal), (error) => error.exitCode !== 130 && /agent failed/.test(error.message) && /traefik stop failed/.test(error.message));
+});
+
+test('repeated service stop does not invoke process stop for stopped services', async () => {
+  let calls = 0;
+  const processes = {
+    status: async (spec) => ({ name: spec.name, state: 'stopped', pid: null, detail: 'No managed process record.' }),
+    stop: async () => { calls++; },
+  };
+  const manager = new ServiceManager(paths(os.tmpdir()), [{ name: 'relay', entrypoint: '/test', workspaceRoot: '/', cwd: '/' }], processes, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (run) => run() });
+  await manager.stop();
+  await manager.stop();
+  assert.equal(calls, 0);
 });
 
 test('stop retains earlier failures when cancellation interrupts later services', async () => {
@@ -891,6 +966,9 @@ test('start automatically evicts stale process record when PID identity does not
     controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   };
   await writeFile(path.join(harness.paths.runtime, `${harness.spec.name}.json`), JSON.stringify(staleRecord, null, 2));
+  const { utimes } = await import('node:fs/promises');
+  const previousBoot = new Date(Date.now() - os.uptime() * 1000 - 60_000);
+  await utimes(path.join(harness.paths.runtime, 'relay.json'), previousBoot, previousBoot);
 
   // Querying status should still safely report degraded (read-only query does not mutate)
   const status = await harness.manager.status(harness.spec);
@@ -902,6 +980,7 @@ test('start automatically evicts stale process record when PID identity does not
   await serviceManager.stop();
   await assert.rejects(readFile(path.join(harness.paths.runtime, 'relay.json')), { code: 'ENOENT' });
   await writeFile(path.join(harness.paths.runtime, 'relay.json'), JSON.stringify(staleRecord));
+  await utimes(path.join(harness.paths.runtime, 'relay.json'), previousBoot, previousBoot);
   await serviceManager.start();
 
   const statusAfter = await serviceManager.status();

@@ -32,11 +32,11 @@ function parseProcessIdentity(value: unknown): ProcessIdentity {
   return { pid: value.pid, createdAt: value.createdAt, executablePath: value.executablePath, commandLine: value.commandLine };
 }
 
-async function inspectWindows(pids: readonly number[]): Promise<Map<number, ProcessIdentity | null>> {
+async function inspectWindows(pids: readonly number[], signal?: AbortSignal): Promise<Map<number, ProcessIdentity | null>> {
   let stdout: string;
   try {
     ({ stdout } = await run(nativeBinary, ['inspect', ...pids.map(String)], {
-      encoding: 'utf8', timeout: 5_000, windowsHide: true, shell: false,
+      encoding: 'utf8', timeout: 5_000, windowsHide: true, shell: false, signal,
       maxBuffer: Math.min(pids.length * 64 * 1024, 64 * 1024 * 1024),
     }));
   } catch (error) {
@@ -65,20 +65,22 @@ async function inspectWindows(pids: readonly number[]): Promise<Map<number, Proc
   return result;
 }
 
-export async function inspectProcesses(pids: readonly number[]): Promise<Map<number, ProcessIdentity | null>> {
+export async function inspectProcesses(pids: readonly number[], signal?: AbortSignal): Promise<Map<number, ProcessIdentity | null>> {
+  signal?.throwIfAborted();
   for (const pid of pids) if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) throw new Error(`Invalid process ID: ${pid}`);
   const unique = [...new Set(pids)];
   if (!unique.length) return new Map();
-  if (process.platform === 'win32') return inspectWindows(unique);
+  if (process.platform === 'win32') return inspectWindows(unique, signal);
   const result = new Map<number, ProcessIdentity | null>();
-  await Promise.all(unique.map(async (pid) => { result.set(pid, await inspectNonWindows(pid)); }));
+  await Promise.all(unique.map(async (pid) => { result.set(pid, await inspectNonWindows(pid, signal)); }));
   return result;
 }
 export async function inspectProcess(pid: number): Promise<ProcessIdentity | null> {
   return (await inspectProcesses([pid])).get(pid) ?? null;
 }
 
-async function inspectNonWindows(pid: number): Promise<ProcessIdentity | null> {
+async function inspectNonWindows(pid: number, signal?: AbortSignal): Promise<ProcessIdentity | null> {
+  signal?.throwIfAborted();
   if (process.platform === 'linux') {
     let stat: string;
     let executablePath: string;
@@ -103,9 +105,9 @@ async function inspectNonWindows(pid: number): Promise<ProcessIdentity | null> {
   }
   if (process.platform === 'darwin') {
     try {
-      const { stdout: createdAt } = await run('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', windowsHide: true });
-      const { stdout: executablePath } = await run('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', windowsHide: true });
-      const { stdout: commandLine } = await run('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8', windowsHide: true });
+      const { stdout: createdAt } = await run('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8', windowsHide: true, signal });
+      const { stdout: executablePath } = await run('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf8', windowsHide: true, signal });
+      const { stdout: commandLine } = await run('ps', ['-ww', '-p', String(pid), '-o', 'command='], { encoding: 'utf8', windowsHide: true, signal });
       if (!createdAt.trim() || !executablePath.trim() || !commandLine.trim()) return null;
       return { pid, createdAt: createdAt.trim(), executablePath: executablePath.trim(), commandLine: commandLine.trim() };
     } catch (error) {
