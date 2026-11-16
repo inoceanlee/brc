@@ -175,7 +175,34 @@ function isDataInterface(statement) {
   return statement.members.every((member) => ts.isPropertySignature(member) && member.type && !callable(member.type));
 }
 
-function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
+function isClassReceiver(identifier) {
+  const name = identifier.text;
+  const source = identifier.getSourceFile();
+  for (let scope = identifier.parent; scope; scope = scope.parent) {
+    if (ts.isFunctionLike(scope) && scope.parameters.some((parameter) => ts.isIdentifier(parameter.name)
+      && parameter.name.text === name)) return false;
+    if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue;
+    let shadowed = false;
+    function findValue(node) {
+      if (node !== scope && (ts.isFunctionLike(node) || ts.isClassDeclaration(node) || ts.isBlock(node))) return;
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name) shadowed = true;
+      ts.forEachChild(node, findValue);
+    }
+    findValue(scope);
+    if (shadowed) return false;
+  }
+  return source.statements.some((statement) => {
+    if (ts.isClassDeclaration(statement)) return statement.name?.text === name;
+    if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) return false;
+    const clause = statement.importClause;
+    if (clause?.name?.text === name) return true;
+    const bindings = clause?.namedBindings;
+    return Boolean(bindings && ts.isNamedImports(bindings)
+      && bindings.elements.some((element) => !element.isTypeOnly && element.name.text === name));
+  });
+}
+
+function ownershipViolations(source, prefix, relative, dataTypes = new Set(), requestFactories = new Set()) {
   const violations = [];
   if (ENTRY_FILES.has(relative)) return violations;
   for (const statement of source.statements) {
@@ -298,7 +325,25 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
           if (ts.isFunctionLike(parent)) break;
           parent = parent.parent;
         }
-        if (retained && !inCore(relative)) {
+        let scoped = false;
+        if (ts.isVariableDeclaration(node.parent) && directlyReturned(node.parent)) {
+          let owner = node.parent.parent;
+          while (owner && owner !== source && !ts.isFunctionDeclaration(owner)) owner = owner.parent;
+          if (owner && ts.isFunctionDeclaration(owner) && owner.body && owner.name && requestFactories.has(owner.name.text)
+            && ts.isIdentifier(node.parent.name)) {
+            const resource = node.parent.name.text;
+            let escaped = false;
+            function checkUse(child) {
+              if (ts.isIdentifier(child) && child.text === resource && child !== node.parent.name
+                && !(ts.isReturnStatement(child.parent) && child.parent.expression === child)
+                && !(ts.isPropertyAccessExpression(child.parent) && child.parent.expression === child)) escaped = true;
+              ts.forEachChild(child, checkUse);
+            }
+            checkUse(owner.body);
+            scoped = !escaped;
+          }
+        }
+        if (retained && !scoped && !inCore(relative)) {
           violations.push(prefix + ': nested service construction ' + className + '@' + constructionIdentity(node, source));
         }
       }
@@ -312,7 +357,8 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
       violations.push(prefix + ': service factory createManagedLog@' + constructionIdentity(node, source));
     }
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
-      && ts.isIdentifier(node.expression.expression) && SERVICE_TYPES.test(node.expression.expression.text)
+      && ts.isIdentifier(node.expression.expression) && isClassReceiver(node.expression.expression)
+      && SERVICE_TYPES.test(node.expression.expression.text)
       && ['open', 'load'].includes(node.expression.name.text)
       && !isControlledInitializationCall(node, node.expression.expression.text)) {
       violations.push(prefix + ': service factory ' + node.expression.expression.text + '.' + node.expression.name.text
@@ -497,6 +543,100 @@ function serviceConstructionName(node) {
   return name !== 'AbortController' && !isNodeAsyncContext(node) && SERVICE_TYPES.test(name) ? name : '';
 }
 
+function isRequestScopedCall(call) {
+  if (!ts.isVariableDeclaration(call.parent) || !ts.isIdentifier(call.parent.name)) return false;
+  const resource = call.parent.name.text;
+  let callback = call.parent;
+  while (callback && !ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) callback = callback.parent;
+  if (!callback || !ts.isCallExpression(callback.parent) || !callback.parent.arguments.includes(callback)
+    || !ts.isPropertyAccessExpression(callback.parent.expression)
+    || !['all', 'post', 'get', 'put', 'delete', 'patch'].includes(callback.parent.expression.name.text)
+    || callback.parameters.length < 2 || !ts.isIdentifier(callback.parameters[1].name)) return false;
+  const response = callback.parameters[1].name.text;
+  let closed = false;
+  let escaped = false;
+  function findClose(node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === resource
+      && node.expression.name.text === 'close') closed = true;
+    ts.forEachChild(node, findClose);
+  }
+  function visit(node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === response
+      && node.expression.name.text === 'on' && node.arguments.length >= 2
+      && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'close'
+      && (ts.isArrowFunction(node.arguments[1]) || ts.isFunctionExpression(node.arguments[1]))) findClose(node.arguments[1]);
+    if (ts.isIdentifier(node) && node.text === resource && node !== call.parent.name) {
+      if (!ts.isPropertyAccessExpression(node.parent) || node.parent.expression !== node) escaped = true;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(callback.body);
+  return closed && !escaped;
+}
+
+function requestScopedFactories(sources) {
+  const candidates = new Map();
+  const blockedTargets = new Set();
+  for (const [filename, source] of sources) {
+    for (const statement of source.statements) {
+      if ((!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement))
+        || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)
+        || !statement.moduleSpecifier.text.startsWith('.')) continue;
+      const target = path.resolve(path.dirname(filename), statement.moduleSpecifier.text.replace(/\.js$/, '.ts'));
+      if (!sources.has(target)) continue;
+      if (ts.isExportDeclaration(statement)) {
+        if (!statement.isTypeOnly) blockedTargets.add(target);
+        continue;
+      }
+      if (statement.importClause?.isTypeOnly) continue;
+      const bindings = statement.importClause?.namedBindings;
+      if (!bindings || !ts.isNamedImports(bindings)) {
+        blockedTargets.add(target);
+        continue;
+      }
+      for (const item of bindings.elements) {
+        if (item.isTypeOnly) continue;
+        const exported = (item.propertyName ?? item.name).text;
+        const key = target + '\0' + exported;
+        const record = candidates.get(key) ?? { target, exported, count: 0, safe: true };
+        function visit(node) {
+          if (ts.isImportDeclaration(node)) return;
+          if (ts.isIdentifier(node) && node.text === item.name.text) {
+            if (ts.isCallExpression(node.parent) && node.parent.expression === node) {
+              record.count++;
+              if (!isRequestScopedCall(node.parent)) record.safe = false;
+            } else record.safe = false;
+          }
+          ts.forEachChild(node, visit);
+        }
+        visit(source);
+        candidates.set(key, record);
+      }
+    }
+  }
+  const result = new Map();
+  for (const { target, exported, count, safe } of candidates.values()) {
+    const targetSource = sources.get(target);
+    const declaration = targetSource?.statements.find((statement) => ts.isFunctionDeclaration(statement)
+      && statement.name?.text === exported && statement.body
+      && statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword));
+    if (!safe || !count || blockedTargets.has(target) || !declaration) continue;
+    let usedInternally = false;
+    function findInternal(node) {
+      if (ts.isIdentifier(node) && node.text === exported && node !== declaration.name) usedInternally = true;
+      ts.forEachChild(node, findInternal);
+    }
+    findInternal(targetSource);
+    if (usedInternally) continue;
+    const names = result.get(target) ?? new Set();
+    names.add(exported);
+    result.set(target, names);
+  }
+  return result;
+}
+
 async function architectureViolations() {
   const violations = [];
   const adapterNames = await sharedAdapterExports();
@@ -504,18 +644,24 @@ async function architectureViolations() {
     const root = path.join(repository, 'packages', pkg, 'src');
     const dataTypes = new Set();
     const files = await sourceFiles(root);
+    const sources = new Map();
+    for (const filename of files) {
+      sources.set(path.resolve(filename), ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true));
+    }
+    const scopedFactories = requestScopedFactories(sources);
     for (const filename of files) {
       if (!inCore(path.relative(root, filename).replaceAll('\\', '/'))) continue;
-      const core = ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true);
+      const core = sources.get(path.resolve(filename));
       for (const statement of core.statements) {
         if (isDataInterface(statement)) dataTypes.add(statement.name.text);
       }
     }
     for (const filename of files) {
       const relative = path.relative(root, filename).replaceAll('\\', '/');
-      const source = ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true);
+      const source = sources.get(path.resolve(filename));
       const prefix = pkg + '/' + relative;
-      violations.push(...ownershipViolations(source, prefix, relative, new Set(dataTypes)));
+      violations.push(...ownershipViolations(source, prefix, relative, new Set(dataTypes),
+        scopedFactories.get(path.resolve(filename)) ?? new Set()));
       if (inCore(relative)) {
         for (const name of sharedAdapterImports(source, adapterNames)) {
           violations.push(prefix + ': core imports shared adapter ' + name);
@@ -701,6 +847,51 @@ test('factory returns, callable aliases and static factory calls are checked', (
   assert.equal(actual.some((item) => item.includes('state') || item.includes('RequestSession')
     || item.includes('nested service construction SettingsManager')), false);
   assert.deepEqual(ownershipViolations(source, 'agent/cli.ts', 'cli.ts'), []);
+});
+
+test('factory calls distinguish class declarations from existing store instances', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    import { CredentialStore, SettingsManager } from './storage.js';
+    function migrate() {
+      const legacyStore = new CredentialStore('old');
+      const targetStore = new CredentialStore('new');
+      const credentials = legacyStore.load();
+      targetStore.load();
+      return credentials;
+    }
+    const manager = SettingsManager.load();
+  `, ts.ScriptTarget.Latest, true);
+  const violations = ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts');
+  assert.ok(violations.includes('agent/adapters/sample.ts: service factory SettingsManager.load@<module>:manager'));
+  assert.equal(violations.some((entry) => entry.includes('service factory legacyStore.load')
+    || entry.includes('service factory targetStore.load')), false);
+});
+
+test('request scoped server factories require response close and no escaping callers', () => {
+  const factoryFile = path.resolve('fixture/mcp/server.ts');
+  const appFile = path.resolve('fixture/app.ts');
+  const factory = ts.createSourceFile(factoryFile, `
+    export function createMcpServer() {
+      const server = new Server();
+      server.setRequestHandler('tools', () => {});
+      return server;
+    }
+  `, ts.ScriptTarget.Latest, true);
+  function scan(body) {
+    const app = ts.createSourceFile(appFile, `
+      import { createMcpServer } from './mcp/server.js';
+      app.all('/mcp', async (req, res) => {
+        const server = createMcpServer();
+        ${body}
+      });
+    `, ts.ScriptTarget.Latest, true);
+    const scoped = requestScopedFactories(new Map([[factoryFile, factory], [appFile, app]]));
+    return ownershipViolations(factory, 'relay/adapters/sample.ts', 'adapters/sample.ts', new Set(),
+      scoped.get(factoryFile) ?? new Set());
+  }
+  assert.deepEqual(scan("res.on('close', () => { void server.close(); }); await server.connect(transport);"), []);
+  assert.ok(scan('await server.connect(transport);').some((entry) => entry.includes('Server')));
+  assert.ok(scan("res.on('close', () => server.close()); cache(server);").some((entry) => entry.includes('Server')));
 });
 
 test('dynamic shared namespaces distinguish safe member use and escape', () => {
