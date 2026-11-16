@@ -1,111 +1,36 @@
-/**
- * BRC relay HTTP server (Express; MCP SDK's auth router is Express-native).
- * Routes:
- *   GET  /                      home / device list (cookie session)
- *   GET  /health
- *   .well-known/*, /authorize, /token, /register, /revoke  (mcpAuthRouter)
- *   GET|POST /auth/login, POST /auth/consent, GET /auth/logout
- *   POST /device/start, POST /device/poll, GET|POST /device/verify, POST /device/approve
- *   ALL  /mcp                   Streamable HTTP (bearer, stateless per request)
- *   WS   /ws                    agent socket (device token)
- */
-import express, { type Request, type Response, type NextFunction } from 'express';
+import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cookieParser from 'cookie-parser';
-import { createServer, type Server as HttpServer } from 'node:http';
-import { WebSocketServer } from 'ws';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import { DeviceHub } from '../../device-hub.js';
-import { SqliteStore, verifyPassword, type AuditRetentionPolicy } from '../storage/sqlite.js';
-import { RelayOAuthProvider, SCOPES } from '../../core/auth/provider.js';
-import { Sessions } from '../../core/auth/sessions.js';
+import type { DeviceHub } from '../transport/device-hub.js';
+import { verifyPassword, type SqliteStore } from '../storage/sqlite.js';
+import type { RelayOAuthProvider } from './oauth-provider.js';
+import type { Sessions } from './sessions.js';
+import type { LoginLimiter } from '../../core/auth/rate-limit.js';
+import { SCOPES, DEVICE_CODE_TTL_MS, DEVICE_POLL_INTERVAL_S } from '../../core/auth/policy.js';
+import type { RelayConfig } from './config.js';
 import { createMcpServer } from './mcp/server.js';
 import * as pages from './pages/html.js';
 import * as adminPages from './pages/admin.js';
-import { LoginLimiter } from '../../core/auth/rate-limit.js';
 
-export interface RelayConfig {
-  port: number;
-  host: string;
-  publicUrl: string;
-  trustProxy: boolean | number | string;
-  dbFile: string;
-  sessionSecret: string;
-  adminUser: string;
-  adminPassword: string;
-  relayVersion: string;
- audit: AuditRetentionPolicy | undefined;
+export { parseTrustProxy, loadConfig } from './config.js';
+
+export interface RelayHttpDependencies {
+  app: Express;
+  cfg: RelayConfig;
+  store: SqliteStore;
+  hub: DeviceHub;
+  sessions: Sessions;
+  provider: RelayOAuthProvider;
+  limiter: LoginLimiter;
+  log: (level: string, message: string) => void;
 }
 
-/**
- * Trusted proxy policy. Legacy `true`/`1` values trust one loopback proxy hop
- * instead of every proxy, so a client cannot reset its rate-limit identity by
- * sending its own X-Forwarded-For header.
- */
-export function parseTrustProxy(value: string | undefined): RelayConfig['trustProxy'] {
-  if (value === undefined || value === '' || value === 'false' || value === '0') return false;
-  if (value === 'true' || value === '1' || value === 'loopback') return 'loopback';
-  if (/^\d+$/.test(value)) return Number(value);
-  return value;
-}
-
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
-  const port = Number(env.PORT ?? 3000);
- const retentionDays = env.BRC_AUDIT_RETENTION_DAYS;
- const maxEntries = env.BRC_AUDIT_MAX_ENTRIES;
- let audit: AuditRetentionPolicy | undefined;
- if (retentionDays !== undefined && maxEntries !== undefined) {
-  audit = { retentionDays: Number(retentionDays), maxEntries: Number(maxEntries) };
-  if (!Number.isSafeInteger(audit.retentionDays) || audit.retentionDays < 0) {
-   throw new Error('BRC_AUDIT_RETENTION_DAYS must be a non-negative integer.');
-  }
-  if (!Number.isSafeInteger(audit.maxEntries) || audit.maxEntries < 1) {
-   throw new Error('BRC_AUDIT_MAX_ENTRIES must be a positive integer.');
-  }
- } else if (retentionDays !== undefined || maxEntries !== undefined) {
-  throw new Error('Both BRC_AUDIT_RETENTION_DAYS and BRC_AUDIT_MAX_ENTRIES are required.');
- }
-  return {
-    port,
-    host: env.HOST ?? '0.0.0.0',
-    publicUrl: (env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, ''),
-    trustProxy: parseTrustProxy(env.TRUST_PROXY),
-    dbFile: env.BRC_DB ?? 'data/relay.sqlite',
-    sessionSecret: env.BRC_SESSION_SECRET ?? '',
-    adminUser: env.BRC_ADMIN_USER ?? 'admin',
-    adminPassword: env.BRC_ADMIN_PASSWORD ?? '',
-  relayVersion: env.BRC_PRODUCT_VERSION ?? 'unknown',
-  audit,
-  };
-}
-
-const DEVICE_CODE_TTL_MS = 15 * 60_000;
-const DEVICE_POLL_INTERVAL_S = 5;
-
-export interface Relay { http: HttpServer; hub: DeviceHub; store: SqliteStore; close(): Promise<void> }
-
-export function buildRelay(cfg: RelayConfig, log: (level: string, msg: string) => void): Relay {
- const audit = cfg.audit;
- if (!audit) throw new Error('Relay audit settings are required for service startup.');
-  const store = SqliteStore.open(cfg.dbFile);
-  let admin: ReturnType<SqliteStore['getAdministrator']>;
-  let sessionSecret: string;
-  try {
-    admin = cfg.adminPassword
-      ? store.upsertUser(cfg.adminUser, cfg.adminPassword)
-      : store.getAdministrator();
-    sessionSecret = cfg.sessionSecret || store.getSessionSecret();
-  } catch (error) {
-    store.close();
-    throw error;
-  }
-  const sessions = new Sessions(sessionSecret, cfg.publicUrl.startsWith('https://'));
-  const hub = new DeviceHub(cfg.relayVersion, log);
+export function mountRelayRoutes(deps: RelayHttpDependencies): void {
+  const { app, cfg, store, hub, sessions, provider, limiter, log } = deps;
   const publicUrl = new URL(cfg.publicUrl);
-
-  const app = express();
   app.set('trust proxy', cfg.trustProxy);
   app.disable('x-powered-by');
   app.use(cookieParser());
@@ -123,16 +48,6 @@ export function buildRelay(cfg: RelayConfig, log: (level: string, msg: string) =
     const userId = sessions.userId(req);
     return userId && store.getUser(userId) ? userId : null;
   };
-
-  /* ---------- OAuth ---------- */
-  const provider = new RelayOAuthProvider({
-    store,
-    currentUserId: (res) => currentUser(res.req),
-    renderLogin: (res, returnTo) => res.redirect(`/auth/login?returnTo=${encodeURIComponent(returnTo)}`),
-    renderConsent: (res, pendingId, client, scopes) =>
-      res.type('html').send(pages.consentPage(pendingId, client.client_name ?? client.client_id, client.redirect_uris?.[0] ?? '', scopes)),
-    issuer: cfg.publicUrl,
-  });
 
   // Publish OAuth metadata explicitly so ChatGPT sees the current MCP OAuth 2.1 contract.
   const oauthMetadata = {
@@ -171,7 +86,7 @@ export function buildRelay(cfg: RelayConfig, log: (level: string, msg: string) =
   // Consent page re-entry after login (provider.authorize parked the request under `pending`).
   app.get('/auth/consent', (req, res) => {
     const pendingId = String(req.query.pending ?? '');
-    const p = provider.pending.get(pendingId);
+    const p = provider.getPending(pendingId);
     if (!p) return res.status(400).type('html').send(pages.messagePage('Expired', 'This authorization request has expired. Retry from your AI client.', false));
     if (!currentUser(req)) return res.redirect(`/auth/login?returnTo=${encodeURIComponent(req.originalUrl)}`);
     res.type('html').send(pages.consentPage(pendingId, p.client.client_name ?? p.client.client_id, p.params.redirectUri, p.params.scopes ?? SCOPES));
@@ -193,7 +108,6 @@ export function buildRelay(cfg: RelayConfig, log: (level: string, msg: string) =
   const safeReturn = (v: unknown) => (typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') ? v : '/');
 
   app.get('/auth/login', (req, res) => res.type('html').send(pages.loginPage(safeReturn(req.query.returnTo))));
-  const limiter = new LoginLimiter();
   app.post('/auth/login', (req, res) => {
     const { username, password, returnTo } = req.body as Record<string, string>;
     const key = `${req.ip}|${String(username ?? '').toLowerCase()}`;
@@ -264,7 +178,6 @@ export function buildRelay(cfg: RelayConfig, log: (level: string, msg: string) =
     res.type('html').send(pages.messagePage('Device approved', `${row.client_name} can now connect. The agent will finish pairing automatically.`));
   });
 
-
   /* ---------- OAuth clients registered automatically via DCR ---------- */
   const clientRows = () => store.listClients().map((c) => {
     const m = JSON.parse(c.metadata) as { client_name?: string; redirect_uris?: string[] };
@@ -333,30 +246,4 @@ export function buildRelay(cfg: RelayConfig, log: (level: string, msg: string) =
     res.redirect('/auth/apikeys');
   });
 
-  /* ---------- agent WebSocket (device token) ---------- */
-  const http = createServer(app);
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
-
-  http.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url ?? '/', cfg.publicUrl);
-    if (url.pathname !== '/ws') return socket.destroy();
-    const h = req.headers.authorization;
-    const token = h?.startsWith('Bearer ') ? h.slice(7).trim() : url.searchParams.get('token');
-    const dev = token ? store.getDeviceByToken(token) : undefined;
-    if (!dev || !store.getUser(dev.user_id)) { log('warn', `agent auth failed from ${req.socket.remoteAddress}`); socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      hub.attach(ws, dev.user_id, dev.device_id);
-      store.touchDevice(dev.device_id);
-    });
-  });
-
- const housekeeping = setInterval(() => store.vacuumExpired(audit), 10 * 60_000);
-  housekeeping.unref();
-
-  log('info', `admin user "${admin.username}" ready; db ${cfg.dbFile}`);
-
-  return {
-    http, hub, store,
-    close: async () => { clearInterval(housekeeping); hub.close(); wss.close(); await new Promise<void>((r) => http.close(() => r())); store.close(); },
-  };
 }

@@ -9,15 +9,12 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokens, OAuthTokenRevocationRequest } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidRequestError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import { SqliteStore, randomToken, sha256 } from '../../adapters/storage/sqlite.js';
+import { SCOPES, AUTH_CODE_TTL_MS, ACCESS_TTL_MS, REFRESH_TTL_MS, grantedScopes } from '../../core/auth/policy.js';
+import type { AuthStorePort, AuthTokenPort } from '../../core/auth/ports.js';
 
-export const SCOPES = ['mcp:tools'];
-const AUTH_CODE_TTL_MS = 10 * 60_000;
-const ACCESS_TTL_MS = 60 * 60_000;
-const REFRESH_TTL_MS = 30 * 86_400_000;
 
 export class RelayClientsStore implements OAuthRegisteredClientsStore {
-  constructor(private readonly store: SqliteStore) {}
+  constructor(private readonly store: AuthStorePort, private readonly tokens: AuthTokenPort) {}
 
   getClient(clientId: string): OAuthClientInformationFull | undefined {
     const row = this.store.getClient(clientId);
@@ -27,17 +24,18 @@ export class RelayClientsStore implements OAuthRegisteredClientsStore {
   registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): OAuthClientInformationFull {
     const full: OAuthClientInformationFull = {
       ...client,
-      client_id: `cl_${randomToken(16)}`,
+      client_id: `cl_${this.tokens.randomToken(16)}`,
       client_id_issued_at: Math.floor(Date.now() / 1000),
     };
-    if (client.token_endpoint_auth_method !== 'none') full.client_secret = randomToken(32);
+    if (client.token_endpoint_auth_method !== 'none') full.client_secret = this.tokens.randomToken(32);
     this.store.insertClient({ client_id: full.client_id, client_secret: full.client_secret ?? null, metadata: JSON.stringify(full), created_at: Date.now() });
     return full;
   }
 }
 
 export interface ProviderDeps {
-  store: SqliteStore;
+  store: AuthStorePort;
+  tokens: AuthTokenPort;
   /** Resolve logged-in user id from the request cookie, or null. */
   currentUserId: (res: Response) => string | null;
   /** Render login page that returns to `returnTo` after success. */
@@ -52,19 +50,22 @@ export interface ProviderDeps {
 export interface PendingAuth { client: OAuthClientInformationFull; params: AuthorizationParams; createdAt: number }
 
 export class RelayOAuthProvider implements OAuthServerProvider {
-  readonly clientsStore: RelayClientsStore;
   readonly pending = new Map<string, PendingAuth>();
 
-  constructor(private readonly deps: ProviderDeps) {
-    this.clientsStore = new RelayClientsStore(deps.store);
-    setInterval(() => {
-      const cutoff = Date.now() - AUTH_CODE_TTL_MS;
-      for (const [k, v] of this.pending) if (v.createdAt < cutoff) this.pending.delete(k);
-    }, 60_000).unref();
+  constructor(private readonly deps: ProviderDeps, readonly clientsStore: RelayClientsStore) {}
+
+  prunePending(now = Date.now()): void {
+    const cutoff = now - AUTH_CODE_TTL_MS;
+    for (const [key, value] of this.pending) if (value.createdAt < cutoff) this.pending.delete(key);
+  }
+
+  getPending(pendingId: string): PendingAuth | undefined {
+    this.prunePending();
+    return this.pending.get(pendingId);
   }
 
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
-    const pendingId = randomToken(16);
+    const pendingId = this.deps.tokens.randomToken(16);
     this.pending.set(pendingId, { client, params, createdAt: Date.now() });
     const userId = this.deps.currentUserId(res);
     if (!userId || !this.deps.store.getUser(userId)) return this.deps.renderLogin(res, `/auth/consent?pending=${pendingId}`);
@@ -73,11 +74,11 @@ export class RelayOAuthProvider implements OAuthServerProvider {
 
   /** Called by the consent POST handler after the user approved. Returns the redirect URL. */
   issueCode(pendingId: string, userId: string): string {
-    const p = this.pending.get(pendingId);
+    const p = this.getPending(pendingId);
     if (!p) throw new InvalidRequestError('authorization request expired');
     if (!this.deps.store.getUser(userId)) throw new InvalidGrantError('invalid user identity');
     this.pending.delete(pendingId);
-    const code = randomToken(32);
+    const code = this.deps.tokens.randomToken(32);
     this.deps.store.insertAuthCode({
       code, client_id: p.client.client_id, user_id: userId, code_challenge: p.params.codeChallenge,
       redirect_uri: p.params.redirectUri, scopes: (p.params.scopes ?? SCOPES).join(' '),
@@ -91,7 +92,7 @@ export class RelayOAuthProvider implements OAuthServerProvider {
   }
 
   denyCode(pendingId: string): string | null {
-    const p = this.pending.get(pendingId);
+    const p = this.getPending(pendingId);
     if (!p) return null;
     this.pending.delete(pendingId);
     const url = new URL(p.params.redirectUri);
@@ -123,7 +124,7 @@ export class RelayOAuthProvider implements OAuthServerProvider {
     if (row.resource && requestedResource && requestedResource !== row.resource) throw new InvalidGrantError('resource mismatch');
     this.deps.store.revokeToken(refreshToken);
     const granted = row.scopes.split(' ');
-    const wanted = scopes?.length ? scopes.filter((s) => granted.includes(s)) : granted;
+    const wanted = grantedScopes(granted, scopes);
     return this.mint(client.client_id, row.user_id, wanted, requestedResource ?? row.resource);
   }
 
@@ -150,11 +151,11 @@ export class RelayOAuthProvider implements OAuthServerProvider {
 
   private mint(clientId: string, userId: string, scopes: string[], resource: string | null): OAuthTokens {
     if (!this.deps.store.getUser(userId)) throw new InvalidGrantError('invalid user identity');
-    const access = `brc_at_${randomToken(32)}`;
-    const refresh = `brc_rt_${randomToken(32)}`;
+    const access = `brc_at_${this.deps.tokens.randomToken(32)}`;
+    const refresh = `brc_rt_${this.deps.tokens.randomToken(32)}`;
     const now = Date.now();
-    this.deps.store.insertToken({ token_hash: sha256(access), kind: 'access', client_id: clientId, user_id: userId, scopes: scopes.join(' '), resource, expires_at: now + ACCESS_TTL_MS, created_at: now, revoked: 0 });
-    this.deps.store.insertToken({ token_hash: sha256(refresh), kind: 'refresh', client_id: clientId, user_id: userId, scopes: scopes.join(' '), resource, expires_at: now + REFRESH_TTL_MS, created_at: now, revoked: 0 });
+    this.deps.store.insertToken({ token_hash: this.deps.tokens.sha256(access), kind: 'access', client_id: clientId, user_id: userId, scopes: scopes.join(' '), resource, expires_at: now + ACCESS_TTL_MS, created_at: now, revoked: 0 });
+    this.deps.store.insertToken({ token_hash: this.deps.tokens.sha256(refresh), kind: 'refresh', client_id: clientId, user_id: userId, scopes: scopes.join(' '), resource, expires_at: now + REFRESH_TTL_MS, created_at: now, revoked: 0 });
     return { access_token: access, token_type: 'bearer', expires_in: ACCESS_TTL_MS / 1000, refresh_token: refresh, scope: scopes.join(' ') };
   }
 }
