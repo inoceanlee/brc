@@ -142,10 +142,12 @@ test('uninstall cleans a stale service record before removing data', async (t) =
     controlPort: DEFAULT_SETTINGS.services.relayPort,
     controlToken: 'a'.repeat(64),
   }));
+  const processManager = new ProcessManager(fixtureRoot.paths);
   const serviceManager = new ServiceManager(
     fixtureRoot.paths,
     services,
-    new ProcessManager(fixtureRoot.paths),
+    processManager,
+    processManager,
     new LifecycleLock(fixtureRoot.paths),
   );
 

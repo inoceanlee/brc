@@ -26,8 +26,9 @@ import type { LifecycleLock } from '../adapters/storage/lock.js';
 
 export interface SettingsManagerDependencies {
   lock: Pick<LifecycleLock, 'runExclusive'>;
+  readOnly?: boolean;
   /** Runs while the injected lock is held; do not acquire that lock again. */
-  apply: (settings: Readonly<BrcSettings>, previous: Readonly<BrcSettings>) => Promise<void>;
+  apply: (settings: Readonly<BrcSettings>, previous: Readonly<BrcSettings>, signal?: AbortSignal) => Promise<void>;
 }
 
 export interface SettingEntry<K extends BrcSettingKey = BrcSettingKey> {
@@ -88,7 +89,7 @@ export class SettingsManager {
     };
     let initial = await readSnapshot();
     // Normal reads do not mutate the filesystem and do not require the lifecycle lock.
-    if (!initial.lastGood && initial.loaded.rawContents !== null) {
+    if (!dependencies.readOnly && !initial.lastGood && initial.loaded.rawContents !== null) {
       initial = await dependencies.lock.runExclusive(async () => {
         const current = await readSnapshot();
         if (!current.lastGood && current.loaded.rawContents !== null) {
@@ -115,8 +116,21 @@ export class SettingsManager {
     return structuredClone(this.loaded.settings);
   }
 
-  async ensureConfigFile(): Promise<void> {
+  async previewApply(signal?: AbortSignal): Promise<{ key: BrcSettingKey; from: unknown; to: unknown }[]> {
+    signal?.throwIfAborted();
+    const previous = await readLastGoodSettings(this.paths, this.env) ?? this.lastGood ?? this.loaded;
+    const next = await readSettings(this.paths, this.env);
+    signal?.throwIfAborted();
+    return BRC_SETTING_KEYS.flatMap((key) => {
+      const from = readValue(previous.settings, key);
+      const to = readValue(next.settings, key);
+      return JSON.stringify(from) === JSON.stringify(to) ? [] : [{ key, from, to }];
+    });
+  }
+
+  async ensureConfigFile(signal?: AbortSignal): Promise<void> {
     await this.dependencies.lock.runExclusive(async () => {
+      signal?.throwIfAborted();
       if (this.loaded.rawContents !== null) return;
       const current = await readSettings(this.paths, this.env);
       if (current.rawContents !== null) {
@@ -129,14 +143,15 @@ export class SettingsManager {
       await writeLastGoodText(this.paths, contents);
       this.loaded = initialized;
       this.lastGood = initialized;
-    });
+    }, signal);
   }
 
 
 
-  async set<K extends BrcSettingKey>(key: K, value: BrcSettingValues[K]): Promise<{ restartRequired: boolean }> {
+  async set<K extends BrcSettingKey>(key: K, value: BrcSettingValues[K], signal?: AbortSignal): Promise<{ restartRequired: boolean }> {
     if (!isBrcSettingKey(key)) throw new Error(`Unknown setting: ${String(key)}`);
     return this.dependencies.lock.runExclusive(async () => {
+      signal?.throwIfAborted();
       const previous = await readLastGoodSettings(this.paths, this.env) ?? this.lastGood ?? this.loaded;
       let current: LoadedSettings;
       try {
@@ -150,7 +165,8 @@ export class SettingsManager {
       const contents = await writeSettings(this.paths, next.fileSettings);
       const nextLoaded = { ...next, rawContents: contents };
       try {
-        await this.dependencies.apply(next.settings, previous.settings);
+        signal?.throwIfAborted();
+        await this.dependencies.apply(next.settings, previous.settings, signal);
         await writeLastGoodText(this.paths, contents);
       } catch (error) {
         await this.rollback(previous, error, true);
@@ -158,11 +174,12 @@ export class SettingsManager {
       this.loaded = nextLoaded;
       this.lastGood = nextLoaded;
       return { restartRequired: requiresRestart(previous.settings, next.settings) };
-    });
+    }, signal);
   }
 
-  async apply(): Promise<{ restartRequired: boolean }> {
+  async apply(signal?: AbortSignal): Promise<{ restartRequired: boolean }> {
     return this.dependencies.lock.runExclusive(async () => {
+      signal?.throwIfAborted();
       const previous = await readLastGoodSettings(this.paths, this.env) ?? this.lastGood ?? this.loaded;
       let next: LoadedSettings;
       try {
@@ -172,7 +189,8 @@ export class SettingsManager {
         throw error;
       }
       try {
-        await this.dependencies.apply(next.settings, previous.settings);
+        signal?.throwIfAborted();
+        await this.dependencies.apply(next.settings, previous.settings, signal);
         if (next.rawContents === null) await removeLastGoodFile(this.paths);
         else await writeLastGoodText(this.paths, next.rawContents);
       } catch (error) {
@@ -181,7 +199,7 @@ export class SettingsManager {
       this.loaded = next;
       this.lastGood = next.rawContents === null ? null : next;
       return { restartRequired: requiresRestart(previous.settings, next.settings) };
-    });
+    }, signal);
   }
 
   private async rollback(previous: LoadedSettings, cause: unknown, restoreRuntime = false): Promise<never> {

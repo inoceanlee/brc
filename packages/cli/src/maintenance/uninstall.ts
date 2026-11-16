@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { cliSuccess, type CliResult } from 'brc-shared';
 import { lstat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
+import { allowsInteractiveInput, type InteractiveTerminal } from '../adapters/terminal/interaction.js';
 import type { BrcPaths } from '../config/paths.js';
 import { removeBrcData, type CleanupReport } from '../adapters/storage/cleanup.js';
 import { GlobalPackageRemoval, type GlobalPackageManager, BRC_PACKAGE_NAME as PACKAGE_NAME } from './global-package.js';
@@ -28,6 +30,7 @@ export interface PackageRemovalResult {
 
 export interface UninstallOptions {
   yes: boolean;
+  structuredOutput?: boolean;
   paths: BrcPaths;
   confirm: (root: string) => Promise<boolean>;
   stopServices: () => Promise<void>;
@@ -102,11 +105,16 @@ function writeRemovalReport(report: CleanupReport, write: (message: string) => v
   return report.failures.length > 0 || report.preserved.length > 0;
 }
 
-export async function confirmBrcUninstall(root: string): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+export async function confirmBrcUninstall(root: string, options: Pick<InteractiveTerminal, 'interactive' | 'noInput'> = {}): Promise<boolean> {
+  if (!allowsInteractiveInput({
+    stdinTTY: Boolean(process.stdin.isTTY),
+    stderrTTY: Boolean(process.stderr.isTTY),
+    ci: process.env.CI === 'true',
+    ...options,
+  })) {
     throw Object.assign(new Error('Use brc uninstall --yes in a non-interactive session.'), { exitCode: 2 });
   }
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  const prompt = createInterface({ input: process.stdin, output: process.stderr });
   try {
     const answer = await prompt.question(`Remove all BRC data under "${root}" and uninstall ${PACKAGE_NAME}? [y/N] `);
     return /^(?:y|yes)$/i.test(answer.trim());
@@ -115,9 +123,10 @@ export async function confirmBrcUninstall(root: string): Promise<boolean> {
   }
 }
 
-export async function uninstallBrc(options: UninstallOptions): Promise<void> {
+export async function uninstallBrc(options: UninstallOptions): Promise<void | CliResult> {
   const root = await validatePrivateDataRoot(options.paths);
   if (!options.yes && !await options.confirm(root)) {
+    if (options.structuredOutput) return cliSuccess({ command: 'uninstall', status: 'cancelled' });
     options.write('BRC uninstall cancelled.');
     return;
   }
@@ -126,14 +135,25 @@ export async function uninstallBrc(options: UninstallOptions): Promise<void> {
   await options.stopServices();
   await options.clean();
   const report = await removeBrcData(options.paths);
-  const hasResiduals = writeRemovalReport(report, options.write);
   const result = await options.removePackage(manager);
-  const packageRemoval = result?.scheduled && result.reportPath
+  const packageRemoval = result?.scheduled ? 'scheduled' : 'removed';
+  if (options.structuredOutput) {
+    return cliSuccess({
+      command: 'uninstall',
+      status: 'success',
+      dataRemoved: true,
+      packageRemoval,
+      ...(result?.reportPath ? { reportPath: result.reportPath } : {}),
+      residuals: [...report.failures, ...report.preserved],
+    });
+  }
+  const hasResiduals = writeRemovalReport(report, options.write);
+  const packageMessage = result?.scheduled && result.reportPath
     ? `BRC package removal scheduled; completion report: ${result.reportPath}`
     : 'BRC package removed.';
   options.write(hasResiduals
-    ? `${packageRemoval} Review the residual paths above.`
-    : `BRC data removed. ${packageRemoval}`);
+    ? `${packageMessage} Review the residual paths above.`
+    : `BRC data removed. ${packageMessage}`);
 }
 
 export function detectGlobalBrcPackageManager(): GlobalPackageManager {

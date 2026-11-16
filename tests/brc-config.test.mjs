@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
+import { DEFAULT_SETTINGS as SHARED_DEFAULT_SETTINGS } from '../packages/shared/dist/index.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
 import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
@@ -23,11 +24,12 @@ async function createFixture(t, options = {}) {
 }
 
 function commandDependencies(manager, paths, output) {
-  return { manager, paths, write: (message) => output.push(message) };
+  return { manager, paths };
 }
 
 test('central settings defaults match the public configuration contract', () => {
-  assert.deepEqual(DEFAULT_SETTINGS, {
+  const { agent, ...settings } = DEFAULT_SETTINGS;
+  assert.deepEqual(settings, {
     version: 1,
     proxy: {
       rate: { average: 10, period: '1s', burst: 30 },
@@ -62,6 +64,12 @@ test('central settings defaults match the public configuration contract', () => 
       lockPollMs: 50,
     },
   });
+  assert.equal(agent.fileReadLineLimit, 1_000);
+  assert.equal(agent.fileWriteLineLimit, 50);
+  assert.equal(agent.commandTimeoutMs, 1_000);
+  assert.equal(agent.telemetry.enabled, false);
+  assert.ok(agent.blockedCommands.length > 0);
+  assert.deepEqual(agent.allowedDirectories, []);
 });
 
 test('settings snapshots are independent of manager state and each other', async (t) => {
@@ -126,8 +134,8 @@ test('public URL environment override and CLI clear preserve configuration seman
 
   const output = [];
   const result = await runConfigCommand(['set', 'services.publicUrl', ''], commandDependencies(manager, paths, output));
-  assert.equal(result, 0);
-  assert.match(output.join('\\n'), /Restart/);
+  assert.equal(result.status, 'success');
+  assert.equal(result.data.restartRequired, true);
   assert.deepEqual(manager.get('services.publicUrl'), { value: '', source: 'file' });
 });
 
@@ -251,8 +259,8 @@ test('config path prints the selected configuration file', async (t) => {
 
   const result = await runConfigCommand(['path'], commandDependencies(manager, paths, output));
 
-  assert.equal(result, 0);
-  assert.equal(output.join('\n'), path.join(paths.config, 'brc.yaml'));
+  assert.equal(result.status, 'success');
+  assert.equal(result.data.path, path.join(paths.config, 'brc.yaml'));
 });
 
 test('config get reports value and source', async (t) => {
@@ -261,10 +269,8 @@ test('config get reports value and source', async (t) => {
 
   const result = await runConfigCommand(['get', 'proxy.rate.average'], commandDependencies(manager, paths, output));
 
-  assert.equal(result, 0);
-  assert.match(output.join('\n'), /proxy\.rate\.average/);
-  assert.match(output.join('\n'), /10/);
-  assert.match(output.join('\n'), /default/);
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.data, { key: 'proxy.rate.average', value: 10, source: 'default' });
 });
 
 test('config show reports all effective values and sources', async (t) => {
@@ -272,9 +278,9 @@ test('config show reports all effective values and sources', async (t) => {
   const output = [];
 
   const result = await runConfigCommand(['show'], commandDependencies(manager, paths, output));
-  const text = output.join('\n');
+  const text = JSON.stringify(result.data);
 
-  assert.equal(result, 0);
+  assert.equal(result.status, 'success');
   assert.match(text, /proxy\.rate\.average/);
   assert.match(text, /10/);
   assert.match(text, /default/);
@@ -290,10 +296,10 @@ test('config set applies valid values and flags static service changes for resta
 
   const result = await runConfigCommand(['set', 'services.relayPort', '3100'], commandDependencies(manager, paths, output));
 
-  assert.equal(result, 0);
+  assert.equal(result.status, 'success');
   assert.equal(manager.get('services.relayPort').value, 3100);
   assert.equal(appliedRelayPort, 3100);
-  assert.match(output.join('\n'), /restart/i);
+  assert.equal(result.data.restartRequired, true);
 });
 
 test('config apply loads and applies user-edited configuration', async (t) => {
@@ -306,7 +312,7 @@ test('config apply loads and applies user-edited configuration', async (t) => {
 
   const result = await runConfigCommand(['apply'], commandDependencies(manager, paths, output));
 
-  assert.equal(result, 0);
+  assert.equal(result.status, 'success');
   assert.equal(manager.get('services.relayPort').value, 3100);
   assert.equal(appliedRelayPort, 3100);
 });
@@ -408,13 +414,13 @@ test('diagnostic settings validate bool, bounds, provenance and service propagat
 test('CLI accepts boolean diagnostic configuration values', async (t) => {
   const { manager, paths } = await createFixture(t);
   const output = [];
-  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', 'false'], commandDependencies(manager, paths, output)), 0);
+  assert.equal((await runConfigCommand(['set', 'diagnostics.enabled', 'false'], commandDependencies(manager, paths, output))).status, 'success');
   assert.equal(manager.get('diagnostics.enabled').value, false);
-  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', 'true'], commandDependencies(manager, paths, output)), 0);
+  assert.equal((await runConfigCommand(['set', 'diagnostics.enabled', 'true'], commandDependencies(manager, paths, output))).status, 'success');
   assert.equal(manager.get('diagnostics.enabled').value, true);
-  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', '0'], commandDependencies(manager, paths, output)), 0);
+  assert.equal((await runConfigCommand(['set', 'diagnostics.enabled', '0'], commandDependencies(manager, paths, output))).status, 'success');
   assert.equal(manager.get('diagnostics.enabled').value, false);
-  assert.equal(await runConfigCommand(['set', 'diagnostics.enabled', '1'], commandDependencies(manager, paths, output)), 0);
+  assert.equal((await runConfigCommand(['set', 'diagnostics.enabled', '1'], commandDependencies(manager, paths, output))).status, 'success');
   assert.equal(manager.get('diagnostics.enabled').value, true);
   await assert.rejects(
     runConfigCommand(['set', 'diagnostics.enabled', 'enabled'], commandDependencies(manager, paths, output)),

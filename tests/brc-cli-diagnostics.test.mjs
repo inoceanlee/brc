@@ -42,7 +42,11 @@ test('startup diagnosis explicitly reports missing data', async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = run(root, 'diagnose', 'startup', '--json');
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), { state: 'missing', summary: null });
+  assert.deepEqual(JSON.parse(result.stdout), {
+    state: 'missing',
+    summary: null,
+    message: 'No startup diagnosis has been recorded.',
+  });
 });
 
 test('failed isolated startup records a queryable stage trace', async (t) => {
@@ -58,4 +62,16 @@ test('failed isolated startup records a queryable stage trace', async (t) => {
   assert.equal(result.summary.status, 'failed');
   assert.ok(result.summary.durationMs >= 0);
   assert.ok(result.summary.stages.some((stage) => stage.stage === 'command'));
+});
+
+test('diagnostics use the shared renderer for YAML and plain output', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-diagnose-formats-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const yaml = run(root, 'diagnose', 'startup', '--output=yaml');
+  assert.equal(yaml.status, 0, yaml.stderr);
+  assert.match(yaml.stdout, /state: missing/);
+  assert.match(yaml.stdout, /No startup diagnosis has been recorded/);
+  const plain = run(root, 'diagnose', 'startup', '--plain');
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.match(plain.stdout, /state: missing/);
 });

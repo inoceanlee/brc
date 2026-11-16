@@ -1,60 +1,65 @@
 import type { TraceSink } from 'brc-shared';
 import type { BrcPaths } from '../../config/paths.js';
-import { LifecycleLock } from '../../adapters/storage/lock.js';
-import { ProcessManager } from '../../adapters/process/controller.js';
-import type { ManagedServiceSpec, ProcessController, ServiceStatus } from './ports.js';
-import { isActive, isStartable, startRejection, shouldWriteTraefikConfig } from './policy.js';
+import type { ControlHealthPort, LifecycleLockPort, ManagedServiceSpec, ProcessController, ServiceStatus } from './ports.js';
+import { isActive, isStartable } from './policy.js';
 
 export interface LockedServiceOperations {
-  start(known?: readonly ServiceStatus[]): Promise<void>;
-  stop(): Promise<void>;
-  restart(): Promise<void>;
+  start(known?: readonly ServiceStatus[], signal?: AbortSignal): Promise<void>;
+  stop(signal?: AbortSignal): Promise<void>;
+  restart(signal?: AbortSignal): Promise<void>;
 }
 
 export class ServiceManager {
   private services: ManagedServiceSpec[];
   private readonly lockedOperations: LockedServiceOperations = {
-    start: () => this.startUnlocked(),
-    stop: () => this.stopUnlocked(),
-    restart: async () => {
-      await this.stopUnlocked();
-      await this.startUnlocked();
+    start: (known, signal) => this.startUnlocked(known, signal),
+    stop: (signal) => this.stopUnlocked(signal),
+    restart: async (signal) => {
+      await this.stopUnlocked(signal);
+      await this.startUnlocked(undefined, signal);
     },
   };
 
   constructor(
     paths: BrcPaths,
     services: ManagedServiceSpec[],
-    private readonly processes: ProcessController = new ProcessManager(paths),
-    private readonly lifecycleLock: LifecycleLock = new LifecycleLock(paths),
+    private readonly processes: ProcessController,
+    private readonly healthCheck: ControlHealthPort,
+    private readonly lifecycleLock: LifecycleLockPort,
     private readonly refreshServices?: () => Promise<ManagedServiceSpec[]>,
     private readonly trace?: TraceSink,
   ) {
+    if (!processes || !healthCheck || typeof healthCheck.check !== 'function'
+      || !lifecycleLock || typeof lifecycleLock.runExclusive !== 'function') {
+      throw new Error('ServiceManager requires injected process, health-check, and lifecycle-lock adapters.');
+    }
     this.validateServices(services);
     this.services = services;
   }
 
-  start(): Promise<void> {
-    return this.withLock((services) => services.start());
+  start(signal?: AbortSignal): Promise<void> {
+    return this.withLock((services) => services.start(undefined, signal), signal);
   }
 
-  stop(): Promise<void> {
-    return this.withLock((services) => services.stop());
+  stop(signal?: AbortSignal): Promise<void> {
+    return this.withLock((services) => services.stop(signal), signal);
   }
 
-  restart(): Promise<void> {
-    return this.withLock((services) => services.restart());
+  restart(signal?: AbortSignal): Promise<void> {
+    return this.withLock((services) => services.restart(signal), signal);
   }
 
-  withLock<T>(operation: (services: LockedServiceOperations) => Promise<T>): Promise<T> {
+  withLock<T>(operation: (services: LockedServiceOperations) => Promise<T>, signal?: AbortSignal): Promise<T> {
     return this.lifecycleLock.runExclusive(async () => {
+      signal?.throwIfAborted();
       const refreshed = await this.refreshServices?.();
       if (refreshed) {
         this.validateServices(refreshed);
         this.services = refreshed;
       }
+      signal?.throwIfAborted();
       return operation(this.lockedOperations);
-    });
+    }, signal);
   }
 
   status(): Promise<ServiceStatus[]> {
@@ -73,19 +78,22 @@ export class ServiceManager {
     return this.trace ? this.trace.span(stage, operation, service) : operation();
   }
 
-  private async startUnlocked(known?: readonly ServiceStatus[]): Promise<void> {
+  private async startUnlocked(known?: readonly ServiceStatus[], signal?: AbortSignal): Promise<void> {
     const started: ManagedServiceSpec[] = [];
     const knownByName = new Map((known ?? []).map((status) => [status.name, status]));
     try {
       for (const service of this.services) {
+        signal?.throwIfAborted();
         const prechecked = knownByName.get(service.name);
         const current = prechecked ?? await this.stage('precheck', service.name, () => this.processes.status(service));
         if (isActive(current) || (service.name === 'agent' && current.state === 'pairing')) continue;
         if (!isStartable(current)) {
           throw new Error(`Cannot start ${service.name}: ${current.detail}`);
         }
-        await this.stage('spawn-ready', service.name, () => this.processes.start(service));
+        await this.stage('spawn-ready', service.name, () => this.processes.start(service, signal));
         started.push(service);
+        const health = await this.stage('control-health', service.name, () => this.healthCheck.check(service, signal));
+        if (!health.ready) throw new Error(`${service.name} failed its control health check: ${health.detail}`);
       }
     } catch (error) {
       const rollbackErrors: unknown[] = [];
@@ -101,7 +109,8 @@ export class ServiceManager {
     }
   }
 
-  private async stopUnlocked(): Promise<void> {
+  private async stopUnlocked(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const failures: Error[] = [];
     for (const service of [...this.services].reverse()) {
       try {

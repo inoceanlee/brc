@@ -9,6 +9,11 @@ interface ProgressOutput {
   once?(event: 'drain', listener: () => void): unknown;
 }
 
+export interface TraefikProgressOptions {
+  color?: boolean;
+  enabled?: boolean;
+}
+
 export class TraefikProgress {
   private timer?: NodeJS.Timeout;
   private current?: TraefikProgressEvent;
@@ -21,8 +26,15 @@ export class TraefikProgress {
   private readonly pendingLines: string[] = [];
   private inFlight = 0;
   private settled?: () => void;
+  private readonly color: boolean;
+  private readonly enabled: boolean;
 
-  constructor(private readonly output: ProgressOutput = process.stderr) {
+  constructor(
+    private readonly output: ProgressOutput = process.stderr,
+    options: TraefikProgressOptions = {},
+  ) {
+    this.color = options.color ?? true;
+    this.enabled = options.enabled ?? true;
     this.output.on?.('error', () => {
       this.failed = true;
       this.blocked = false;
@@ -33,7 +45,7 @@ export class TraefikProgress {
   }
 
   report(event: TraefikProgressEvent): void {
-    if (this.interrupted) return;
+    if (this.interrupted || !this.enabled) return;
     const sameStage = this.current?.operation === event.operation && this.current.stage === event.stage;
     if (event.status === 'started') {
       if (!sameStage) {
@@ -68,7 +80,7 @@ export class TraefikProgress {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
-      this.write('\r\x1b[2K');
+      this.write(this.color ? '\r\x1b[2K' : '\r');
     }
     this.current = undefined;
     this.percent = undefined;
@@ -97,7 +109,7 @@ export class TraefikProgress {
     if (!this.current) return;
     const spinner = ['|', '/', '-', '\\'][this.frame++ % 4];
     const percent = this.percent === undefined ? '' : ` ${this.percent}%`;
-    this.write(`\r\x1b[2K${spinner} Traefik ${this.current.operation}: ${this.current.stage}${percent}`);
+    this.write(`${this.color ? '\r\x1b[2K' : '\r'}${spinner} Traefik ${this.current.operation}: ${this.current.stage}${percent}`);
   }
 
   private write(text: string): void {

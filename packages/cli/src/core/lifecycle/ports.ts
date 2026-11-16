@@ -20,8 +20,8 @@ export interface ManagedServiceSpec {
 }
 
 export interface ProcessController {
-  start(spec: ManagedServiceSpec): Promise<void>;
-  stop(spec: ManagedServiceSpec): Promise<void>;
+  start(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<void>;
+  stop(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<void>;
   status(spec: ManagedServiceSpec): Promise<ServiceStatus>;
   statusMany?(specs: readonly ManagedServiceSpec[]): Promise<ServiceStatus[]>;
 }
@@ -39,5 +39,9 @@ export interface IdentityPort {
 }
 
 export interface ControlHealthPort {
-  check(spec: ManagedServiceSpec, timeoutMs: number): Promise<{ ready: boolean; detail: string }>;
+  check(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<{ ready: boolean; detail: string }>;
+}
+
+export interface LifecycleLockPort {
+  runExclusive<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }

@@ -1,0 +1,89 @@
+import { UsageError } from './parser.js';
+import type { CliOutputFormat } from 'brc-shared';
+
+export interface GlobalOptions {
+  args: string[];
+  output: CliOutputFormat;
+  quiet: boolean;
+  verbose: boolean;
+  debug: boolean;
+  noInput: boolean;
+  interactive: boolean;
+  noColor: boolean;
+  offline: boolean;
+  noTelemetry: boolean;
+  preview: boolean;
+  timeoutMs?: number;
+}
+
+const FORMATS: readonly string[] = ['table', 'plain', 'json', 'yaml'];
+const BOOL_FLAGS = new Map<string, keyof GlobalOptions>([
+  ['--quiet', 'quiet'], ['--verbose', 'verbose'], ['--debug', 'debug'],
+  ['--no-input', 'noInput'], ['--interactive', 'interactive'],
+  ['--no-color', 'noColor'], ['--offline', 'offline'],
+  ['--no-telemetry', 'noTelemetry'], ['--preview', 'preview'],
+]);
+export function normalizeGlobalOptions(argv: readonly string[]): GlobalOptions {
+  const result: GlobalOptions = {
+    args: [], output: 'table', quiet: false, verbose: false,
+    debug: false, noInput: false, interactive: false, noColor: false,
+    offline: false, noTelemetry: false, preview: false,
+  };
+  let explicitFormat: string | undefined;
+  let optionsEnded = false;
+  const chooseFormat = (value: string): void => {
+    if (!FORMATS.includes(value)) throw new UsageError('Output format must be table, json, yaml, or plain.');
+    if (explicitFormat && explicitFormat !== value) throw new UsageError('Conflicting output formats.');
+    explicitFormat = value;
+    result.output = value as CliOutputFormat;
+  };
+  const setDuration = (value: string): void => {
+    const match = /^(\d+)(ms|s|m)?$/.exec(value);
+    if (!match) throw new UsageError('--timeout expects a positive duration such as 500ms, 15s, or 2m.');
+    const ms = Number(match[1]) * (match[2] === 'm' ? 60000 : match[2] === 's' ? 1000 : 1);
+    if (!Number.isSafeInteger(ms) || ms <= 0) throw new UsageError('--timeout must be a positive duration.');
+    result.timeoutMs = ms;
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index];
+    if (optionsEnded) { result.args.push(token); continue; }
+    if (token === '--') { optionsEnded = true; continue; }
+    if (token === '--json') { chooseFormat('json'); continue; }
+    if (token === '--plain') { chooseFormat('plain'); continue; }
+    if (token === '--output' || token === '-o' || token === '--timeout') {
+      const value = argv[++index];
+      if (!value) throw new UsageError(token + ' requires a value.');
+      if (token === '--timeout') setDuration(value); else chooseFormat(value);
+      continue;
+    }
+    if (token.startsWith('--output=')) { chooseFormat(token.slice(9)); continue; }
+    if (token.startsWith('--timeout=')) { setDuration(token.slice(10)); continue; }
+    if (/^-o[^-]/.test(token)) { chooseFormat(token.slice(2)); continue; }
+    const assignment = /^(--[\w-]+)=(true|false)$/.exec(token);
+    const boolName = BOOL_FLAGS.get(assignment?.[1] ?? token);
+    if (boolName) {
+      (result as unknown as Record<string, unknown>)[boolName] = assignment ? assignment[2] === 'true' : true;
+      continue;
+    }
+    if (/^-[a-zA-Z]{2,}$/.test(token)) {
+      for (const flag of token.slice(1)) {
+        if (flag === 'q') result.quiet = true;
+        else if (flag === 'v') result.verbose = true;
+        else if (flag === 'n') result.preview = true;
+        else if (flag === 'y') result.args.push('--yes');
+        else if (flag === 'h') result.args.push('--help');
+        else throw new UsageError('Unknown short flag: -' + flag);
+      }
+      continue;
+    }
+    if (token === '-q') { result.quiet = true; continue; }
+    if (token === '-v') { result.verbose = true; continue; }
+    if (token === '-n') { result.preview = true; continue; }
+    if (token === '-y') { result.args.push('--yes'); continue; }
+    if (token === '-h') { result.args.push('--help'); continue; }
+    result.args.push(token);
+  }
+  if (result.noInput) result.interactive = false;
+  if (result.verbose) result.quiet = false;
+  return result;
+}

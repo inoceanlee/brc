@@ -4,6 +4,7 @@ export const SIGNAL_EXIT_CODES: Readonly<Record<'SIGINT' | 'SIGTERM', number>> =
 });
 
 export interface CancellationOptions {
+  abort?: (signal: 'SIGINT' | 'SIGTERM') => void;
   flush: () => Promise<void>;
   exit: (code: number) => void;
   signalSource?: {
@@ -27,6 +28,7 @@ export function installCancellationHandlers(options: CancellationOptions): () =>
       options.exit(code);
       return;
     }
+    try { options.abort?.(signal); } catch { /* cancellation must still flush */ }
     flushing = options.flush().catch(() => undefined);
     void flushing.then(() => options.exit(code));
   };

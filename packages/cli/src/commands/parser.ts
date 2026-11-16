@@ -1,17 +1,19 @@
 import { isBrcSettingKey, parseSettingArgument } from '../config/settings.js';
+import { normalizeGlobalOptions } from './options.js';
+import { readProductVersion } from '../config/product.js';
 
 export type CliCommandName =
   | 'help' | 'version' | 'setup' | 'start' | 'stop' | 'restart' | 'status'
-  | 'logs' | 'config' | 'update' | 'uninstall' | 'clean' | 'diagnose';
+  | 'logs' | 'config' | 'update' | 'uninstall' | 'clean' | 'diagnose' | 'completion';
 
-export type DiagnoseTarget = 'startup' | 'functions' | 'resources';
+export type DiagnoseTarget = 'startup' | 'lifecycle' | 'functions' | 'resources';
 
 export interface CliLogComponents {
   readonly components: readonly string[];
 }
 
 export const LOG_COMPONENTS = ['relay', 'agent', 'traefik', 'cli'] as const;
-export const DIAGNOSE_TARGETS: readonly DiagnoseTarget[] = ['startup', 'functions', 'resources'];
+export const DIAGNOSE_TARGETS: readonly DiagnoseTarget[] = ['startup', 'lifecycle', 'functions', 'resources'];
 
 export class UsageError extends Error {
   readonly exitCode = 2;
@@ -42,6 +44,14 @@ export interface ParsedCommand {
   verbose: boolean;
   noInput: boolean;
   includeStatus: boolean;
+  output: 'table' | 'plain' | 'json' | 'yaml';
+  debug: boolean;
+  noColor: boolean;
+  interactive: boolean;
+  timeoutMs?: number;
+  offline: boolean;
+  noTelemetry: boolean;
+  preview: boolean;
   diagnose?: DiagnoseTarget;
   logComponent?: (typeof LOG_COMPONENTS)[number];
 }
@@ -104,13 +114,13 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'config',
-    usage: 'brc config <show|get|set|apply|path> [key] [value] [--json]',
+    usage: 'brc config <show|get|set|apply|path> [key] [value] [--json] [--preview]',
     summary: 'Show or update local settings.',
     examples: ['brc config show', 'brc config show --json', 'brc config set proxy.rate.average 20'],
   },
   {
     name: 'update',
-    usage: 'brc update traefik',
+    usage: 'brc update traefik [--preview]',
     summary: 'Update the managed Traefik binary.',
     examples: ['brc update traefik'],
   },
@@ -122,15 +132,21 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'uninstall',
-    usage: 'brc uninstall [--yes]',
+    usage: 'brc uninstall [-y|--yes]',
     summary: 'Stop services and remove BRC data and the global package.',
     examples: ['brc uninstall', 'brc uninstall --yes'],
   },
   {
     name: 'diagnose',
-    usage: 'brc diagnose <startup|functions|resources> [--json]',
-    summary: 'Show startup timing, function timings, or resource samples.',
+    usage: 'brc diagnose <startup|lifecycle|functions|resources> [--output <format>]',
+    summary: 'Show startup and lifecycle timings, function timings, or resource samples.',
     examples: ['brc diagnose startup', 'brc diagnose functions --json', 'brc diagnose resources'],
+  },
+  {
+    name: 'completion',
+    usage: 'brc completion <powershell|bash|zsh|fish>',
+    summary: 'Generate shell command completion.',
+    examples: ['brc completion powershell', 'brc completion bash'],
   },
 ];
 
@@ -153,13 +169,32 @@ export function helpText(command?: CliCommandName): string {
       lines.push('', 'Examples:');
       for (const example of spec.examples) lines.push(`  ${example}`);
     }
+    lines.push('', `Docs: https://github.com/inoceanlee/brc/tree/v${readProductVersion()}`);
     return lines.join('\n');
   }
   const lines = ['BRC unified CLI', '', 'Usage: brc <command>', '', 'Commands:'];
   for (const spec of COMMAND_SPECS) {
     lines.push(`  ${spec.usage.replace(/^brc /, 'brc ').padEnd(46)} ${spec.summary}`);
   }
-  lines.push('', 'Global flags: --quiet, --verbose, --no-input', '', ...UNINSTALL_NOTE);
+  lines.push(
+    '',
+    'Global flags:',
+    '  -q, --quiet                 Suppress progress output.',
+    '  -v, --verbose               Include additional diagnostics.',
+    '  --debug                     Include error stack details.',
+    '  --no-color                  Disable terminal control sequences.',
+    '  --no-input                  Never prompt.',
+    '  --interactive               Allow prompts in CI when stdin and stderr are TTYs.',
+    '  --output <table|plain|json|yaml>, -o <format>',
+    '  --json, --plain             Output aliases.',
+    '  --timeout <duration>        Bound command waits (for example 1500ms, 15s, 2m).',
+    '  --offline                   Prevent network release lookups and downloads.',
+    '  --no-telemetry              Set DO_NOT_TRACK=1 for managed child processes.',
+    '  --preview                   Preview supported config and Traefik update changes.',
+    '  -h, --help                  Show help.',
+    '',
+    ...UNINSTALL_NOTE,
+  );
   return lines.join('\n');
 }
 
@@ -203,12 +238,13 @@ function parseConfigArgs(args: string[]): { args: string[]; json: boolean } {
  * Single source of truth for command syntax. Both help output and argument
  * validation derive from the same specification so they cannot drift apart.
  */
-export function parseCommand(argv: string[]): ParsedCommand {
+function parseLegacyCommand(argv: string[]): ParsedCommand {
   const { args: stripped, quiet, verbose, noInput } = flagContext(argv);
   const base: ParsedCommand = {
     name: 'help', args: [], json: false, timing: false, quiet, verbose, noInput, includeStatus: false,
+    output: 'table', debug: false, noColor: false, interactive: false, offline: false, noTelemetry: false, preview: false,
   };
-  if (stripped.length === 0) return { ...base, includeStatus: true };
+  if (stripped.length === 0) return base;
 
   const [command, ...rest] = stripped;
   if (command === '-h' || command === '--help') return { ...base, name: 'help' };
@@ -266,6 +302,11 @@ export function parseCommand(argv: string[]): ParsedCommand {
         throw new UsageError(`Usage: ${specFor('uninstall').usage}`);
       }
       return { ...base, name, args: rest };
+    case 'completion':
+      if (rest.length !== 1 || !['powershell', 'bash', 'zsh', 'fish'].includes(rest[0])) {
+        throw new UsageError(`Usage: ${specFor('completion').usage}`);
+      }
+      return { ...base, name, args: rest };
     case 'diagnose': {
       const values = rest.filter((value) => value !== '--json');
       if (values.length !== 1 || !DIAGNOSE_TARGETS.includes(values[0] as DiagnoseTarget)) {
@@ -287,4 +328,26 @@ export function parseCommand(argv: string[]): ParsedCommand {
 function parseVersion(rest: string[], base: ParsedCommand): ParsedCommand {
   if (rest.length > 1 || (rest[0] && rest[0] !== '--json')) throw new UsageError(`Usage: ${specFor('version').usage}`);
   return { ...base, name: 'version', json: rest[0] === '--json', args: rest };
+}
+
+export function parseCommand(argv: string[]): ParsedCommand {
+  const global = normalizeGlobalOptions(argv);
+  const result = parseLegacyCommand(global.args);
+  const json = global.output === 'json' || result.json;
+  return {
+    ...result,
+    json,
+    output: json ? 'json' : global.output,
+    quiet: global.quiet,
+    verbose: global.verbose,
+    noInput: global.noInput,
+    debug: global.debug,
+    noColor: global.noColor,
+    interactive: global.interactive,
+    timeoutMs: global.timeoutMs,
+    offline: global.offline,
+    noTelemetry: global.noTelemetry,
+    preview: global.preview,
+    includeStatus: false,
+  };
 }

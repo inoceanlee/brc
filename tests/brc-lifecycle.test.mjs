@@ -242,6 +242,12 @@ class FakeProcessManager {
     return this.states.get(spec.name) ?? { name: spec.name, state: 'stopped', pid: null, detail: 'not started' };
   }
 
+  async check(spec, signal) {
+    signal?.throwIfAborted();
+    const status = this.states.get(spec.name) ?? { state: 'stopped', detail: 'not started' };
+    return { ready: status.state === 'running' || status.state === 'pairing', detail: status.detail };
+  }
+
   async start(spec) {
     this.calls.push(`start:${spec.name}`);
     this.active++;
@@ -328,7 +334,7 @@ test('starts in order, makes start and stop idempotent, and stops in reverse ord
   t.after(() => rm(root, { recursive: true, force: true }));
   const runtimePaths = paths(root);
   const processes = new FakeProcessManager();
-  const manager = new ServiceManager(runtimePaths, workspaceServices(root), processes);
+  const manager = new ServiceManager(runtimePaths, workspaceServices(root), processes, processes, new LifecycleLock(runtimePaths));
 
   await manager.start();
   await manager.start();
@@ -350,7 +356,7 @@ test('start trusts successful readiness and status uses the batch API', async (t
     batches++;
     return Promise.all(specs.map(status));
   };
-  const manager = new ServiceManager(paths(root), workspaceServices(root), processes);
+  const manager = new ServiceManager(paths(root), workspaceServices(root), processes, processes, new LifecycleLock(paths(root)));
   await manager.start();
   assert.deepEqual(checked, ['relay', 'agent']);
   assert.equal((await manager.status()).length, 2);
@@ -372,7 +378,7 @@ test('service operations refresh configuration after acquiring the shared lock',
     await start(spec);
   };
   let refreshCount = 0;
-  const manager = new ServiceManager(runtimePaths, initial, processes, lock, async () => {
+  const manager = new ServiceManager(runtimePaths, initial, processes, processes, lock, async () => {
     await assert.rejects(lock.runExclusive(async () => {}), /cannot be acquired recursively/i);
     refreshCount++;
     return refreshed;
@@ -415,6 +421,7 @@ const relayServices = (settings) => createDefaultServices(paths, settings, proce
 const states = new Map();
 const processes = {
   async status(spec) { return states.get(spec.name) ?? { name: spec.name, state: 'stopped', pid: null, detail: 'not started' }; },
+  async check(spec) { const status = await this.status(spec); return { ready: status.state === 'running' || status.state === 'pairing', detail: status.detail }; },
   async start(spec) {
     await writeFile(${JSON.stringify(portFile)}, spec.env.PORT);
     states.set(spec.name, { name: spec.name, state: 'running', pid: 100, detail: 'healthy' });
@@ -422,7 +429,7 @@ const processes = {
   async stop(spec) { states.set(spec.name, { name: spec.name, state: 'stopped', pid: null, detail: 'stopped' }); },
 };
 const lock = new LifecycleLock(paths);
-const manager = new ServiceManager(paths, relayServices(initial.settings), processes, lock, async () => {
+const manager = new ServiceManager(paths, relayServices(initial.settings), processes, processes, lock, async () => {
   const current = await readSettings(paths, process.env);
   return relayServices(current.settings);
 });
@@ -480,7 +487,7 @@ test('rolls back already-started services when a later service fails', async (t)
   const root = await mkdtemp(path.join(os.tmpdir(), 'brc-services-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const processes = new FakeProcessManager({ failStart: 'agent' });
-  const manager = new ServiceManager(paths(root), workspaceServices(root), processes);
+  const manager = new ServiceManager(paths(root), workspaceServices(root), processes, processes, new LifecycleLock(paths(root)));
 
   await assert.rejects(manager.start(), /failed:agent/);
 
@@ -494,8 +501,8 @@ test('serializes lifecycle calls across manager instances sharing one runtime ro
   const runtimePaths = paths(root);
   const processes = new FakeProcessManager({ delayMs: 150 });
   const services = workspaceServices(root);
-  const first = new ServiceManager(runtimePaths, services, processes, new LifecycleLock(runtimePaths, { waitMs: 10_000 }));
-  const second = new ServiceManager(runtimePaths, services, processes, new LifecycleLock(runtimePaths, { waitMs: 10_000 }));
+  const first = new ServiceManager(runtimePaths, services, processes, processes, new LifecycleLock(runtimePaths, { waitMs: 10_000 }));
+  const second = new ServiceManager(runtimePaths, services, processes, processes, new LifecycleLock(runtimePaths, { waitMs: 10_000 }));
 
   const firstRun = first.start();
   const secondRun = second.restart();
@@ -519,8 +526,8 @@ test('serializes separate ServiceManagers that share a lifecycle lock', async (t
   const processes = new FakeProcessManager({ delayMs: 30 });
   const services = workspaceServices(root);
   const lock = new LifecycleLock(runtimePaths);
-  const first = new ServiceManager(runtimePaths, services, processes, lock);
-  const second = new ServiceManager(runtimePaths, services, processes, lock);
+  const first = new ServiceManager(runtimePaths, services, processes, processes, lock);
+  const second = new ServiceManager(runtimePaths, services, processes, processes, lock);
 
   const results = await Promise.allSettled([first.start(), second.restart()]);
 
@@ -766,7 +773,7 @@ test('start automatically evicts stale process record when PID identity does not
   assert.match(status.detail, /identity/i);
 
   // ServiceManager start should evict the stale degraded service and launch the real process cleanly
-  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, new LifecycleLock(harness.paths));
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await serviceManager.start();
 
   const statusAfter = await serviceManager.status();
@@ -784,7 +791,7 @@ test('start automatically evicts corrupted process record JSON and recovers', as
   assert.equal(status.state, 'degraded');
 
   // Start recovers cleanly
-  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, new LifecycleLock(harness.paths));
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await serviceManager.start();
   const statusAfter = await serviceManager.status();
   assert.equal(statusAfter[0].state, 'running');
@@ -811,7 +818,7 @@ test('start automatically evicts record belonging to another workspace and recov
   assert.equal(status.state, 'degraded');
   assert.match(status.detail, /workspace/i);
 
-  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, new LifecycleLock(harness.paths));
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await serviceManager.start();
   const statusAfter = await serviceManager.status();
   assert.equal(statusAfter[0].state, 'running');
@@ -850,7 +857,7 @@ test('reused PID belonging to foreign inaccessible system process is evicted and
   assert.equal(status.state, 'stopped');
 
   // Start must cleanly evict and start the actual service
-  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, new LifecycleLock(harness.paths));
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await serviceManager.start();
   const statusAfter = await serviceManager.status();
   assert.equal(statusAfter[0].state, 'running');
@@ -879,7 +886,7 @@ test('reboot stale record older than system boot time is evicted without health 
   const { utimes } = await import('node:fs/promises');
   await utimes(recordFile, pastTime, pastTime);
 
-  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, new LifecycleLock(harness.paths));
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   const start = Date.now();
   await serviceManager.start();
   const elapsed = Date.now() - start;
@@ -888,4 +895,85 @@ test('reboot stale record older than system boot time is evicted without health 
   assert.equal(statusAfter[0].state, 'running');
   assert.notEqual(statusAfter[0].pid, 999999);
   assert.ok(elapsed < 1500, `startup took ${elapsed}ms, expected fast eviction under 1500ms`);
+});
+
+
+test('pnpm upgrade keeps an authenticated running service owned across installation paths', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-upgrade-owner-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtimePaths = paths(root);
+  await mkdir(runtimePaths.runtime, { recursive: true });
+  const oldRoot = path.join(root, 'pnpm-store-old');
+  const newRoot = path.join(root, 'pnpm-store-new');
+  const oldEntry = path.join(oldRoot, 'dist', 'cli.js');
+  const newEntry = path.join(newRoot, 'dist', 'cli.js');
+  const id = '77777777-2222-4333-8444-555555555555';
+  const token = 'a'.repeat(64);
+  const commandLine = `"${process.execPath}" "${oldEntry}" --brc-managed-id=${id}`;
+  const identity = { pid: 456789, createdAt: '12345678', executablePath: process.execPath, commandLine };
+  const control = createServer((request, response) => {
+    if (request.headers.authorization !== `Bearer ${token}`) { response.writeHead(401).end(); return; }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ ok: true, state: 'running', detail: 'ready' }));
+  });
+  await new Promise((resolve) => control.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => control.close(resolve)));
+  const record = {
+    ...identity, version: 1, id, service: 'relay',
+    workspaceRoot: oldRoot, entrypoint: oldEntry,
+    controlPort: control.address().port, controlToken: token,
+  };
+  await writeFile(path.join(runtimePaths.runtime, 'relay.json'), JSON.stringify(record));
+  const manager = new ProcessManager(runtimePaths, { inspectProcess: async () => identity });
+  const status = await manager.status(service('relay', newEntry, newRoot));
+  assert.equal(status.state, 'running', status.detail);
+  assert.equal(status.pid, identity.pid);
+});
+
+test('lifecycle lock cancels a queued waiter without running its operation', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-lock-cancel-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtimePaths = paths(root);
+  const lock = new LifecycleLock(runtimePaths, { waitMs: 2_000, pollMs: 10 });
+  let release;
+  let entered = false;
+  let secondRan = false;
+  const first = lock.runExclusive(async () => {
+    entered = true;
+    await new Promise((resolve) => { release = resolve; });
+  });
+  while (!entered) await sleep(5);
+  const controller = new AbortController();
+  const second = lock.runExclusive(async () => { secondRan = true; }, controller.signal);
+  controller.abort(new Error('queued lifecycle operation cancelled'));
+  await assert.rejects(second, /queued lifecycle operation cancelled/);
+  release();
+  await first;
+  assert.equal(secondRan, false);
+});
+
+test('aborted service startup kills its child and removes the process record', async (t) => {
+  const harness = await makeHarness(t, {
+    startupTimeoutMs: 5000,
+    env: { BRC_TEST_READY_BEFORE_READY_DELAY: '1000' },
+  });
+  const controller = new AbortController();
+  const starting = harness.manager.start(harness.spec, controller.signal);
+  await sleep(100);
+  controller.abort(new Error('service startup cancelled'));
+  await assert.rejects(starting, /service startup cancelled/);
+  await assert.rejects(readFile(path.join(harness.paths.runtime, 'relay.json'), 'utf8'), { code: 'ENOENT' });
+  assert.equal((await harness.manager.status(harness.spec)).state, 'stopped');
+});
+
+test('service manager requires and executes the injected health-check port', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-services-health-port-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const processes = new FakeProcessManager();
+  const healthCheck = {
+    async check(spec) { return { ready: false, detail: `${spec.name} health rejected` }; },
+  };
+  const manager = new ServiceManager(paths(root), [service('relay', path.join(root, 'relay.js'), root)], processes, healthCheck, new LifecycleLock(paths(root)));
+  await assert.rejects(manager.start(), /control health check: relay health rejected/);
+  assert.deepEqual(processes.calls, ['start:relay', 'stop:relay']);
 });

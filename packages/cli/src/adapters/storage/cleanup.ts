@@ -170,7 +170,7 @@ async function runtimeSnapshot(paths: BrcPaths, report: CleanupReport): Promise<
   } catch (error) {
     return error instanceof Error ? error : new Error(String(error));
   }
-  const names = new Set(SERVICE_NAMES.map((name) => `${name}.json`));
+  const names = new Set([...SERVICE_NAMES.map((name) => `${name}.json`), 'traefik-child.json']);
   const pids = new Set<number>();
   await Promise.all(entries.map(async (entry) => {
     if (!names.has(entry.name)
@@ -179,7 +179,7 @@ async function runtimeSnapshot(paths: BrcPaths, report: CleanupReport): Promise<
     const entryPath = path.join(paths.runtime, entry.name);
     try {
       const fileInfo = await lstat(entryPath);
-      if (isStaleFromPreviousBoot(fileInfo.mtimeMs)) return;
+      if (isStaleFromPreviousBoot(fileInfo.mtimeMs) && entry.name !== 'traefik-child.json') return;
       const value = JSON.parse((await readRegularFile(entryPath)).contents) as unknown;
       if (value && typeof value === 'object' && 'pid' in value
           && typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0) pids.add(value.pid);
@@ -337,6 +337,47 @@ async function cleanReadyFiles(paths: BrcPaths, report: CleanupReport, dryRun: b
     } catch (error) {
       if (errorCode(error) !== 'ENOENT') issue(report.preserved, filename, `Ready record is damaged or unverified: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+}
+
+async function cleanTraefikChildRecord(paths: BrcPaths, report: CleanupReport, dryRun: boolean, snapshot: IdentitySnapshot): Promise<void> {
+  const filename = path.join(paths.runtime, 'traefik-child.json');
+  let raw: string;
+  let value: Record<string, unknown>;
+  try {
+    const file = await readRegularFile(filename);
+    raw = file.contents;
+    value = JSON.parse(raw) as Record<string, unknown>;
+    if (value.schema !== 1 || typeof value.instanceId !== 'string'
+      || !/^[A-Za-z0-9_.-]{1,128}$/.test(value.instanceId)
+      || typeof value.pid !== 'number' || !Number.isSafeInteger(value.pid) || value.pid <= 0
+      || typeof value.createdAt !== 'string' || !value.createdAt
+      || typeof value.executablePath !== 'string' || !path.isAbsolute(value.executablePath)
+      || typeof value.commandLine !== 'string' || !value.commandLine) {
+      throw new Error('Traefik child identity record is malformed.');
+    }
+  } catch (error) {
+    if (errorCode(error) !== 'ENOENT') issue(report.preserved, filename, `Child process identity is damaged or unverified: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  try {
+    const current = snapshotIdentity(snapshot, value.pid);
+    const samePath = (left: string, right: string) => process.platform === 'win32'
+      ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+      : path.resolve(left) === path.resolve(right);
+    if (current && current.createdAt === value.createdAt
+      && samePath(current.executablePath, value.executablePath)
+      && current.commandLine === value.commandLine) {
+      issue(report.preserved, filename, 'Traefik binary process is active.');
+      return;
+    }
+    if ((await readRegularFile(filename)).contents !== raw) {
+      issue(report.preserved, filename, 'Traefik child identity record changed during cleanup.');
+      return;
+    }
+    await removeFile(paths.root, filename, report, dryRun);
+  } catch (error) {
+    issue(report.preserved, filename, `Traefik child identity could not be verified: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -529,7 +570,7 @@ async function checkProtectedCleanupCandidates(
     try {
       const entries = await readdir(paths.runtime);
       if (entries.some((name) => SERVICE_NAMES.some((service) => name === `${service}.json`)
-          || name.endsWith('.ready.json') || name.endsWith('.ready.json.tmp'))) return { hasCandidates: true };
+          || name === 'traefik-child.json' || name.endsWith('.ready.json') || name.endsWith('.ready.json.tmp'))) return { hasCandidates: true };
     } catch (error) {
       issue(report.failures, paths.runtime, error instanceof Error ? error.message : String(error));
       return { hasCandidates: true };
@@ -681,6 +722,7 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions = {}
       const snapshot = await runtimeSnapshot(paths, report);
       const runtimes = await inspectServiceRecords(paths, report, dryRun, snapshot);
       await cleanReadyFiles(paths, report, dryRun, snapshot);
+      await cleanTraefikChildRecord(paths, report, dryRun, snapshot);
       await cleanLogs(paths, runtimes, report, dryRun, cutoff, settings.logs.maxTotalMiB * 1024 * 1024, candidatesCheck.logs);
       await cleanDiagnosticSnapshots(paths, report, dryRun, diagnosticsCutoff);
       await cleanTraefikVersions(paths, runtimes, report, dryRun, cutoff);

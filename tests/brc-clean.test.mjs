@@ -511,3 +511,38 @@ test('cleanup removes corrupt diagnostic snapshots once they age out', async (t)
   assert.ok(report.removed >= 1);
   assert.equal(await exists(broken), false);
 });
+
+test('cleanup preserves a live Traefik binary identity record', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-clean-traefik-child-live-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtime = paths(root).runtime;
+  await mkdir(runtime, { recursive: true });
+  const identity = await inspectProcess(process.pid);
+  assert.ok(identity);
+  const filename = path.join(runtime, 'traefik-child.json');
+  await writeFile(filename, JSON.stringify({
+    schema: 1, instanceId: 'live-binary', ...identity,
+  }));
+  const report = await cleanRuntime(paths(root));
+  assert.equal((await readFile(filename, 'utf8')).length > 0, true);
+  assert.equal(report.preserved.some((item) => item.path === filename && /active/i.test(item.reason)), true);
+});
+
+test('cleanup removes an exited Traefik binary identity record without touching any PID', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-clean-traefik-child-exited-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const runtime = paths(root).runtime;
+  await mkdir(runtime, { recursive: true });
+  const filename = path.join(runtime, 'traefik-child.json');
+  await writeFile(filename, JSON.stringify({
+    schema: 1,
+    instanceId: 'exited-binary',
+    pid: 999999,
+    createdAt: '123456789',
+    executablePath: process.execPath,
+    commandLine: 'node traefik',
+  }));
+  const report = await cleanRuntime(paths(root));
+  await assert.rejects(readFile(filename));
+  assert.equal(report.failures.length, 0);
+});

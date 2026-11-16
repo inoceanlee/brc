@@ -486,11 +486,13 @@ test('configuration uses BrcSettings and keeps a single public proxy router', as
 test('config changes write Traefik limits under the shared lifecycle lock', async (t) => {
   const { root, paths: brcPaths } = await makeRoot(t);
   const lifecycleLock = new LifecycleLock(brcPaths);
-  const serviceManager = new ServiceManager(brcPaths, [], {
+  const processes = {
     start: async () => { },
     stop: async () => { },
     status: async () => ({ name: 'traefik', state: 'stopped', pid: null, detail: 'stopped' }),
-  }, lifecycleLock);
+    check: async () => ({ ready: true, detail: 'healthy' }),
+  };
+  const serviceManager = new ServiceManager(brcPaths, [], processes, processes, lifecycleLock);
   const traefikManager = new TraefikManager(brcPaths, DEFAULT_SETTINGS, serviceManager);
   const settingsManager = await SettingsManager.load(brcPaths, { BRC_DATA_ROOT: root }, {
     lock: lifecycleLock,
@@ -506,11 +508,13 @@ test('config changes write Traefik limits under the shared lifecycle lock', asyn
 test('Traefik writes the latest settings while holding the shared lifecycle lock', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const lifecycleLock = new LifecycleLock(brcPaths);
-  const serviceManager = new ServiceManager(brcPaths, [], {
+  const processes = {
     start: async () => { },
     stop: async () => { },
     status: async () => ({ name: 'traefik', state: 'stopped', pid: null, detail: 'stopped' }),
-  }, lifecycleLock);
+    check: async () => ({ ready: true, detail: 'healthy' }),
+  };
+  const serviceManager = new ServiceManager(brcPaths, [], processes, processes, lifecycleLock);
   const latest = structuredClone(DEFAULT_SETTINGS);
   latest.proxy.rate.average = 23;
   const manager = new TraefikManager(brcPaths, DEFAULT_SETTINGS, serviceManager, {
@@ -864,7 +868,7 @@ test('official Traefik routes all paths and shares global rate and in-flight lim
   const traefikSpec = services.find((service) => service.name === 'traefik');
   assert.ok(traefikSpec);
   const processManager = new ProcessManager(brcPaths, { startupTimeoutMs: 20_000, shutdownTimeoutMs: 3_000, pollIntervalMs: 50 });
-  serviceManager = new ServiceManager(brcPaths, [traefikSpec], processManager);
+  serviceManager = new ServiceManager(brcPaths, [traefikSpec], processManager, processManager, new LifecycleLock(brcPaths));
   const manager = new TraefikManager(brcPaths, settings, serviceManager);
   await manager.writeConfig();
 
@@ -1164,4 +1168,34 @@ test('TraefikOutput stages ArchiveBinaryEntry with openStream and sets file perm
   assert.equal(await readFile(stagedPath, 'utf8'), 'traefik-staged-binary');
   const fileStat = await stat(stagedPath);
   assert.equal(fileStat.size, binaryContent.length);
+});
+
+test('Traefik release lookup and archive streaming honor command cancellation', async () => {
+  const controller = new AbortController();
+  const input = new TraefikInput({
+    fetch: async (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason ?? new Error('request aborted')), { once: true });
+    }),
+  });
+  const lookup = input.latestRelease(controller.signal);
+  controller.abort(new Error('Traefik lookup cancelled'));
+  await assert.rejects(lookup, /Traefik lookup cancelled/);
+
+  const downloadController = new AbortController();
+  const downloadInput = new TraefikInput({
+    fetch: async (_url, init) => new Response(new ReadableStream({
+      start() {
+        init.signal.addEventListener('abort', () => {}, { once: true });
+      },
+    })),
+  });
+  const download = downloadInput.downloadArchive({
+    version: '3.7.16',
+    archiveName: 'traefik_v3.7.16_windows_amd64.zip',
+    archiveUrl: 'https://example.test/archive.zip',
+    checksumUrl: '',
+  }, undefined, downloadController.signal);
+  await sleep(10);
+  downloadController.abort(new Error('Traefik download cancelled'));
+  await assert.rejects(download, /Traefik download cancelled/);
 });
