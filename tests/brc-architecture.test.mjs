@@ -197,9 +197,35 @@ function isClassReceiver(identifier) {
     const clause = statement.importClause;
     if (clause?.name?.text === name) return true;
     const bindings = clause?.namedBindings;
-    return Boolean(bindings && ts.isNamedImports(bindings)
-      && bindings.elements.some((element) => !element.isTypeOnly && element.name.text === name));
+    return Boolean(bindings && ((ts.isNamespaceImport(bindings) && bindings.name.text === name)
+      || (ts.isNamedImports(bindings)
+        && bindings.elements.some((element) => !element.isTypeOnly && element.name.text === name))));
   });
+}
+
+function serviceClassReceiver(expression) {
+  if (ts.isIdentifier(expression)) {
+    if (!isClassReceiver(expression)) return '';
+    for (const statement of expression.getSourceFile().statements) {
+      if (!ts.isImportDeclaration(statement) || statement.importClause?.isTypeOnly) continue;
+      const bindings = statement.importClause?.namedBindings;
+      if (bindings && ts.isNamedImports(bindings)) {
+        const item = bindings.elements.find((element) => !element.isTypeOnly && element.name.text === expression.text);
+        if (item) return (item.propertyName ?? item.name).text;
+      }
+    }
+    return expression.text;
+  }
+  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)
+    && isClassReceiver(expression.expression)) {
+    const namespace = expression.expression.text;
+    const imported = expression.getSourceFile().statements.some((statement) => ts.isImportDeclaration(statement)
+      && !statement.importClause?.isTypeOnly && statement.importClause?.namedBindings
+      && ts.isNamespaceImport(statement.importClause.namedBindings)
+      && statement.importClause.namedBindings.name.text === namespace);
+    if (imported) return expression.name.text;
+  }
+  return '';
 }
 
 function ownershipViolations(source, prefix, relative, dataTypes = new Set(), requestFactories = new Set()) {
@@ -356,13 +382,13 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set(), re
         && ts.isStringLiteral(node.expression.argumentExpression) && node.expression.argumentExpression.text === 'createManagedLog'))) {
       violations.push(prefix + ': service factory createManagedLog@' + constructionIdentity(node, source));
     }
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
-      && ts.isIdentifier(node.expression.expression) && isClassReceiver(node.expression.expression)
-      && SERVICE_TYPES.test(node.expression.expression.text)
-      && ['open', 'load'].includes(node.expression.name.text)
-      && !isControlledInitializationCall(node, node.expression.expression.text)) {
-      violations.push(prefix + ': service factory ' + node.expression.expression.text + '.' + node.expression.name.text
-        + '@' + constructionIdentity(node, source));
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const className = serviceClassReceiver(node.expression.expression);
+      if (SERVICE_TYPES.test(className) && ['open', 'load'].includes(node.expression.name.text)
+        && !isControlledInitializationCall(node, className)) {
+        violations.push(prefix + ': service factory ' + node.expression.expression.getText(source) + '.' + node.expression.name.text
+          + '@' + constructionIdentity(node, source));
+      }
     }
     ts.forEachChild(node, visit);
   }
@@ -555,18 +581,34 @@ function isRequestScopedCall(call) {
   const response = callback.parameters[1].name.text;
   let closed = false;
   let escaped = false;
-  function findClose(node) {
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
-      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === resource
-      && node.expression.name.text === 'close') closed = true;
-    ts.forEachChild(node, findClose);
+  function closesUnconditionally(handler) {
+    function isClose(expression) {
+      while (ts.isVoidExpression(expression) || ts.isAwaitExpression(expression) || ts.isParenthesizedExpression(expression)) {
+        expression = expression.expression;
+      }
+      return ts.isCallExpression(expression) && ts.isPropertyAccessExpression(expression.expression)
+        && ts.isIdentifier(expression.expression.expression) && expression.expression.expression.text === resource
+        && expression.expression.name.text === 'close';
+    }
+    if (!ts.isBlock(handler.body)) return isClose(handler.body);
+    const first = handler.body.statements[0];
+    return Boolean(first && ts.isExpressionStatement(first) && isClose(first.expression));
   }
   function visit(node) {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
       && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === response
       && node.expression.name.text === 'on' && node.arguments.length >= 2
       && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'close'
-      && (ts.isArrowFunction(node.arguments[1]) || ts.isFunctionExpression(node.arguments[1]))) findClose(node.arguments[1]);
+      && (ts.isArrowFunction(node.arguments[1]) || ts.isFunctionExpression(node.arguments[1]))
+      && ts.isBlock(callback.body) && ts.isExpressionStatement(node.parent) && node.parent.parent === callback.body
+      && ts.isVariableDeclarationList(call.parent.parent) && ts.isVariableStatement(call.parent.parent.parent)
+      && call.parent.parent.parent.parent === callback.body) {
+      const statements = callback.body.statements;
+      const start = statements.indexOf(call.parent.parent.parent);
+      const end = statements.indexOf(node.parent);
+      if (start >= 0 && end > start && statements.slice(start + 1, end).length === 0
+        && closesUnconditionally(node.arguments[1])) closed = true;
+    }
     if (ts.isIdentifier(node) && node.text === resource && node !== call.parent.name) {
       if (!ts.isPropertyAccessExpression(node.parent) || node.parent.expression !== node) escaped = true;
     }
@@ -580,6 +622,22 @@ function requestScopedFactories(sources) {
   const candidates = new Map();
   const blockedTargets = new Set();
   for (const [filename, source] of sources) {
+    function dynamicUse(node) {
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+        const argument = node.arguments[0];
+        if (!argument || (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument))) {
+          for (const target of sources.keys()) blockedTargets.add(target);
+        } else if (argument.text.startsWith('.')) {
+          const stem = path.resolve(path.dirname(filename), argument.text.replace(/\.js$/, ''));
+          for (const target of [stem + '.ts', path.join(stem, 'index.ts')]) {
+            if (sources.has(target)) blockedTargets.add(target);
+          }
+        }
+      }
+      ts.forEachChild(node, dynamicUse);
+    }
+    dynamicUse(source);
     for (const statement of source.statements) {
       if ((!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement))
         || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier)
@@ -867,6 +925,22 @@ test('factory calls distinguish class declarations from existing store instances
     || entry.includes('service factory targetStore.load')), false);
 });
 
+test('static service factories follow class import aliases and namespaces', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    import { SettingsManager as Settings, CredentialStore } from './storage.js';
+    import * as config from './storage.js';
+    const legacyStore = new CredentialStore('old');
+    legacyStore.load();
+    const a = Settings.load();
+    const b = config.SettingsManager.load();
+    const c = config.DEFAULT_SETTINGS;
+  `, ts.ScriptTarget.Latest, true);
+  const actual = ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts');
+  assert.ok(actual.includes('agent/adapters/sample.ts: service factory Settings.load@<module>:a'));
+  assert.ok(actual.includes('agent/adapters/sample.ts: service factory config.SettingsManager.load@<module>:b'));
+  assert.equal(actual.some((entry) => entry.includes('service factory legacyStore.load')), false);
+});
+
 test('request scoped server factories require response close and no escaping callers', () => {
   const factoryFile = path.resolve('fixture/mcp/server.ts');
   const appFile = path.resolve('fixture/app.ts');
@@ -877,7 +951,7 @@ test('request scoped server factories require response close and no escaping cal
       return server;
     }
   `, ts.ScriptTarget.Latest, true);
-  function scan(body) {
+  function scan(body, otherSource) {
     const app = ts.createSourceFile(appFile, `
       import { createMcpServer } from './mcp/server.js';
       app.all('/mcp', async (req, res) => {
@@ -885,13 +959,28 @@ test('request scoped server factories require response close and no escaping cal
         ${body}
       });
     `, ts.ScriptTarget.Latest, true);
-    const scoped = requestScopedFactories(new Map([[factoryFile, factory], [appFile, app]]));
+    const sources = new Map([[factoryFile, factory], [appFile, app]]);
+    if (otherSource) {
+      const otherFile = path.resolve('fixture/other.ts');
+      sources.set(otherFile, ts.createSourceFile(otherFile, otherSource, ts.ScriptTarget.Latest, true));
+    }
+    const scoped = requestScopedFactories(sources);
     return ownershipViolations(factory, 'relay/adapters/sample.ts', 'adapters/sample.ts', new Set(),
       scoped.get(factoryFile) ?? new Set());
   }
   assert.deepEqual(scan("res.on('close', () => { void server.close(); }); await server.connect(transport);"), []);
   assert.ok(scan('await server.connect(transport);').some((entry) => entry.includes('Server')));
   assert.ok(scan("res.on('close', () => server.close()); cache(server);").some((entry) => entry.includes('Server')));
+  assert.ok(scan("res.on('close', () => { if (req.keepOpen) return; server.close(); });").some((entry) => entry.includes('Server')));
+  assert.ok(scan("if (req.keepOpen) return; res.on('close', () => server.close());").some((entry) => entry.includes('Server')));
+  assert.ok(scan("const transport = new Transport(); res.on('close', () => server.close());").some((entry) => entry.includes('Server')));
+  assert.ok(scan("res.on('close', () => { transport.close(); server.close(); });").some((entry) => entry.includes('Server')));
+  assert.ok(scan("res.on('close', () => server.close());",
+    "async function keep() { const m = await import('./mcp/server.js'); return m.createMcpServer(); }")
+    .some((entry) => entry.includes('Server')));
+  assert.ok(scan("res.on('close', () => server.close());",
+    "const m = require('./mcp/server.js'); const persistent = m.createMcpServer();")
+    .some((entry) => entry.includes('Server')));
 });
 
 test('dynamic shared namespaces distinguish safe member use and escape', () => {
