@@ -38,23 +38,35 @@ export function liveTools(hub: DeviceHub, store: RelayStorePort, userId: string)
   return { online: online.length, tools: [...merged.values()] };
 }
 
-export function createMcpServer(hub: DeviceHub, store: RelayStorePort, ctx: McpContext, relayVersion: string): Server {
+export function createMcpServer(
+  hub: DeviceHub,
+  store: RelayStorePort,
+  ctx: McpContext,
+  relayVersion: string,
+  log: (level: string, message: string) => void,
+): Server {
   const server = new Server({ name: 'brc', version: relayVersion }, { capabilities: { tools: {} } });
+  try {
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const { online, tools } = liveTools(hub, store, ctx.userId);
+      return { tools: [{ ...LIST_DEVICES_TOOL, description: `${LIST_DEVICES_TOOL.description} ${online} device(s) currently online.` }, ...tools] };
+    });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const { online, tools } = liveTools(hub, store, ctx.userId);
-    return { tools: [{ ...LIST_DEVICES_TOOL, description: `${LIST_DEVICES_TOOL.description} ${online} device(s) currently online.` }, ...tools] };
-  });
+    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+      const { name, arguments: args } = req.params;
+      if (name === 'list_devices') {
+        return { content: [{ type: 'text', text: JSON.stringify({ devices: listUserDevices(hub, store, ctx.userId) }, null, 2) }] };
+      }
+      const out = await invokeTool(hub, store, ctx, name, args as Record<string, unknown> | undefined);
+      if (!out.ok) return { content: [{ type: 'text', text: out.message }], isError: true };
+      return { content: out.result.content, isError: out.result.isError ?? false, _meta: { deviceId: out.deviceId, deviceName: out.deviceName } } as never;
+    });
 
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const { name, arguments: args } = req.params;
-    if (name === 'list_devices') {
-      return { content: [{ type: 'text', text: JSON.stringify({ devices: listUserDevices(hub, store, ctx.userId) }, null, 2) }] };
-    }
-    const out = await invokeTool(hub, store, ctx, name, args as Record<string, unknown> | undefined);
-    if (!out.ok) return { content: [{ type: 'text', text: out.message }], isError: true };
-    return { content: out.result.content, isError: out.result.isError ?? false, _meta: { deviceId: out.deviceId, deviceName: out.deviceName } } as never;
-  });
-
-  return server;
+    return server;
+  } catch (error) {
+    void Promise.resolve().then(() => server.close()).catch((closeError: unknown) => {
+      log('error', `mcp server cleanup failed: ${closeError instanceof Error ? closeError.message : String(closeError)}`);
+    });
+    throw error;
+  }
 }

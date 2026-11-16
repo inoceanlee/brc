@@ -351,7 +351,7 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set(), re
           if (ts.isFunctionLike(parent)) break;
           parent = parent.parent;
         }
-        let scoped = false;
+        let scoped = /Transport$/.test(className) && isStructuredTransportConstruction(node);
         if (ts.isVariableDeclaration(node.parent) && directlyReturned(node.parent)) {
           let owner = node.parent.parent;
           while (owner && owner !== source && !ts.isFunctionDeclaration(owner)) owner = owner.parent;
@@ -569,6 +569,105 @@ function serviceConstructionName(node) {
   return name !== 'AbortController' && !isNodeAsyncContext(node) && SERVICE_TYPES.test(name) ? name : '';
 }
 
+function hasStructuredRequestCleanup(callback, call, response, resource) {
+  if (!ts.isBlock(callback.body) || !ts.isVariableDeclarationList(call.parent.parent)
+    || !ts.isVariableStatement(call.parent.parent.parent) || call.parent.parent.parent.parent !== callback.body) return false;
+  const statements = callback.body.statements;
+  const start = statements.indexOf(call.parent.parent.parent);
+  if (start < 0) return false;
+  function declaration(statement) {
+    return statement && ts.isVariableStatement(statement) && statement.declarationList.declarations.length === 1
+      ? statement.declarationList.declarations[0] : undefined;
+  }
+  const transport = declaration(statements[start + 1]);
+  const promise = declaration(statements[start + 2]);
+  const cleanup = declaration(statements[start + 3]);
+  const attempt = statements[start + 4];
+  if (!transport || !promise || !cleanup || !ts.isIdentifier(transport.name) || transport.initializer
+    || !ts.isIdentifier(promise.name) || promise.initializer || !ts.isIdentifier(cleanup.name)
+    || !cleanup.initializer || !ts.isArrowFunction(cleanup.initializer)
+    || !ts.isBinaryExpression(cleanup.initializer.body)
+    || cleanup.initializer.body.operatorToken.kind !== ts.SyntaxKind.QuestionQuestionEqualsToken
+    || !ts.isIdentifier(cleanup.initializer.body.left) || cleanup.initializer.body.left.text !== promise.name.text
+    || !attempt || !ts.isTryStatement(attempt) || !attempt.catchClause) return false;
+  const completion = cleanup.initializer.body.right;
+  if (!ts.isCallExpression(completion) || !ts.isPropertyAccessExpression(completion.expression)
+    || completion.expression.name.text !== 'then' || !ts.isCallExpression(completion.expression.expression)) return false;
+  const all = completion.expression.expression;
+  if (!ts.isPropertyAccessExpression(all.expression) || !ts.isIdentifier(all.expression.expression)
+    || all.expression.expression.text !== 'Promise' || all.expression.name.text !== 'allSettled'
+    || all.arguments.length !== 1 || !ts.isArrayLiteralExpression(all.arguments[0])) return false;
+  const values = all.arguments[0].elements;
+  if (values.length !== 2) return false;
+  function deferredClose(value, name) {
+    if (!ts.isCallExpression(value) || !ts.isPropertyAccessExpression(value.expression)
+      || value.expression.name.text !== 'then' || value.arguments.length !== 1
+      || !ts.isArrowFunction(value.arguments[0]) || !ts.isCallExpression(value.arguments[0].body)) return false;
+    const resolve = value.expression.expression;
+    const close = value.arguments[0].body.expression;
+    return ts.isCallExpression(resolve) && resolve.arguments.length === 0
+      && ts.isPropertyAccessExpression(resolve.expression) && ts.isIdentifier(resolve.expression.expression)
+      && resolve.expression.expression.text === 'Promise' && resolve.expression.name.text === 'resolve'
+      && ts.isPropertyAccessExpression(close) && ts.isIdentifier(close.expression)
+      && close.expression.text === name && close.name.text === 'close';
+  }
+  if (!deferredClose(values[0], resource) || !deferredClose(values[1], transport.name.text)) return false;
+  const first = attempt.tryBlock.statements[0];
+  if (!first || !ts.isExpressionStatement(first) || !ts.isCallExpression(first.expression)
+    || !ts.isPropertyAccessExpression(first.expression.expression)
+    || !ts.isIdentifier(first.expression.expression.expression) || first.expression.expression.expression.text !== response
+    || first.expression.expression.name.text !== 'on' || first.expression.arguments.length !== 2
+    || !ts.isStringLiteral(first.expression.arguments[0]) || first.expression.arguments[0].text !== 'close'
+    || !ts.isArrowFunction(first.expression.arguments[1])) return false;
+  const listener = first.expression.arguments[1].body;
+  const listenerStatement = ts.isBlock(listener) ? listener.statements[0] : undefined;
+  let listenerCall = listenerStatement && ts.isExpressionStatement(listenerStatement) ? listenerStatement.expression : listener;
+  if (ts.isVoidExpression(listenerCall)) listenerCall = listenerCall.expression;
+  if (!ts.isCallExpression(listenerCall) || !ts.isIdentifier(listenerCall.expression)
+    || listenerCall.expression.text !== cleanup.name.text || listenerCall.arguments.length) return false;
+  const failure = attempt.catchClause.block.statements[0];
+  if (!failure || !ts.isExpressionStatement(failure) || !ts.isAwaitExpression(failure.expression)
+    || !ts.isCallExpression(failure.expression.expression) || !ts.isIdentifier(failure.expression.expression.expression)
+    || failure.expression.expression.expression.text !== cleanup.name.text || failure.expression.expression.arguments.length) return false;
+  const initialize = attempt.tryBlock.statements[1];
+  if (!initialize || !ts.isExpressionStatement(initialize) || !ts.isBinaryExpression(initialize.expression)
+    || initialize.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+    || !ts.isIdentifier(initialize.expression.left) || initialize.expression.left.text !== transport.name.text) return false;
+  let rewritten = false;
+  function checkAssignments(node) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
+      && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment && ts.isIdentifier(node.left)
+      && ((node.left.text === transport.name.text && node !== initialize.expression)
+        || (node.left.text === promise.name.text && node !== cleanup.initializer.body)
+        || node.left.text === cleanup.name.text)) rewritten = true;
+    ts.forEachChild(node, checkAssignments);
+  }
+  checkAssignments(callback.body);
+  return !rewritten;
+}
+
+function isStructuredTransportConstruction(node) {
+  let assignment = node.parent;
+  while (assignment && !ts.isBinaryExpression(assignment) && !ts.isFunctionLike(assignment)) assignment = assignment.parent;
+  if (!assignment || !ts.isBinaryExpression(assignment) || !ts.isExpressionStatement(assignment.parent)
+    || !ts.isBlock(assignment.parent.parent) || assignment.parent.parent.statements[1] !== assignment.parent) return false;
+  const block = assignment.parent.parent;
+  if (!ts.isTryStatement(block.parent) || block.parent.tryBlock !== block || !ts.isBlock(block.parent.parent)) return false;
+  const callback = block.parent.parent.parent;
+  if ((!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback))
+    || !ts.isCallExpression(callback.parent) || !callback.parent.arguments.includes(callback)
+    || !ts.isPropertyAccessExpression(callback.parent.expression)
+    || !['all', 'post', 'get', 'put', 'delete', 'patch'].includes(callback.parent.expression.name.text)
+    || callback.parameters.length < 2 || !ts.isIdentifier(callback.parameters[1].name)) return false;
+  for (const statement of callback.body.statements) {
+    if (!ts.isVariableStatement(statement) || statement.declarationList.declarations.length !== 1) continue;
+    const candidate = statement.declarationList.declarations[0];
+    if (ts.isIdentifier(candidate.name) && candidate.initializer && ts.isCallExpression(candidate.initializer)
+      && hasStructuredRequestCleanup(callback, candidate.initializer, callback.parameters[1].name.text, candidate.name.text)) return true;
+  }
+  return false;
+}
+
 function isRequestScopedCall(call) {
   if (!ts.isVariableDeclaration(call.parent) || !ts.isIdentifier(call.parent.name)) return false;
   const resource = call.parent.name.text;
@@ -579,7 +678,7 @@ function isRequestScopedCall(call) {
     || !['all', 'post', 'get', 'put', 'delete', 'patch'].includes(callback.parent.expression.name.text)
     || callback.parameters.length < 2 || !ts.isIdentifier(callback.parameters[1].name)) return false;
   const response = callback.parameters[1].name.text;
-  let closed = false;
+  let closed = hasStructuredRequestCleanup(callback, call, response, resource);
   let escaped = false;
   function closesUnconditionally(handler) {
     function isClose(expression) {
@@ -980,6 +1079,53 @@ test('request scoped server factories require response close and no escaping cal
     .some((entry) => entry.includes('Server')));
   assert.ok(scan("res.on('close', () => server.close());",
     "const m = require('./mcp/server.js'); const persistent = m.createMcpServer();")
+    .some((entry) => entry.includes('Server')));
+});
+
+test('request cleanup proof requires memoized independent cleanup on close and failure', () => {
+  const factoryFile = path.resolve('fixture/mcp/server.ts');
+  const appFile = path.resolve('fixture/app.ts');
+  const factory = ts.createSourceFile(factoryFile, `
+    export function make() { const server = new Server(); return server; }
+  `, ts.ScriptTarget.Latest, true);
+  const body = `
+    let transport;
+    let pending;
+    const cleanup = () => pending ??= Promise.allSettled([
+      Promise.resolve().then(() => server.close()),
+      Promise.resolve().then(() => transport?.close()),
+    ]).then(() => {});
+    try {
+      res.on('close', () => { void cleanup(); });
+      transport = new Transport();
+      await server.connect(transport);
+    } catch (error) {
+      await cleanup();
+    }
+  `;
+  function scan(cleanupBody) {
+    const app = ts.createSourceFile(appFile, `
+      import { make } from './mcp/server.js';
+      app.all('/mcp', async (req, res) => {
+        const server = make();
+        ${cleanupBody}
+      });
+    `, ts.ScriptTarget.Latest, true);
+    const scoped = requestScopedFactories(new Map([[factoryFile, factory], [appFile, app]]));
+    return [
+      ...ownershipViolations(factory, 'relay/adapters/sample.ts', 'adapters/sample.ts', new Set(),
+        scoped.get(factoryFile) ?? new Set()),
+      ...ownershipViolations(app, 'relay/adapters/http.ts', 'adapters/http.ts'),
+    ];
+  }
+  assert.deepEqual(scan(body), []);
+  assert.ok(scan(body.replace('pending ??=', 'pending =')).some((entry) => entry.includes('Server')));
+  assert.ok(scan(body.replace('await cleanup();', 'if (error) await cleanup();')).some((entry) => entry.includes('Server')));
+  assert.ok(scan(body.replace("res.on('close', () => { void cleanup(); });",
+    "if (req.ok) res.on('close', () => { void cleanup(); });")).some((entry) => entry.includes('Server')));
+  assert.ok(scan(body.replace('Promise.resolve().then(() => server.close())', 'Promise.resolve()'))
+    .some((entry) => entry.includes('Server')));
+  assert.ok(scan(body.replace('await server.connect(transport);', 'transport = other; await server.connect(transport);'))
     .some((entry) => entry.includes('Server')));
 });
 

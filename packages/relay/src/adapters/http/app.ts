@@ -27,6 +27,7 @@ export interface RelayHttpDependencies {
   provider: RelayOAuthProvider;
   limiter: LoginLimiter;
   log: (level: string, message: string) => void;
+  createMcpTransport?: () => StreamableHTTPServerTransport;
 }
 
 export function mountRelayRoutes(deps: RelayHttpDependencies): void {
@@ -197,13 +198,26 @@ export function mountRelayRoutes(deps: RelayHttpDependencies): void {
     const auth = (req as Request & { auth?: AuthInfo }).auth!;
     const userId = String(auth.extra?.userId ?? '');
     if (!userId) return res.status(401).json({ error: 'invalid_token' });
-    const server = createMcpServer(hub, store, { userId, clientId: auth.clientId }, cfg.relayVersion);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    res.on('close', () => { void transport.close(); void server.close(); });
+    const server = createMcpServer(hub, store, { userId, clientId: auth.clientId }, cfg.relayVersion, log);
+    let transport: StreamableHTTPServerTransport | undefined;
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () => cleanupPromise ??= Promise.allSettled([
+      Promise.resolve().then(() => server.close()),
+      Promise.resolve().then(() => transport?.close()),
+    ]).then((results) => {
+      for (const result of results) {
+        if (result.status === 'rejected') {
+          log('error', `mcp resource cleanup failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+        }
+      }
+    });
     try {
+      res.on('close', () => { void cleanup(); });
+      transport = deps.createMcpTransport ? deps.createMcpTransport() : new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
+      await cleanup();
       log('error', `mcp request failed: ${err instanceof Error ? err.message : String(err)}`);
       if (!res.headersSent) res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'internal error' }, id: null });
     }

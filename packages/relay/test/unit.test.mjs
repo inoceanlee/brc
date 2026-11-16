@@ -16,6 +16,118 @@ import { mountRelayRoutes } from '../dist/adapters/http/app.js';
 import { loadConfig } from '../dist/adapters/http/config.js';
 import { HmacSessionSigner, Sessions } from '../dist/adapters/http/sessions.js';
 import { SessionPolicy } from '../dist/core/auth/sessions.js';
+import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js';
+import { createMcpServer } from '../dist/adapters/http/mcp/server.js';
+
+test('MCP factory closes the server after handler registration fails', async (t) => {
+  for (const failure of ['none', 'sync', 'async']) {
+    await t.test(failure, async (t) => {
+      const original = new Error('handler registration failed');
+      const errors = [];
+      let closes = 0;
+      t.mock.method(McpServer.prototype, 'setRequestHandler', () => { throw original; });
+      t.mock.method(McpServer.prototype, 'close', () => {
+        closes++;
+        if (failure === 'sync') throw new Error('close failed synchronously');
+        if (failure === 'async') return Promise.reject(new Error('close failed asynchronously'));
+        return Promise.resolve();
+      });
+      assert.throws(() => createMcpServer({}, {}, { userId: 'user', clientId: 'client' }, 'test',
+        (level, message) => errors.push({ level, message })), (error) => error === original);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(closes, 1);
+      if (failure === 'none') assert.deepEqual(errors, []);
+      else {
+        assert.equal(errors.length, 1);
+        assert.equal(errors[0].level, 'error');
+        assert.ok(errors[0].message.includes('close failed'));
+      }
+    });
+  }
+});
+
+test('MCP request cleanup covers response close and request failures', async (t) => {
+  for (const mode of ['registration', 'listen', 'create', 'connect', 'request', 'server-close', 'transport-close', 'both-close', 'response']) {
+    await t.test(mode, async (t) => {
+      const store = SqliteStore.open(':memory:');
+      const app = express();
+      const cfg = loadConfig({ PUBLIC_URL: 'http://127.0.0.1:1' });
+      const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner('test-secret')), false);
+      const hub = new DeviceHub('test', () => {});
+      const provider = new RelayOAuthProvider({
+        store, tokens: { randomToken, sha256 }, currentUserId: () => null,
+        renderLogin: () => {}, renderConsent: () => {}, issuer: cfg.publicUrl,
+      }, new RelayClientsStore(store, { randomToken, sha256 }));
+      let handler;
+      const all = app.all.bind(app);
+      app.all = (route, ...handlers) => {
+        if (route === '/mcp') handler = handlers.at(-1);
+        return all(route, ...handlers);
+      };
+      const counts = { server: 0, transport: 0 };
+      const errors = [];
+      const registrationFailure = new Error('handler registration failed');
+      if (mode === 'registration') {
+        t.mock.method(McpServer.prototype, 'setRequestHandler', () => { throw registrationFailure; });
+      }
+      t.mock.method(McpServer.prototype, 'connect', async () => {
+        if (mode === 'connect') throw new Error('connect failure');
+      });
+      t.mock.method(McpServer.prototype, 'close', () => {
+        counts.server++;
+        if (mode === 'server-close' || mode === 'both-close') throw new Error('server close failure');
+        return Promise.resolve();
+      });
+      const transport = {
+        handleRequest: async () => {
+          if (mode === 'request') throw new Error('request failure');
+        },
+        close: () => {
+          counts.transport++;
+          if (mode === 'transport-close' || mode === 'both-close') return Promise.reject(new Error('transport close failure'));
+          return Promise.resolve();
+        },
+      };
+      mountRelayRoutes({
+        app, cfg, store, hub, sessions, provider, limiter: new LoginLimiter(), verifyPassword: () => false,
+        log: (level, message) => { if (level === 'error') errors.push(message); },
+        createMcpTransport: () => {
+          if (mode === 'create') throw new Error('transport creation failure');
+          return transport;
+        },
+      });
+      const res = new EventEmitter();
+      res.headersSent = false;
+      if (mode === 'listen') res.on = () => { throw new Error('listener registration failure'); };
+      let status;
+      let payload;
+      res.status = (value) => { status = value; return res; };
+      res.json = (value) => { payload = value; return res; };
+      try {
+        const request = { auth: { extra: { userId: 'user' }, clientId: 'client' }, body: {} };
+        if (mode === 'registration') await assert.rejects(handler(request, res), (error) => error === registrationFailure);
+        else await handler(request, res);
+        res.emit('close');
+        res.emit('close');
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(counts.server, 1);
+        assert.equal(counts.transport, ['registration', 'create', 'listen'].includes(mode) ? 0 : 1);
+        if (['listen', 'create', 'connect', 'request'].includes(mode)) {
+          assert.equal(status, 500);
+          assert.equal(payload.error.code, -32603);
+          assert.ok(errors.some((message) => message.includes('mcp request failed')));
+        }
+        if (mode === 'server-close' || mode === 'transport-close') {
+          assert.ok(errors.some((message) => message.includes('cleanup failed')));
+        }
+        if (mode === 'both-close') assert.equal(errors.filter((message) => message.includes('cleanup failed')).length, 2);
+      } finally {
+        hub.close();
+        store.close();
+      }
+    });
+  }
+});
 
 test('HTTP login uses injected password verifier and preserves pairing approval', async () => {
   const store = SqliteStore.open(':memory:');
