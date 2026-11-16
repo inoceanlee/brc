@@ -67,7 +67,6 @@ export class ToolHistory {
   }
 
   private migrateLegacyHistory(): void {
-    if (existsSync(this.storage.file)) return;
     const paths = resolveAgentPaths();
     const candidates = [path.join(paths.historyDirectory, 'tool-history.jsonl')];
     const defaultRoot = resolveAgentPaths({ ...process.env, BRC_DATA_ROOT: undefined }).root;
@@ -75,28 +74,35 @@ export class ToolHistory {
       candidates.push(path.join(paths.legacyDirectory, 'tool-history.jsonl'));
     }
     for (const legacy of candidates) {
-      if (!existsSync(legacy)) continue;
-      const stat = lstatSync(legacy);
-      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Legacy Agent history must be a plain file.');
-      const lines = readFileSync(legacy, 'utf8').split('\n').filter((line) => line.trim());
-      const records = lines.map((line) => JSON.parse(line) as ToolCallRecord);
-      if (records.some((record) => !record || typeof record.toolName !== 'string')) {
-        throw new Error('Legacy Agent history contains invalid records.');
-      }
-      const safe = records.slice(-this.MAX_ENTRIES).map((record) => ({
-        timestamp: record.timestamp, toolName: record.toolName,
-        arguments: {}, output: this.capOutput(record.output ?? { content: [] }),
-        ...(Number.isFinite(record.duration) ? { duration: record.duration } : {}),
-      }));
       this.storage.withLock(() => {
-        if (existsSync(this.storage.file)) throw new Error('Agent history was created during migration.');
-        this.storage.rewriteText(safe.map((record) => JSON.stringify(record)).join('\n') + (safe.length ? '\n' : ''));
+        if (!existsSync(legacy)) return;
+        const stat = lstatSync(legacy);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Legacy Agent history must be a plain file.');
+        const lines = readFileSync(legacy, 'utf8').split('\n').filter((line) => line.trim());
+        const records = lines.map((line) => JSON.parse(line) as ToolCallRecord);
+        const safe = records.slice(-this.MAX_ENTRIES).map((record) => this.sanitizeRecord(record));
+        const existing = (this.storage.readText() ?? '').split('\n').filter(Boolean)
+          .map((line) => this.sanitizeRecord(JSON.parse(line) as ToolCallRecord));
+        const available = new Map<string, number>();
+        for (const record of existing) {
+          const key = JSON.stringify(record);
+          available.set(key, (available.get(key) ?? 0) + 1);
+        }
+        const missing = safe.filter((record) => {
+          const key = JSON.stringify(record);
+          const count = available.get(key) ?? 0;
+          if (count === 0) return true;
+          available.set(key, count - 1);
+          return false;
+        });
+        const merged = [...existing, ...missing].slice(-this.MAX_ENTRIES);
+        this.storage.rewriteText(merged.map((record) => JSON.stringify(record)).join('\n') + (merged.length ? '\n' : ''));
+        const persisted = JSON.parse(readFileSync(this.storage.file, 'utf8')) as unknown;
+        if (JSON.stringify(persisted) !== JSON.stringify(merged)) {
+          throw new Error('Migrated Agent history failed verification.');
+        }
+        unlinkSync(legacy);
       });
-      if (JSON.parse(readFileSync(this.storage.file, 'utf8')).length !== safe.length) {
-        throw new Error('Migrated Agent history failed verification.');
-      }
-      unlinkSync(legacy);
-      return;
     }
   }
 
@@ -107,9 +113,6 @@ export class ToolHistory {
   private loadLocked(): void {
       if (this.storage.size() === 0) return;
 
-      // If the file is over the cap, trim it down before reading so we
-      // load a bounded amount.
-      this.trimHistoryFileIfTooLarge();
 
       const content = this.storage.readText();
       if (content === null) return;
@@ -125,19 +128,8 @@ export class ToolHistory {
         }
       }
 
-      // Keep only last 1000 entries, and cap on the way IN as well as on the
-      // way out. Entries written before the cap existed are still on disk and
-      // are well under the whole-file trim threshold, so without this the cap
-      // does nothing for anyone upgrading with an existing history file — i.e.
-      // for everyone it was written for.
-      this.history = records
-        .slice(-this.MAX_ENTRIES)
-        .map(record => ({ ...record, arguments: {}, output: this.capOutput(record.output) }));
-
-      // If file is getting too large, trim it
-      if (lines.length > this.MAX_ENTRIES * 2) {
-        this.trimHistoryFile();
-      }
+      this.history = records.slice(-this.MAX_ENTRIES).map(record => this.sanitizeRecord(record));
+      this.storage.rewriteText(this.history.map(record => JSON.stringify(record)).join('\n') + (this.history.length ? '\n' : ''));
   }
 
   /**
@@ -169,21 +161,6 @@ export class ToolHistory {
     }
   }
 
-  /**
-   * Trim history file to prevent it from growing indefinitely
-   */
-  private trimHistoryFile(): void {
-    try {
-      // Keep last 1000 entries in memory
-      const keepEntries = this.history.slice(-this.MAX_ENTRIES);
-
-      // Write them back
-      const lines = keepEntries.map(entry => JSON.stringify(entry)).join('\n') + '\n';
-      this.storage.rewriteText(lines);
-    } catch (error) {
-      // Silently fail
-    }
-  }
 
   /**
    * Async write processor - batches writes to avoid blocking
@@ -222,6 +199,20 @@ export class ToolHistory {
     } finally {
       this.isWriting = false;
     }
+  }
+
+  private sanitizeRecord(record: ToolCallRecord): ToolCallRecord {
+    if (!record || typeof record.toolName !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(record.toolName) ||
+        typeof record.timestamp !== 'string' || !Number.isFinite(Date.parse(record.timestamp))) {
+      throw new Error('Agent history contains an invalid record.');
+    }
+    return {
+      timestamp: new Date(record.timestamp).toISOString(),
+      toolName: record.toolName,
+      arguments: {},
+      output: this.capOutput({ content: [], isError: record.output?.isError === true }),
+      ...(Number.isFinite(record.duration) && record.duration! >= 0 ? { duration: record.duration } : {}),
+    };
   }
 
   /**

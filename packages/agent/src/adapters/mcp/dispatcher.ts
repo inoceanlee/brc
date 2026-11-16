@@ -7,6 +7,7 @@ import { getConfig, setConfigValue } from './tools/config.js';
 import { getUsageStats } from './handlers/usage.js';
 import { buildToolDefinitions, EXCLUDED_TOOLS, type ToolDefinition } from './tool-definitions.js';
 import { usageTracker } from '../telemetry/usageTracker.js';
+import { toolHistory } from '../telemetry/toolHistory.js';
 import type { ToolResult } from 'brc-shared';
 
 type Args = Record<string, unknown>;
@@ -60,14 +61,23 @@ export async function callTool(name: string, args: Args): Promise<ToolResult> {
   if (!handler) {
     return { content: [{ type: 'text', text: `Unknown tool: ${name}` }], isError: true };
   }
+  const started = Date.now();
+  let result: ToolResult;
   try {
-    const result = (await handler(args ?? {})) as ToolResult;
+    result = (await handler(args ?? {})) as ToolResult;
     const tracking = result.isError ? usageTracker.trackFailure(name) : usageTracker.trackSuccess(name);
     void tracking.catch((error: unknown) => console.error('Failed to track tool usage:', error));
-    return result;
   } catch (err) {
     void usageTracker.trackFailure(name).catch((error: unknown) => console.error('Failed to track tool usage:', error));
     const message = err instanceof Error ? err.message : String(err);
-    return { content: [{ type: 'text', text: `Error in ${name}: ${message}` }], isError: true };
+    result = { content: [{ type: 'text', text: `Error in ${name}: ${message}` }], isError: true };
   }
+  if (name !== 'get_recent_tool_calls' && name !== 'track_ui_event') {
+    try {
+      toolHistory?.addCall(name, {}, { content: [], isError: result.isError }, Date.now() - started);
+    } catch {
+      // History must not change the tool result.
+    }
+  }
+  return result;
 }
