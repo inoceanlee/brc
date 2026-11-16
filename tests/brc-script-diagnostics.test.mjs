@@ -61,3 +61,20 @@ test('empty script diagnostics directory uses the temporary directory', async (t
   const snapshots = await readdir(path.join(directory, 'brc-script-diagnostics'));
   assert.ok(snapshots.some((name) => name.startsWith('cli-script-')));
 });
+
+test('empty numeric diagnostics overrides use defaults', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-script-empty-settings-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = path.join(root, 'scripts', 'release-config.mjs');
+  const result = spawnSync(process.execPath, [entry, target], {
+    cwd: directory,
+    env: {
+      ...process.env, BRC_DIAGNOSTICS_ENABLED: 'true', BRC_DIAGNOSTICS_DIR: directory,
+      BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS: '', BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS: '',
+      BRC_DIAGNOSTICS_MAX_RECORD_BYTES: '', BRC_DIAGNOSTICS_RETENTION_DAYS: '',
+    },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok((await readdir(directory)).some((name) => name.startsWith('cli-script-')));
+});

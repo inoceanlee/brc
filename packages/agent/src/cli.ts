@@ -27,7 +27,12 @@ async function createAgentDiagnostics() {
     codec: { parse: (value) => codec.safeLoad(value), stringify: (value) => codec.safeDump(value, { noRefs: true }) },
     lock: new FileSettingsLock(path.dirname(paths.configFile)),
   });
-  const resolved = resolveSettings((await settingsStore.read()).settings, process.env).settings;
+  const env = /^(false|0)$/i.test(process.env.BRC_DIAGNOSTICS_ENABLED ?? '')
+    ? Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      !['BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS', 'BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS',
+        'BRC_DIAGNOSTICS_MAX_RECORD_BYTES', 'BRC_DIAGNOSTICS_RETENTION_DAYS'].includes(key)))
+    : process.env;
+  const resolved = resolveSettings((await settingsStore.read()).settings, env).settings;
   const settings = resolved.diagnostics;
   const directory = process.env.BRC_DIAGNOSTICS_DIR;
   const enabled = process.env.BRC_DIAGNOSTICS_ENABLED !== undefined && settings.enabled && !!directory;

@@ -44,7 +44,8 @@ async function runWithDiagnostics() {
   ).href);
   const directory = process.env.BRC_DIAGNOSTICS_DIR || path.join(os.tmpdir(), 'brc-script-diagnostics');
   const env = {
-    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('BRC_DIAGNOSTICS_'))),
+    ...Object.fromEntries(Object.entries(process.env).filter(([key, value]) =>
+      key.startsWith('BRC_DIAGNOSTICS_') && value !== '')),
     BRC_DIAGNOSTICS_DIR: directory,
     BRC_DIAGNOSTICS_ENABLED: process.env.BRC_DIAGNOSTICS_ENABLED ?? 'true',
   };

@@ -87,12 +87,20 @@ export interface ManagedLogSink {
   close(): Promise<void>;
 }
 
-export function createManagedLog(filename: string, maxBytes: number): ManagedLogSink {
+export function createManagedLog(filename: string, maxBytes: number, onError: (error: Error) => void): ManagedLogSink {
   let pending = Promise.resolve();
+  let failure: Error | undefined;
   return {
     write(input) {
-      pending = pending.then(() => appendRotatingLog(filename, input, maxBytes)).catch(() => undefined);
+      pending = pending.then(() => appendRotatingLog(filename, input, maxBytes)).catch((error: unknown) => {
+        if (failure) return;
+        failure = error instanceof Error ? error : new Error(String(error));
+        onError(failure);
+      });
     },
-    close: () => pending,
+    async close() {
+      await pending;
+      if (failure) throw failure;
+    },
   };
 }

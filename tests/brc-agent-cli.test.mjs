@@ -116,3 +116,13 @@ test('Agent diagnostics resolves YAML and environment as one configuration', () 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('disabled Agent diagnostics does not validate inactive sampling overrides', () => {
+  const result = run(['connect', '--relay', 'https://relay.example', '--device-id', 'local', '--token-stdin', '--json'], {
+    input: '',
+    env: { BRC_DIAGNOSTICS_ENABLED: 'false', BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS: 'invalid' },
+  });
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(JSON.parse(result.stderr).code, 'INVALID_USAGE');
+  assert.doesNotMatch(result.stderr, /BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS/);
+});

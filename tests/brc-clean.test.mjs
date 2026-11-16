@@ -401,7 +401,7 @@ test('managed log writes explicitly without replacing console methods', async (t
   const { paths: brcPaths } = await makeRoot(t);
   const logFile = path.join(brcPaths.logs, 'relay.log');
   const moduleUrl = JSON.stringify(new URL('../packages/shared/dist/managed-log.js', import.meta.url).href);
-  const source = `import { createManagedLog } from ${moduleUrl};\nconst original = console.log;\nconst log = createManagedLog(${JSON.stringify(logFile)}, 256);\nlog.write('relay standard output\\n');\nlog.write('relay standard error\\n');\nif (console.log !== original) throw new Error('console changed');\nawait log.close();`;
+  const source = `import { createManagedLog } from ${moduleUrl};\nconst original = console.log;\nconst log = createManagedLog(${JSON.stringify(logFile)}, 256, (error) => { throw error; });\nlog.write('relay standard output\\n');\nlog.write('relay standard error\\n');\nif (console.log !== original) throw new Error('console changed');\nawait log.close();`;
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
     encoding: 'utf8',
     windowsHide: true,
@@ -411,6 +411,27 @@ test('managed log writes explicitly without replacing console methods', async (t
   const contents = await readFile(logFile, 'utf8');
   assert.match(contents, /relay standard output/);
   assert.match(contents, /relay standard error/);
+});
+
+test('managed log reports write failures and rejects close', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const moduleUrl = JSON.stringify(new URL('../packages/shared/dist/managed-log.js', import.meta.url).href);
+  const source = `import { createManagedLog } from ${moduleUrl};\nconst errors = [];\nconst log = createManagedLog(${JSON.stringify(brcPaths.logs)}, 256, (error) => errors.push(error.message));\nlog.write('cannot write to a directory');\ntry { await log.close(); process.exitCode = 2; } catch (error) { if (!errors.length || !/non-file path/.test(error.message)) process.exitCode = 3; }`;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('Traefik reports managed log write failure through diagnostics', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const moduleUrl = JSON.stringify(new URL('../packages/cli/dist/traefik/runtime.js', import.meta.url).href);
+  const source = `import { runManagedTraefikService } from ${moduleUrl};\nconst events = [];\ntry { await runManagedTraefikService(undefined, { log: (message) => events.push(message) }); } catch {}\nif (!events.includes('Traefik managed log write failed.')) process.exitCode = 2;`;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
+    encoding: 'utf8',
+    env: { ...env, BRC_MANAGED_SERVICE: 'traefik', BRC_LOG_FILE: brcPaths.logs },
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Traefik managed log write failed/);
 });
 
 test('Traefik logs missing managed configuration before exiting', async (t) => {
