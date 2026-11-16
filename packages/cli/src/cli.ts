@@ -429,7 +429,12 @@ async function main(): Promise<void> {
     (message) => console.error(message),
     {
       stopServices: (signal) => serviceManager.stop(signal),
-      confirm: (root) => confirmBrcUninstall(root, { interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json' }),
+      confirm: (root) => {
+        if (parsed?.output === 'json' && parsed.interactive && !parsed.noInput) {
+          throw new UsageError('Interactive confirmation is unavailable with JSON output. Use brc uninstall --yes.');
+        }
+        return confirmBrcUninstall(root, { interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json' });
+      },
     },
   );
   const commandController = new AbortController();
@@ -447,7 +452,12 @@ async function main(): Promise<void> {
         if (parsed?.offline && !await traefikManager.currentVersion()) {
           throw new UsageError('Traefik is not installed and --offline prevents its download.');
         }
-        const administrator = relayDatabase.exists() ? undefined : await requestAdministrator({ interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json', signal });
+        const databaseExists = relayDatabase.exists();
+        if (!databaseExists && parsed?.output === 'json' && parsed.interactive && !parsed.noInput
+          && (!process.env.BRC_ADMIN_USER?.trim() || process.env.BRC_ADMIN_PASSWORD === undefined)) {
+          throw new UsageError('Interactive setup is unavailable with JSON output. Set BRC_ADMIN_USER and BRC_ADMIN_PASSWORD.');
+        }
+        const administrator = databaseExists ? undefined : await requestAdministrator({ interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json', signal });
         await lifecycleLock.runExclusive(async () => {
           signal?.throwIfAborted();
           relayDatabase.initializeForNewRoot(rootWasEmpty, administrator);

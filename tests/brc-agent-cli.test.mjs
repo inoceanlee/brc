@@ -66,7 +66,7 @@ test('preview takes precedence over yes and does not remove credentials', () => 
 });
 
 test('confirmed logout removes only Agent credentials', () => {
-  const result = run(['credentials', 'logout', '--yes', '--json']);
+  const result = run(['credentials', 'logout', '--yes', '--interactive', '--json']);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.present, false);
   assert.equal(JSON.parse(result.stdout).removed, true);
@@ -99,9 +99,9 @@ test('explicit --output json formats parser errors as JSON on stderr', () => {
 
 test('logout prompts only with stdin and stderr terminals', () => {
   for (const tty of [{ stdin: false, stderr: true }, { stdin: true, stderr: false }]) {
-    const result = run(['credentials', 'logout', '--json', '--interactive'], { tty, input: 'yes\n', env: { CI: 'false' } });
+    const result = run(['credentials', 'logout', '--interactive'], { tty, input: 'yes\n', env: { CI: 'false' } });
     assert.equal(result.status, 2, result.stderr);
-    assert.equal(JSON.parse(result.stderr).exit_code, 2);
+    assert.match(result.stderr, /--yes/);
     assert.deepEqual(result.stored, credentials);
   }
 });
@@ -120,15 +120,18 @@ test('interactive overrides CI, but no-input overrides interactive', () => {
   assert.deepEqual(ciDefault.stored, credentials);
   const jsonInteractive = run(['credentials', 'logout', '--interactive', '--json'], { tty, input: 'yes\n', env: { CI: 'false' } });
   assert.equal(jsonInteractive.status, 2, jsonInteractive.stderr);
-  assert.equal(JSON.parse(jsonInteractive.stderr).exit_code, 2);
+  const jsonError = JSON.parse(jsonInteractive.stderr);
+  assert.equal(jsonError.exit_code, 2);
+  assert.match(jsonError.message, /interactive.*JSON/i);
+  assert.match(jsonError.run, /--yes/);
   assert.deepEqual(jsonInteractive.stored, credentials);
 });
 
 test('service confirmation refuses redirected stderr without changing registration', () => {
-  const result = run(['service', 'uninstall', '--interactive', '--json'], {
+  const result = run(['service', 'uninstall', '--interactive'], {
     tty: { stdin: true, stderr: false }, input: 'yes\n', env: { CI: 'false' },
   });
   assert.equal(result.status, 2, result.stderr);
-  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.match(result.stderr, /--yes/);
   assert.deepEqual(result.stored, credentials);
 });

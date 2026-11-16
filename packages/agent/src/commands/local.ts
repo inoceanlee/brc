@@ -70,6 +70,9 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
       if (inv.preview) return cliSuccess({ action: 'credentials logout', wouldRemove: existing, removed: false });
       if (!existing) return cliSuccess({ action: 'credentials logout', removed: false });
       if (!inv.yes) {
+        if (inv.format === 'json' && inv.interactive && !inv.noInput) {
+          return invalid('Interactive confirmation is unavailable with JSON output. Use --yes.', 'brc-agent credentials logout --yes');
+        }
         if (!allowsConfirmation(inv)) {
           return invalid('Credentials deletion requires --yes when non-interactive.', 'brc-agent credentials logout --yes');
         }
@@ -82,6 +85,9 @@ export async function runAgentLocalCommand(inv: AgentInvocation): Promise<CliRes
       const installing = inv.command === 'service install';
       if (inv.preview) return cliSuccess({ action: inv.command, wouldChange: true, changed: false });
       if (!inv.yes && inv.confirm !== 'brc-agent') {
+        if (inv.format === 'json' && inv.interactive && !inv.noInput) {
+          return invalid('Interactive confirmation is unavailable with JSON output. Use --yes.', 'brc-agent ' + inv.command + ' --yes');
+        }
         if (!allowsConfirmation(inv)) {
           return invalid('Service changes require --yes when non-interactive.', 'brc-agent ' + inv.command + ' --yes');
         }

@@ -531,11 +531,37 @@ await import(${cliUrl});
     encoding: 'utf8', input: 'admin\nshort\nshort\n', timeout: 5000, windowsHide: true,
     env: { ...inheritedEnv, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
   });
-  assert.equal(result.status, 1, result.stderr);
+  assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
   const error = JSON.parse(result.stderr);
-  assert.match(error.message, /interactive terminal/i);
+  assert.equal(error.code, 'USAGE_ERROR');
+  assert.match(error.message, /interactive.*JSON/i);
+  assert.match(error.message, /BRC_ADMIN_PASSWORD/);
   assert.equal(existsSync(path.join(root, 'data', 'relay.sqlite')), false);
+});
+
+test('JSON uninstall reports unavailable interactive confirmation without removing data', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-cli-uninstall-tty-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const marker = path.join(root, 'keep.txt');
+  await writeFile(marker, 'keep');
+  const probe = `
+Object.defineProperty(process.stdin, 'isTTY', { value: true });
+Object.defineProperty(process.stderr, 'isTTY', { value: true });
+process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'uninstall', '--interactive', '--json'];
+await import(${cliUrl});
+`;
+  const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+    encoding: 'utf8', input: 'yes\n', timeout: 5000, windowsHide: true,
+    env: { ...inheritedEnv, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.stdout, '');
+  const error = JSON.parse(result.stderr);
+  assert.match(error.message, /interactive.*JSON/i);
+  assert.match(error.message, /--yes/);
+  assert.equal(await readFile(marker, 'utf8'), 'keep');
 });
 
 test('public URL persists through separate CLI invocations', async (t) => {
