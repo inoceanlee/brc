@@ -140,15 +140,39 @@ function isControlledSelfConstruction(node) {
   return ts.isIdentifier(access.expression) && access.expression.text === node.parent.name.text && access.name.text === 'close';
 }
 
+function isControlledInitializationCall(node, className) {
+  let method = node.parent;
+  while (method && !ts.isMethodDeclaration(method)) method = method.parent;
+  if (!method || method.name.getText(node.getSourceFile()) !== 'initialize'
+    || !method.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)
+    || !ts.isClassDeclaration(method.parent) || method.parent.name?.text !== className
+    || !ts.isVariableDeclaration(node.parent) || !ts.isIdentifier(node.parent.name)) return false;
+  const declaration = node.parent;
+  const list = declaration.parent;
+  const statement = list.parent;
+  if (!ts.isVariableStatement(statement) || list.declarations.length !== 1 || !ts.isBlock(statement.parent)) return false;
+  const statements = statement.parent.statements;
+  const next = statements[statements.indexOf(statement) + 1];
+  if (!next || !ts.isExpressionStatement(next) || !ts.isCallExpression(next.expression)
+    || next.expression.arguments.length !== 0 || !ts.isPropertyAccessExpression(next.expression.expression)) return false;
+  const access = next.expression.expression;
+  return ts.isIdentifier(access.expression) && access.expression.text === declaration.name.text && access.name.text === 'close';
+}
+
 function isDataInterface(statement) {
-  return ts.isInterfaceDeclaration(statement) && statement.members.every((member) => {
-    if (!ts.isPropertySignature(member) || !member.type) return false;
-    function callable(node) {
-      return ts.isFunctionTypeNode(node) || ts.isConstructorTypeNode(node)
-        || ts.isCallSignatureDeclaration(node) || Boolean(ts.forEachChild(node, callable));
+  if (!ts.isInterfaceDeclaration(statement)) return false;
+  const aliases = new Map(statement.getSourceFile().statements.filter(ts.isTypeAliasDeclaration)
+    .map((item) => [item.name.text, item.type]));
+  function callable(node, seen = new Set()) {
+    if (ts.isFunctionTypeNode(node) || ts.isConstructorTypeNode(node) || ts.isCallSignatureDeclaration(node)) return true;
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && aliases.has(node.typeName.text)) {
+      if (seen.has(node.typeName.text)) return false;
+      const next = new Set(seen).add(node.typeName.text);
+      if (callable(aliases.get(node.typeName.text), next)) return true;
     }
-    return !callable(member.type);
-  });
+    return Boolean(ts.forEachChild(node, (child) => callable(child, seen)));
+  }
+  return statement.members.every((member) => ts.isPropertySignature(member) && member.type && !callable(member.type));
 }
 
 function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
@@ -223,6 +247,18 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
     }
     return retainedByAnother(scope.body);
   }
+  function directlyReturned(declaration) {
+    if (!ts.isIdentifier(declaration.name)) return false;
+    let scope = declaration.parent;
+    while (scope && scope !== source && !ts.isFunctionLike(scope)) scope = scope.parent;
+    if (!scope || scope === source || !scope.body) return false;
+    function visit(node) {
+      if (node !== scope.body && ts.isFunctionLike(node)) return false;
+      return (ts.isReturnStatement(node) && node.expression && ts.isIdentifier(node.expression)
+        && node.expression.text === declaration.name.text) || Boolean(ts.forEachChild(node, visit));
+    }
+    return visit(scope.body);
+  }
   const logFactories = new Set();
   const logNamespaces = new Set();
   for (const statement of source.statements) {
@@ -245,7 +281,8 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
       if (className && !isControlledSelfConstruction(node)) {
         let parent = node.parent;
         let retained = /(?:Store|Storage|Lock|Timing|DiagnosticLog)$/.test(className);
-        if (!/(?:Session|Transport)$/.test(className) && ts.isReturnStatement(node.parent)) retained = true;
+        if (!/(?:Session|Transport)$/.test(className)
+          && (ts.isReturnStatement(node.parent) || (ts.isArrowFunction(node.parent) && node.parent.body === node))) retained = true;
         while (parent && parent !== source) {
           if (ts.isPropertyDeclaration(parent)) retained = true;
           if (ts.isBinaryExpression(parent)
@@ -256,7 +293,8 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
             && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
             retained = true;
           }
-          if (ts.isVariableDeclaration(parent) && capturedByReturnedClosure(parent)) retained = true;
+          if (ts.isVariableDeclaration(parent) && (capturedByReturnedClosure(parent)
+            || (!/(?:Session|Transport)$/.test(className) && directlyReturned(parent)))) retained = true;
           if (ts.isFunctionLike(parent)) break;
           parent = parent.parent;
         }
@@ -267,8 +305,18 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
     }
     if (ts.isCallExpression(node) && ((ts.isIdentifier(node.expression) && logFactories.has(node.expression.text))
       || (ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)
-        && logNamespaces.has(node.expression.expression.text) && node.expression.name.text === 'createManagedLog'))) {
+        && logNamespaces.has(node.expression.expression.text) && node.expression.name.text === 'createManagedLog')
+      || (ts.isElementAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)
+        && logNamespaces.has(node.expression.expression.text) && node.expression.argumentExpression
+        && ts.isStringLiteral(node.expression.argumentExpression) && node.expression.argumentExpression.text === 'createManagedLog'))) {
       violations.push(prefix + ': service factory createManagedLog@' + constructionIdentity(node, source));
+    }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && ts.isIdentifier(node.expression.expression) && SERVICE_TYPES.test(node.expression.expression.text)
+      && ['open', 'load'].includes(node.expression.name.text)
+      && !isControlledInitializationCall(node, node.expression.expression.text)) {
+      violations.push(prefix + ': service factory ' + node.expression.expression.text + '.' + node.expression.name.text
+        + '@' + constructionIdentity(node, source));
     }
     ts.forEachChild(node, visit);
   }
@@ -331,6 +379,8 @@ async function sharedAdapterExports() {
 function sharedAdapterImports(source, adapterNames) {
   const found = [];
   const namespaces = new Set();
+  const dynamicNamespaces = new Map();
+  const namespaceUses = new Set();
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
       && statement.moduleSpecifier.text === 'brc-shared' && !statement.importClause?.isTypeOnly
@@ -338,6 +388,26 @@ function sharedAdapterImports(source, adapterNames) {
       namespaces.add(statement.importClause.namedBindings.name.text);
     }
   }
+  function collectDynamic(node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      let value = node.initializer;
+      while (ts.isParenthesizedExpression(value)) value = value.expression;
+      let awaited = false;
+      if (ts.isAwaitExpression(value)) {
+        awaited = true;
+        value = value.expression;
+      }
+      if (ts.isCallExpression(value) && value.arguments.length === 1 && ts.isStringLiteral(value.arguments[0])
+        && value.arguments[0].text === 'brc-shared'
+        && ((awaited && value.expression.kind === ts.SyntaxKind.ImportKeyword)
+          || (ts.isIdentifier(value.expression) && value.expression.text === 'require'))) {
+        dynamicNamespaces.set(node.name.text, node.name);
+        namespaces.add(node.name.text);
+      }
+    }
+    ts.forEachChild(node, collectDynamic);
+  }
+  collectDynamic(source);
   function visit(node) {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
       && node.moduleSpecifier.text === 'brc-shared' && node.importClause && !node.importClause.isTypeOnly) {
@@ -355,6 +425,14 @@ function sharedAdapterImports(source, adapterNames) {
     if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)
       && namespaces.has(node.expression.text) && node.argumentExpression && ts.isStringLiteral(node.argumentExpression)
       && adapterNames.has(node.argumentExpression.text)) found.push(node.argumentExpression.text);
+    if (ts.isIdentifier(node) && dynamicNamespaces.has(node.text) && dynamicNamespaces.get(node.text) !== node) {
+      namespaceUses.add(node.text);
+      const parent = node.parent;
+      const knownProperty = ts.isPropertyAccessExpression(parent) && parent.expression === node;
+      const knownElement = ts.isElementAccessExpression(parent) && parent.expression === node
+        && parent.argumentExpression && ts.isStringLiteral(parent.argumentExpression);
+      if (!knownProperty && !knownElement) found.push('*');
+    }
     if (ts.isExportDeclaration(node) && !node.isTypeOnly && node.moduleSpecifier
       && ts.isStringLiteral(node.moduleSpecifier) && node.moduleSpecifier.text === 'brc-shared') {
       if (!node.exportClause || ts.isNamespaceExport(node.exportClause)) found.push('*');
@@ -386,11 +464,13 @@ function sharedAdapterImports(source, adapterNames) {
       } else if (ts.isElementAccessExpression(parent) && parent.expression === value
         && parent.argumentExpression && ts.isStringLiteral(parent.argumentExpression)) {
         if (adapterNames.has(parent.argumentExpression.text)) found.push(parent.argumentExpression.text);
-      } else found.push('*');
+      } else if (!(ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)
+        && dynamicNamespaces.get(parent.name.text) === parent.name)) found.push('*');
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
+  for (const name of dynamicNamespaces.keys()) if (!namespaceUses.has(name)) found.push('*');
   return found;
 }
 
@@ -592,6 +672,48 @@ test('dynamic shared imports distinguish data from adapter values', () => {
   const names = new Set(['FileSnapshotStore', 'createManagedLog']);
   assert.deepEqual(sharedAdapterImports(source, names),
     ['FileSnapshotStore', 'createManagedLog', 'FileSnapshotStore', '*']);
+});
+
+test('factory returns, callable aliases and static factory calls are checked', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    import * as shared from 'brc-shared';
+    type Callback = (event: string) => void;
+    type Alias = Callback;
+    interface UsageTracker { record: Alias }
+    interface ActiveSession { pid: number }
+    let tracker: UsageTracker;
+    let state: ActiveSession;
+    const create = () => new WsClient();
+    function createManager() { const value = new SearchManager(); return value; }
+    function once() { const value = new RequestSession(); return value; }
+    function sink() { return shared['createManagedLog']('log', 1, () => {}); }
+    class SettingsManager { static async load() { return new SettingsManager(); } }
+    const manager = SettingsManager.load();
+  `, ts.ScriptTarget.Latest, true);
+  const actual = ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts');
+  for (const expected of [
+    'module service reference tracker',
+    'nested service construction WsClient@<module>:create',
+    'nested service construction SearchManager@createManager:value',
+    'service factory createManagedLog@sink:<return>',
+    'service factory SettingsManager.load@<module>:manager',
+  ]) assert.ok(actual.includes('agent/adapters/sample.ts: ' + expected), expected);
+  assert.equal(actual.some((item) => item.includes('state') || item.includes('RequestSession')
+    || item.includes('nested service construction SettingsManager')), false);
+  assert.deepEqual(ownershipViolations(source, 'agent/cli.ts', 'cli.ts'), []);
+});
+
+test('dynamic shared namespaces distinguish safe member use and escape', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    const shared = await import('brc-shared');
+    shared.DEFAULT_SETTINGS;
+    shared.FileSnapshotStore;
+    const safe = require('brc-shared');
+    safe['DEFAULT_SETTINGS'];
+    const unknown = await import('brc-shared');
+    consume(unknown);
+  `, ts.ScriptTarget.Latest, true);
+  assert.deepEqual(sharedAdapterImports(source, new Set(['FileSnapshotStore'])), ['FileSnapshotStore', '*']);
 });
 
 test('self construction permits controlled factories and immediate initialization close', () => {
