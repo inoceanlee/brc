@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pairDevice, loadCredentials } from '../packages/agent/dist/transport/pairing.js';
-import { CredentialStore } from '../packages/agent/dist/transport/credential-store.js';
+import { pairDevice, loadCredentials } from '../packages/agent/dist/adapters/transport/pairing.js';
+import { CredentialStore } from '../packages/agent/dist/adapters/storage/credential-store.js';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -13,15 +13,16 @@ const start = { device_code: 'code', user_code: 'USER', verification_uri: 'https
 
 async function scenario(t, responses, options = {}) {
   const home = mkdtempSync(path.join(os.tmpdir(), 'brc-pairing-'));
-  const previousHome = process.env.BRC_HOME;
+  const previousHome = process.env.BRC_DATA_ROOT;
   const originalFetch = globalThis.fetch;
   const originalTimeout = globalThis.setTimeout;
   const originalNow = Date.now;
-  const file = path.join(home, 'device.json');
+  const file = path.join(home, 'data', 'agent', 'device.json');
+  mkdirSync(path.dirname(file), { recursive: true });
   const requests = [];
   const delays = [];
   let now = 1_000_000;
-  process.env.BRC_HOME = home;
+  process.env.BRC_DATA_ROOT = home;
   Date.now = () => now;
   globalThis.setTimeout = (callback, ms, ...args) => {
     delays.push(ms);
@@ -42,7 +43,7 @@ async function scenario(t, responses, options = {}) {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalTimeout;
     Date.now = originalNow;
-    if (previousHome === undefined) delete process.env.BRC_HOME; else process.env.BRC_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.BRC_DATA_ROOT; else process.env.BRC_DATA_ROOT = previousHome;
     rmSync(home, { recursive: true, force: true });
   });
   const logs = [];
@@ -88,7 +89,7 @@ test('pairing times out after pending without saving credentials', async (t) => 
   assert.equal(existsSync(s.file), false);
 });
 
-test('legacy credential files remain readable', async (t) => {
+test('saved device credentials remain readable', async (t) => {
   const s = await scenario(t, []);
   const legacy = { relayUrl: 'https://old.example', deviceId: 'old-id', deviceToken: 'old-token', name: 'old', pairedAt: '2020-01-01T00:00:00.000Z' };
   writeFileSync(s.file, JSON.stringify(legacy));
@@ -124,9 +125,8 @@ test('failed credential write leaves no partial device file', (t) => {
 
 test('agent preserves credentials when a relay rejects its token', async (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'brc-pairing-reject-'));
-  const home = path.join(root, 'home');
-  const { mkdirSync } = await import('node:fs');
-  mkdirSync(home);
+  const home = path.join(root, 'data', 'agent');
+  mkdirSync(home, { recursive: true });
   let resolveReconnected;
   let heldSocket;
   const reconnected = new Promise((resolve) => { resolveReconnected = resolve; });
@@ -160,8 +160,8 @@ test('agent preserves credentials when a relay rejects its token', async (t) => 
   const file = path.join(home, 'device.json');
   writeFileSync(file, JSON.stringify({ relayUrl, deviceId: 'old-id', deviceToken: 'old-token', name: 'old agent', pairedAt: '2020-01-01T00:00:00.000Z' }));
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../packages/agent/dist/cli.js', import.meta.url)), '--no-browser'], {
-    env: { ...env, BRC_HOME: home, BRC_UPSTREAM_TELEMETRY: '0' },
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../packages/agent/dist/cli.js', import.meta.url)), 'connect', '--no-browser'], {
+    env: { ...env, BRC_DATA_ROOT: root, BRC_UPSTREAM_TELEMETRY: '0' },
     windowsHide: true,
   });
   let output = '';

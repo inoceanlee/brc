@@ -25,7 +25,7 @@ export class ToolHistoryStorage {
 
   constructor(directory: string) {
     if (!fs.existsSync(directory)) fs.mkdirSync(directory, { recursive: true });
-    this.file = path.join(directory, 'tool-history.jsonl');
+    this.file = path.join(directory, 'tool-history.json');
     this.target = resolveHistoryFile(this.file);
   }
 
@@ -76,7 +76,9 @@ export class ToolHistoryStorage {
 
   readText(): string | null {
     try {
-      return fs.readFileSync(this.target, 'utf-8');
+      const persisted: unknown = JSON.parse(fs.readFileSync(this.target, 'utf-8'));
+      if (!Array.isArray(persisted)) throw new Error('Tool history must contain a JSON array.');
+      return persisted.length === 0 ? '' : persisted.map((value) => typeof value === 'string' ? value : JSON.stringify(value)).join('\n') + '\n';
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
@@ -97,14 +99,18 @@ export class ToolHistoryStorage {
   }
 
   rewriteText(text: string): void {
+    const records = text.split('\n').filter((line) => line.length > 0).map((line) => {
+      try { return JSON.parse(line) as unknown; } catch { return line; }
+    });
+    const encoded = JSON.stringify(records);
     const temporary = `${this.target}.${process.pid}.${randomUUID()}.tmp`;
     try {
       try {
         fs.copyFileSync(this.target, temporary, fs.constants.COPYFILE_EXCL);
-        fs.writeFileSync(temporary, text, 'utf-8');
+        fs.writeFileSync(temporary, encoded, 'utf-8');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        fs.writeFileSync(temporary, text, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
+        fs.writeFileSync(temporary, encoded, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
       }
       fs.renameSync(temporary, this.target);
     } finally {

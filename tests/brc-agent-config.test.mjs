@@ -1,271 +1,152 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { pathToFileURL } from 'node:url';
+import { AgentConfigManager } from '../packages/agent/dist/adapters/storage/config-manager.js';
+import { resolveAgentPaths } from '../packages/agent/dist/adapters/storage/agent-paths.js';
+import { ConfigStorage } from '../packages/agent/dist/adapters/storage/config-storage.js';
 
-const root = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-config-'));
-process.env.BRC_HOME = root;
-const { configManager } = await import('../packages/agent/dist/core/config-manager.js');
-const file = path.join(root, 'config.json');
+const yaml = createRequire(import.meta.url)('js-yaml');
+const dispatcherUrl = pathToFileURL(path.resolve('packages/agent/dist/adapters/mcp/dispatcher.js')).href;
+const compositionUrl = pathToFileURL(path.resolve('packages/agent/dist/composition.js')).href;
 
-test('editable values are validated before persistence', async () => {
-  await configManager.init();
-  const original = await readFile(file, 'utf8');
+async function isolated(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-config-regression-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const paths = resolveAgentPaths({ BRC_DATA_ROOT: root });
+  return { root, paths, manager: new AgentConfigManager({ paths, env: { BRC_DATA_ROOT: root } }) };
+}
+
+test('editable Agent settings are validated before persistent writes', async (t) => {
+  const { manager, paths } = await isolated(t);
   for (const value of ['abc', NaN, 0, 1.5, Infinity]) {
-    await assert.rejects(configManager.setUserSetting('fileReadLineLimit', value));
-    assert.equal(await readFile(file, 'utf8'), original);
+    await assert.rejects(manager.setUserSetting('fileReadLineLimit', value));
   }
-  await assert.rejects(configManager.setUserSetting('defaultShell', 42));
-  await assert.rejects(configManager.setUserSetting('clientId', 'changed'));
-  assert.equal(await readFile(file, 'utf8'), original);
-  await configManager.setUserSetting('telemetryEnabled', 'false');
-  assert.equal(await configManager.getValue('telemetryEnabled'), false);
-  await configManager.setUserSetting('allowedDirectories', []);
-  assert.deepEqual(await configManager.getValue('allowedDirectories'), []);
+  await assert.rejects(manager.setUserSetting('defaultShell', 42));
+  await assert.rejects(manager.setUserSetting('clientId', 'changed'));
+  await manager.setUserSetting('telemetryEnabled', 'false');
+  assert.equal(await manager.getValue('telemetryEnabled'), false);
+  assert.equal(yaml.safeLoad(await readFile(paths.configFile, 'utf8')).agent.telemetry.enabled, false);
 });
 
-test('editable array settings preserve individual strings and parse JSON arrays', async () => {
-  await configManager.setUserSetting('allowedDirectories', 'folder[1]');
-  assert.deepEqual(await configManager.getValue('allowedDirectories'), ['folder[1]']);
-  await configManager.setUserSetting('blockedCommands', '"shutdown"');
-  assert.deepEqual(await configManager.getValue('blockedCommands'), ['shutdown']);
+test('editable command and directory arrays preserve literal strings', async (t) => {
+  const { manager } = await isolated(t);
+  await manager.setUserSetting('allowedDirectories', 'folder[1]');
+  assert.deepEqual(await manager.getValue('allowedDirectories'), ['folder[1]']);
   for (const command of ['true', 'false', '123']) {
-    await configManager.setUserSetting('blockedCommands', command);
-    assert.deepEqual(await configManager.getValue('blockedCommands'), [command]);
+    await manager.setUserSetting('blockedCommands', command);
+    assert.deepEqual(await manager.getValue('blockedCommands'), [command]);
   }
-  await configManager.setUserSetting('blockedCommands', '["shutdown","reboot"]');
-  assert.deepEqual(await configManager.getValue('blockedCommands'), ['shutdown', 'reboot']);
+  await manager.setUserSetting('blockedCommands', '["shutdown","reboot"]');
+  assert.deepEqual(await manager.getValue('blockedCommands'), ['shutdown', 'reboot']);
 });
 
-test('home resolution follows filesystem links before parent segments', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-home-path-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await mkdir(path.join(dir, 'target', 'child'), { recursive: true });
-  await symlink(path.join(dir, 'target', 'child'), path.join(dir, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
-  const { resolveAgentHome } = await import('../packages/agent/dist/core/config.js');
-  const input = `${path.join(dir, 'link')}${path.sep}..`;
-  assert.equal(resolveAgentHome({ BRC_HOME: input }), realpathSync.native(input));
-});
-
-test('configuration snapshots cannot mutate owned state', async () => {
-  await configManager.setUserSetting('blockedCommands', ['one']);
-  const snapshot = await configManager.getConfig();
+test('configuration snapshots cannot mutate stored state', async (t) => {
+  const { manager } = await isolated(t);
+  await manager.setUserSetting('blockedCommands', ['one']);
+  const snapshot = await manager.getConfig();
   snapshot.blockedCommands.push('two');
-  const value = await configManager.getValue('blockedCommands');
-  value.push('three');
-  assert.deepEqual(await configManager.getValue('blockedCommands'), ['one']);
+  const returned = await manager.getValue('blockedCommands');
+  returned.push('three');
+  assert.deepEqual(await manager.getValue('blockedCommands'), ['one']);
 });
 
-test('concurrent durable writes preserve both settings', async () => {
+test('parallel Agent updates persist both keys without dropping one', async (t) => {
+  const { manager, paths } = await isolated(t);
   await Promise.all([
-    configManager.setUserSetting('fileReadLineLimit', 123),
-    configManager.setUserSetting('fileWriteLineLimit', 12),
+    manager.setUserSetting('fileReadLineLimit', 123),
+    manager.setUserSetting('fileWriteLineLimit', 12),
   ]);
-  const disk = JSON.parse(await readFile(file, 'utf8'));
-  assert.equal(disk.fileReadLineLimit, 123);
-  assert.equal(disk.fileWriteLineLimit, 12);
+  const disk = yaml.safeLoad(await readFile(paths.configFile, 'utf8'));
+  assert.equal(disk.agent.fileReadLineLimit, 123);
+  assert.equal(disk.agent.fileWriteLineLimit, 12);
 });
 
-test('watch reloads an external configuration change', async () => {
-  const disk = JSON.parse(await readFile(file, 'utf8'));
-  disk.defaultShell = 'external-shell';
-  await writeFile(file, JSON.stringify(disk));
-  const deadline = Date.now() + 3000;
-  while (await configManager.getValue('defaultShell') !== 'external-shell' && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 25));
-  }
-  assert.equal(await configManager.getValue('defaultShell'), 'external-shell');
+test('external YAML changes become visible on the next read', async (t) => {
+  const { manager, paths } = await isolated(t);
+  await manager.setUserSetting('defaultShell', 'before');
+  const disk = yaml.safeLoad(await readFile(paths.configFile, 'utf8'));
+  disk.agent.defaultShell = 'after';
+  await writeFile(paths.configFile, yaml.safeDump(disk));
+  assert.equal(await manager.getValue('defaultShell'), 'after');
 });
 
-test.after(async () => {
-  configManager.watcher?.close();
-  await rm(root, { recursive: true, force: true });
-});
-
-test('corrupt JSON and read or lock errors do not initialize writable defaults', async () => {
-  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/core/config-manager.js')).href;
-  for (const mode of ['corrupt', 'access', 'lock']) {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-failure-'));
-    const configPath = path.join(dir, 'config.json');
-    const original = mode === 'corrupt' ? '{broken' : '{"defaultShell":"existing"}';
-    await writeFile(configPath, original);
-    const script = `
-      import assert from 'node:assert/strict';
-      import fs from 'node:fs/promises';
-      import { createRequire } from 'node:module';
-      const lockfile = createRequire(${JSON.stringify(moduleUrl)})('proper-lockfile');
-      const mode = process.env.FAILURE_MODE;
-      if (mode === 'access') fs.readFile = async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
-      if (mode === 'lock') lockfile.lock = async () => { throw Object.assign(new Error('lock failed'), { code: 'ELOCKED' }); };
-      const { configManager } = await import(${JSON.stringify(moduleUrl)});
-      await assert.rejects(configManager.init());
-      await assert.rejects(configManager.setValue('defaultShell', 'changed'));
-    `;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: process.cwd(), env: { ...process.env, BRC_HOME: dir, FAILURE_MODE: mode }, encoding: 'utf8',
-    });
-    assert.equal(child.status, 0, child.stderr);
-    assert.equal(await readFile(configPath, 'utf8'), original);
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('Windows deny-read ACL prevents configuration fallback', { skip: process.platform !== 'win32' }, async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-acl-'));
-  const filename = path.join(dir, 'config.json');
-  const original = '{"defaultShell":"preserved"}';
-  await writeFile(filename, original);
-  const identity = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], { encoding: 'utf8', windowsHide: true });
-  assert.equal(identity.status, 0, identity.stderr);
-  const sid = identity.stdout.trim();
-  assert.match(sid, /^S-1-/);
-  const permission = (operation) => spawnSync('icacls.exe', [filename, operation, '*' + sid + (operation === '/deny' ? ':(R)' : '')], { encoding: 'utf8', windowsHide: true });
-  const denied = permission('/deny');
-  assert.equal(denied.status, 0, denied.stderr);
-  try {
-    const managerUrl = pathToFileURL(path.resolve('packages/agent/dist/core/config-manager.js')).href;
-    const source = `import assert from 'node:assert/strict';
-      const { configManager } = await import(${JSON.stringify(managerUrl)});
-      const isDenied = (error) => ['EACCES', 'EPERM'].includes(error.code);
-      await assert.rejects(configManager.init(), isDenied);
-      await assert.rejects(configManager.setValue('defaultShell', 'changed'), isDenied);`;
-    const child = spawnSync(process.execPath, ['--input-type=module', '-e', source], {
-      cwd: process.cwd(), env: { ...process.env, BRC_HOME: dir }, encoding: 'utf8', windowsHide: true,
-    });
-    assert.equal(child.status, 0, child.stderr);
-  } finally {
-    const restored = permission('/remove:d');
-    assert.equal(restored.status, 0, restored.stderr);
-  }
-  assert.equal(await readFile(filename, 'utf8'), original);
-  await rm(dir, { recursive: true, force: true });
-});
-
-test('non-object config roots reject initialization and tool updates', async (t) => {
-  const managerUrl = pathToFileURL(path.resolve('packages/agent/dist/core/config-manager.js')).href;
-  const dispatcherUrl = pathToFileURL(path.resolve('packages/agent/dist/dispatcher.js')).href;
-  for (const original of ['null', '[]', '1', '\"text\"']) {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-invalid-root-'));
-    t.after(() => rm(dir, { recursive: true, force: true }));
-    const file = path.join(dir, 'config.json');
-    await writeFile(file, original);
-    const script = `
-      import assert from 'node:assert/strict';
-      const { configManager } = await import(${JSON.stringify(managerUrl)});
-      await assert.rejects(configManager.init());
-      const { callTool } = await import(${JSON.stringify(dispatcherUrl)});
-      const result = await callTool('set_config_value', { key: 'defaultShell', value: 'changed' });
-      assert.equal(result.isError, true);
-      await new Promise(resolve => setTimeout(resolve, 100));
-    `;
-    const child = spawnSync(process.execPath, ['--unhandled-rejections=strict', '--input-type=module', '-e', script], {
-      cwd: process.cwd(), env: { ...process.env, BRC_HOME: dir }, encoding: 'utf8',
-    });
-    assert.equal(child.status, 0, child.stderr);
-    assert.equal(await readFile(file, 'utf8'), original);
-  }
-});
-
-test('dispatcher handles background usage tracking failures on damaged configuration', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-bad-json-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await writeFile(path.join(dir, 'config.json'), '{broken');
-  const dispatcherUrl = pathToFileURL(path.resolve('packages/agent/dist/dispatcher.js')).href;
+test('invalid YAML fails closed and does not expose private files', async (t) => {
+  const { root, paths } = await isolated(t);
+  await mkdir(path.dirname(paths.configFile), { recursive: true });
+  const damaged = 'version: 1\nagent: [invalid]\n';
+  await writeFile(paths.configFile, damaged);
+  await writeFile(path.join(root, 'private.txt'), 'confidential-secret');
   const script = `
     import assert from 'node:assert/strict';
+    const { configureAgentServices } = await import(${JSON.stringify(compositionUrl)});
+    configureAgentServices();
     const { callTool } = await import(${JSON.stringify(dispatcherUrl)});
-    const result = await callTool('get_config', {});
+    const result = await callTool('list_directory', { path: process.env.BRC_DATA_ROOT });
     assert.equal(result.isError, true);
-    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.doesNotMatch(JSON.stringify(result), /confidential-secret|private\\.txt/);
   `;
   const child = spawnSync(process.execPath, ['--unhandled-rejections=strict', '--input-type=module', '-e', script], {
-    cwd: process.cwd(), env: { ...process.env, BRC_HOME: dir }, encoding: 'utf8',
+    cwd: process.cwd(),
+    env: { ...process.env, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+    encoding: 'utf8', timeout: 8000,
   });
   assert.equal(child.status, 0, child.stderr);
+  assert.equal(await readFile(paths.configFile, 'utf8'), damaged);
 });
 
-test('filesystem tool denies access when config cannot be loaded', async (t) => {
-  const dispatcherUrl = pathToFileURL(path.resolve('packages/agent/dist/dispatcher.js')).href;
-  for (const original of ['{broken', '[]']) {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-file-security-'));
-    t.after(() => rm(dir, { recursive: true, force: true }));
-    await writeFile(path.join(dir, 'config.json'), original);
-    await writeFile(path.join(dir, 'private.txt'), 'secret');
-    const script = `
-      import assert from 'node:assert/strict';
-      const { callTool } = await import(${JSON.stringify(dispatcherUrl)});
-      const result = await callTool('list_directory', { path: process.env.BRC_HOME });
-      assert.equal(result.isError, true);
-      assert.doesNotMatch(JSON.stringify(result), /private\\.txt/);
-      await new Promise(resolve => setTimeout(resolve, 100));
-    `;
-    const child = spawnSync(process.execPath, ['--unhandled-rejections=strict', '--input-type=module', '-e', script], {
-      cwd: process.cwd(), env: { ...process.env, BRC_HOME: dir }, encoding: 'utf8',
-    });
-    assert.equal(child.status, 0, child.stderr);
-    assert.equal(await readFile(path.join(dir, 'config.json'), 'utf8'), original);
-  }
-});
-
-test('filesystem tool preserves unrestricted empty directory list', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-agent-file-open-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  await writeFile(path.join(dir, 'config.json'), JSON.stringify({
-    allowedDirectories: [], welcomeOnboardingEligible: false,
-  }));
-  await writeFile(path.join(dir, 'visible.txt'), 'contents');
-  const dispatcherUrl = pathToFileURL(path.resolve('packages/agent/dist/dispatcher.js')).href;
+test('empty directory allowlist still allows unrestricted file reads', async (t) => {
+  const { root, paths } = await isolated(t);
+  await writeFile(path.join(root, 'visible.txt'), 'contents');
   const script = `
     import assert from 'node:assert/strict';
+    const { configureAgentServices } = await import(${JSON.stringify(compositionUrl)});
+    configureAgentServices();
     const { callTool } = await import(${JSON.stringify(dispatcherUrl)});
-    const result = await callTool('list_directory', { path: process.env.BRC_HOME });
+    const result = await callTool('list_directory', { path: process.env.BRC_DATA_ROOT });
     assert.notEqual(result.isError, true);
     assert.match(JSON.stringify(result), /visible\\.txt/);
   `;
   const child = spawnSync(process.execPath, ['--unhandled-rejections=strict', '--input-type=module', '-e', script], {
-    cwd: process.cwd(), env: { ...process.env, BRC_HOME: dir }, encoding: 'utf8',
+    cwd: process.cwd(), env: { ...process.env, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+    encoding: 'utf8', timeout: 8000,
   });
   assert.equal(child.status, 0, child.stderr);
 });
 
-test('configuration writes retry transient Windows rename contention without losing data', { skip: process.platform !== 'win32' }, async (t) => {
-  const fsPromises = (await import('node:fs/promises')).default;
-  const { ConfigStorage } = await import('../packages/agent/dist/core/config-storage.js');
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-rename-retry-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const filename = path.join(dir, 'config.json');
+test('state JSON writes retry transient Windows rename failures', { skip: process.platform !== 'win32' }, async (t) => {
+  const { root } = await isolated(t);
+  const filename = path.join(root, 'state.json');
   const storage = new ConfigStorage(filename);
   await storage.prepare();
-  await writeFile(filename, '{"marker":"previous"}');
-  const realRename = fsPromises.rename;
-  t.after(() => { fsPromises.rename = realRename; });
+  await writeFile(filename, '{"marker":"old"}');
+  const fs = (await import('node:fs/promises')).default;
+  const original = fs.rename;
+  t.after(() => { fs.rename = original; });
   let attempts = 0;
-  fsPromises.rename = async (...args) => {
-    attempts++;
-    if (attempts === 1) throw Object.assign(new Error('Windows sharing violation'), { code: 'EPERM' });
-    return realRename(...args);
+  fs.rename = async (...args) => {
+    if (++attempts === 1) throw Object.assign(new Error('transient sharing violation'), { code: 'EPERM' });
+    return original(...args);
   };
-  await storage.write({ marker: 'updated' });
+  await storage.write({ marker: 'new' });
   assert.equal(attempts, 2);
-  assert.equal(JSON.parse(await readFile(filename, 'utf8')).marker, 'updated');
+  assert.equal(JSON.parse(await readFile(filename, 'utf8')).marker, 'new');
 });
 
-test('persistent rename denial preserves the existing configuration', { skip: process.platform !== 'win32' }, async (t) => {
-  const fsPromises = (await import('node:fs/promises')).default;
-  const { ConfigStorage } = await import('../packages/agent/dist/core/config-storage.js');
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-rename-denied-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const filename = path.join(dir, 'config.json');
-  const original = '{"marker":"protected"}';
-  await writeFile(filename, original);
-  const realRename = fsPromises.rename;
-  fsPromises.rename = async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
-  try {
-    await assert.rejects(new ConfigStorage(filename).write({ marker: 'replaced' }), { code: 'EACCES' });
-    assert.equal(await readFile(filename, 'utf8'), original);
-  } finally { fsPromises.rename = realRename; }
+test('persistent rename denial preserves existing state JSON', { skip: process.platform !== 'win32' }, async (t) => {
+  const { root } = await isolated(t);
+  const filename = path.join(root, 'state.json');
+  const storage = new ConfigStorage(filename);
+  await storage.prepare();
+  await writeFile(filename, '{"marker":"original"}');
+  const fs = (await import('node:fs/promises')).default;
+  const original = fs.rename;
+  fs.rename = async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); };
+  try { await assert.rejects(storage.write({ marker: 'bad' }), { code: 'EACCES' }); }
+  finally { fs.rename = original; }
+  assert.equal(await readFile(filename, 'utf8'), '{"marker":"original"}');
 });

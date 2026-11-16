@@ -1,5 +1,7 @@
+import { existsSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
+import path from 'node:path';
 import { ServerResult } from '../../core/types.js';
-import { resolveAgentHome } from '../../core/config.js';
+import { resolveAgentPaths } from '../storage/agent-paths.js';
 import { ToolHistoryStorage } from './toolHistoryStorage.js';
 
 export interface ToolCallRecord {
@@ -40,28 +42,9 @@ function trimHistory(lines: string[], targetBytes: number): string[] {
   return kept.reverse();
 }
 
-class ToolHistory {
+export class ToolHistory {
   private history: ToolCallRecord[] = [];
   private readonly MAX_ENTRIES = 1000;
-  /**
-   * Cap on the output kept per entry. Entries hold the FULL ServerResult, and
-   * get_recent_tool_calls serialises them straight back out, so without a cap
-   * the history is unbounded in two compounding ways:
-   *
-   *   - a single large output (a big read_file, a wide list_directory) makes
-   *     every later history dump that includes it large too, and
-   *   - any tool whose output happens to CONTAIN a history dump — e.g.
-   *     `cat`-ing a file a previous dump was written to — nests the whole
-   *     history inside itself, and each nesting level roughly doubles the JSON
-   *     escaping. Observed 2026-07-27: 83KB of arguments on disk produced a
-   *     1.89MB in-memory dump this way.
-   *
-   * Excluding more tool names cannot fix that, because the nesting arrives
-   * through ordinary tools. Capping the stored output does, and a preview is
-   * all this history is for — it is a "what happened recently" aid, not a
-   * result cache.
-   */
-  private readonly MAX_STORED_OUTPUT_BYTES = 4 * 1024;
   private readonly MAX_HISTORY_FILE_SIZE_BYTES = 5 * 1024 * 1024;
   // When the file exceeds the cap we trim it down to this target instead of
   // all the way to zero, so a single overflow doesn't cause every subsequent
@@ -73,8 +56,9 @@ class ToolHistory {
   private writeInterval?: NodeJS.Timeout;
 
   constructor() {
-    this.storage = new ToolHistoryStorage(resolveAgentHome(process.env));
-    
+    this.storage = new ToolHistoryStorage(resolveAgentPaths().historyDirectory);
+    this.migrateLegacyHistory();
+
     // Load existing history on startup
     this.loadFromDisk();
     
@@ -82,16 +66,42 @@ class ToolHistory {
     this.startWriteProcessor();
   }
 
-  /**
-   * Load history from disk (all instances share the same file)
-   */
-  private loadFromDisk(): void {
-    try {
-      this.storage.withLock(() => this.loadLocked());
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ELOCKED') throw error;
-      // Silently fail
+  private migrateLegacyHistory(): void {
+    if (existsSync(this.storage.file)) return;
+    const paths = resolveAgentPaths();
+    const candidates = [path.join(paths.historyDirectory, 'tool-history.jsonl')];
+    const defaultRoot = resolveAgentPaths({ ...process.env, BRC_DATA_ROOT: undefined }).root;
+    if (path.normalize(paths.root).toLowerCase() === path.normalize(defaultRoot).toLowerCase()) {
+      candidates.push(path.join(paths.legacyDirectory, 'tool-history.jsonl'));
     }
+    for (const legacy of candidates) {
+      if (!existsSync(legacy)) continue;
+      const stat = lstatSync(legacy);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Legacy Agent history must be a plain file.');
+      const lines = readFileSync(legacy, 'utf8').split('\n').filter((line) => line.trim());
+      const records = lines.map((line) => JSON.parse(line) as ToolCallRecord);
+      if (records.some((record) => !record || typeof record.toolName !== 'string')) {
+        throw new Error('Legacy Agent history contains invalid records.');
+      }
+      const safe = records.slice(-this.MAX_ENTRIES).map((record) => ({
+        timestamp: record.timestamp, toolName: record.toolName,
+        arguments: {}, output: this.capOutput(record.output ?? { content: [] }),
+        ...(Number.isFinite(record.duration) ? { duration: record.duration } : {}),
+      }));
+      this.storage.withLock(() => {
+        if (existsSync(this.storage.file)) throw new Error('Agent history was created during migration.');
+        this.storage.rewriteText(safe.map((record) => JSON.stringify(record)).join('\n') + (safe.length ? '\n' : ''));
+      });
+      if (JSON.parse(readFileSync(this.storage.file, 'utf8')).length !== safe.length) {
+        throw new Error('Migrated Agent history failed verification.');
+      }
+      unlinkSync(legacy);
+      return;
+    }
+  }
+
+  private loadFromDisk(): void {
+    this.storage.withLock(() => this.loadLocked());
   }
 
   private loadLocked(): void {
@@ -122,7 +132,7 @@ class ToolHistory {
       // for everyone it was written for.
       this.history = records
         .slice(-this.MAX_ENTRIES)
-        .map(record => ({ ...record, output: this.capOutput(record.output) }));
+        .map(record => ({ ...record, arguments: {}, output: this.capOutput(record.output) }));
 
       // If file is getting too large, trim it
       if (lines.length > this.MAX_ENTRIES * 2) {
@@ -222,26 +232,7 @@ class ToolHistory {
    * ({ content: [...] }) so readers and formatters need no special case.
    */
   private capOutput(output: ServerResult): ServerResult {
-    let size: number;
-    try {
-      size = JSON.stringify(output)?.length ?? 0;
-    } catch {
-      // Circular or otherwise unserialisable — it could never be returned to a
-      // client anyway, so don't retain it.
-      size = Number.POSITIVE_INFINITY;
-    }
-    if (size <= this.MAX_STORED_OUTPUT_BYTES) return output;
-
-    const shown = Number.isFinite(size) ? `${size} bytes` : 'unserialisable';
-    return {
-      ...(output as any),
-      content: [
-        {
-          type: 'text',
-          text: `[output omitted from history: ${shown}, over the ${this.MAX_STORED_OUTPUT_BYTES}-byte cap]`,
-        },
-      ],
-    } as ServerResult;
+    return { content: [{ type: 'text', text: '[tool output omitted from persisted history]' }], isError: output.isError } as ServerResult;
   }
 
   addCall(
@@ -253,7 +244,7 @@ class ToolHistory {
     const record: ToolCallRecord = {
       timestamp: new Date().toISOString(),
       toolName,
-      arguments: args,
+      arguments: {},
       output: this.capOutput(output),
       duration
     };
@@ -343,4 +334,5 @@ class ToolHistory {
   }
 }
 
-export const toolHistory = new ToolHistory();
+export let toolHistory: ToolHistory;
+export function attachToolHistory(instance: ToolHistory): void { toolHistory = instance; }

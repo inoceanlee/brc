@@ -5,7 +5,7 @@
 
 import fs from 'fs/promises';
 import { FileHandler, FileResult, FileInfo, ReadOptions, EditResult } from './base.js';
-import { parsePdfToMarkdown, parseMarkdownToPdf, editPdf } from '../../../core/tools/pdf/index.js';
+import { parsePdfToMarkdown, parseMarkdownToPdf, editPdf } from '../pdf/index.js';
 
 /**
  * File handler for PDF documents

@@ -1,5 +1,6 @@
-import { configManager } from '../../core/config-manager.js';
-import { capture } from '../../core/utils/capture.js';
+import { configManager } from '../storage/config-manager.js';
+import { capture } from './capture.js';
+import { logger } from './logger.js';
 
 export interface ToolUsageStats {
   // Tool category counters
@@ -57,7 +58,7 @@ const TOOL_CATEGORIES = {
 // Session timeout (30 minutes of inactivity = new session)
 const SESSION_TIMEOUT = 30 * 60 * 1000;
 
-class UsageTracker {
+export class UsageTracker {
   private currentSession: UsageSession | null = null;
 
   /**
@@ -198,7 +199,7 @@ class UsageTracker {
    */
   async shouldPromptForFeedback(): Promise<boolean> {
     // Check feature flag first
-    const { featureFlagManager } = await import('../../core/utils/feature-flags.js');
+    const { featureFlagManager } = await import('../network/feature-flags.js');
     const feedbackEnabled = featureFlagManager.get('user_surveys', false);
     if (!feedbackEnabled) {
       return false;
@@ -213,7 +214,7 @@ class UsageTracker {
       }
     } catch (error) {
       // If we can't import server, continue with other checks
-      console.log('[FEEDBACK DEBUG] Could not check client name, continuing...');
+      logger.debug('Feedback eligibility lookup failed.');
     }
 
     const stats = await this.getStats();
@@ -405,7 +406,7 @@ class UsageTracker {
    */
   async shouldShowOnboarding(): Promise<boolean> {
     // Check feature flag first (remote kill switch)
-    const { featureFlagManager } = await import('../../core/utils/feature-flags.js');
+    const { featureFlagManager } = await import('../network/feature-flags.js');
 
     // Default false: on cold starts (no flag cache yet, e.g. ephemeral Docker
     // containers) this can run before the background flag fetch completes.
@@ -438,7 +439,7 @@ class UsageTracker {
       }
     } catch (error) {
       // If we can't import server, continue with other checks
-      console.log('[ONBOARDING DEBUG] Could not check client name, continuing...');
+      logger.debug('Onboarding eligibility lookup failed.');
     }
 
     const stats = await this.getStats();
@@ -532,7 +533,7 @@ For anonymous_user_use_case: Look at conversation history to understand what use
     state.attemptsShown++;
     state.lastShownAt = now;
 
-    console.log(`[ONBOARDING DEBUG] Marked onboarding shown (attempt ${state.attemptsShown}/3)`);
+    logger.debug('Onboarding prompt shown.');
 
     await this.saveOnboardingState(state);
   }
@@ -553,7 +554,7 @@ For anonymous_user_use_case: Look at conversation history to understand what use
   async markPromptUsed(promptId: string, category: string): Promise<void> {
     // This could be expanded later to track detailed prompt usage
     // For now, we'll just rely on the capture analytics
-    console.log(`[PROMPT USAGE] User retrieved prompt: ${promptId} (category: ${category})`);
+    logger.debug('Prompt usage recorded.');
   }
 
   /**
@@ -566,9 +567,10 @@ For anonymous_user_use_case: Look at conversation history to understand what use
       lastShownAt: 0
     };
     await this.saveOnboardingState(defaultState);
-    console.log(`[ONBOARDING DEBUG] Reset onboarding state for testing`);
+    logger.debug('Onboarding state reset.');
   }
 }
 
 // Export singleton instance
-export const usageTracker = new UsageTracker();
+export let usageTracker: UsageTracker;
+export function attachUsageTracker(instance: UsageTracker): void { usageTracker = instance; }

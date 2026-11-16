@@ -1,19 +1,8 @@
-import path from 'path';
-import fs from 'fs';
-import os from 'os';
+import { DEFAULT_SETTINGS } from 'brc-shared';
 
-// Use user's home directory for configuration files
-export const USER_HOME = os.homedir();
-// Better Remote Commander (BRC): own config dir so we never collide with an installed Desktop Commander
-const longPath = (p: string): string => { try { return fs.realpathSync.native(p); } catch { const parent = path.dirname(p); return parent === p ? p : path.join(longPath(parent), path.basename(p)); } };
-export function resolveAgentHome(env: NodeJS.ProcessEnv): string {
-  return longPath(env.BRC_HOME ?? path.join(USER_HOME, '.brc'));
-}
-export const AGENT_DEFAULTS = { fileReadLineLimit: 1000, fileWriteLineLimit: 50 } as const;
-export const CONFIG_DIR = resolveAgentHome(process.env);
+export const AGENT_DEFAULTS = {
+  fileReadLineLimit: DEFAULT_SETTINGS.agent.fileReadLineLimit,
+  fileWriteLineLimit: DEFAULT_SETTINGS.agent.fileWriteLineLimit,
+} as const;
 
-// Paths relative to the config directory
-export const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-export const TOOL_CALL_FILE = path.join(CONFIG_DIR, 'claude_tool_call.log');
-
-export const DEFAULT_COMMAND_TIMEOUT = 1000; // milliseconds
+export const DEFAULT_COMMAND_TIMEOUT = DEFAULT_SETTINGS.agent.commandTimeoutMs;
