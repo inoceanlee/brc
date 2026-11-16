@@ -638,7 +638,12 @@ async function cleanDiagnosticSnapshots(
     if (!match) continue;
     const target = path.join(directory, file);
     let contents: string;
-    try { contents = (await readRegularFile(target)).contents; } catch { continue; }
+    try {
+      contents = (await readRegularFile(target)).contents;
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') issue(report.failures, target, error instanceof Error ? error.message : String(error));
+      continue;
+    }
     const result = await store.read(match[1] as 'cli' | 'relay' | 'agent' | 'traefik', match[2]);
     const snapshot = result.snapshot;
     let deadline = snapshot ? Date.parse(snapshot.capturedAt) : Number.NaN;

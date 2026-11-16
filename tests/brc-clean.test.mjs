@@ -45,6 +45,17 @@ test('cleanup preserves expired logs when the supplied lifecycle lock rejects ac
   assert.ok(report.preserved.some((entry) => entry.reason.includes('lock unavailable')));
 });
 
+test('cleanup reports diagnostic snapshots that are not readable files', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const snapshot = path.join(brcPaths.diagnostics, 'relay-unreadable.json');
+  await mkdir(snapshot);
+  const log = path.join(brcPaths.logs, 'expired.log');
+  await writeFile(log, 'old');
+  await setAge(log, 100 * DAY);
+  const report = await cleanRuntime(brcPaths);
+  assert.ok(report.failures.some((item) => item.path === snapshot));
+});
+
 const DAY = 24 * 60 * 60 * 1000;
 const MIB = 1024 * 1024;
 const fakeService = `
@@ -135,15 +146,12 @@ test('cleanup bypasses the lifecycle lock when only fresh logs and active versio
   }));
   const freshLog = path.join(brcPaths.logs, 'relay.log');
   await writeFile(freshLog, 'recent log');
-  const original = LifecycleLock.prototype.runExclusive;
   let lockCalls = 0;
-  LifecycleLock.prototype.runExclusive = async function (...args) {
-    lockCalls++;
-    return original.apply(this, args);
-  };
-  let report;
-  try { report = await cleanRuntime(brcPaths); }
-  finally { LifecycleLock.prototype.runExclusive = original; }
+  const report = await runCleanup(brcPaths, {}, {
+    lockStore: new LockStore(brcPaths),
+    lifecycleLock: { runExclusive: async () => { lockCalls++; throw new Error('unexpected lock'); } },
+    snapshotStore: new FileSnapshotStore({ directory: brcPaths.diagnostics }),
+  });
   assert.equal(lockCalls, 0);
   assert.equal(report.removed, 0);
   assert.equal(report.failures.length, 0);
@@ -311,7 +319,10 @@ test('cleanup creates a private runtime directory under a permissive umask', { s
   const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
   await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
   const module = new URL('../packages/cli/dist/adapters/storage/cleanup.js', import.meta.url).href;
-  const script = `process.umask(0o002); const { cleanRuntime } = await import(${JSON.stringify(module)}); const report = await cleanRuntime(${JSON.stringify(brcPaths)}); console.log(JSON.stringify(report));`;
+  const lockModule = new URL('../packages/cli/dist/adapters/storage/lock.js', import.meta.url).href;
+  const storeModule = new URL('../packages/cli/dist/adapters/storage/lock-store.js', import.meta.url).href;
+  const snapshotModule = new URL('../packages/shared/dist/diagnostics/adapters/snapshots.js', import.meta.url).href;
+  const script = `process.umask(0o002); const { cleanRuntime } = await import(${JSON.stringify(module)}); const { LifecycleLock } = await import(${JSON.stringify(lockModule)}); const { LockStore } = await import(${JSON.stringify(storeModule)}); const { FileSnapshotStore } = await import(${JSON.stringify(snapshotModule)}); const paths = ${JSON.stringify(brcPaths)}; const lockStore = new LockStore(paths); const report = await cleanRuntime(paths, {}, { lockStore, lifecycleLock: new LifecycleLock(paths, lockStore), snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics }) }); console.log(JSON.stringify(report));`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);
   const report = JSON.parse(child.stdout);
