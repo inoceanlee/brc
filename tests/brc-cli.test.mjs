@@ -250,6 +250,21 @@ console.log(JSON.stringify({ exitCode, output, errors }));
   assert.equal(error.details.failures[0].reason, 'denied');
 });
 
+test('JSON errors retain cleanup-preserved corrupt records in one error object', async (t) => {
+  const { root } = await makeCleanupFixture(t);
+  const runtime = path.join(root, 'runtime');
+  await mkdir(runtime, { recursive: true });
+  const record = path.join(runtime, 'agent.json');
+  await writeFile(record, '{invalid');
+  const result = runCliProcess(['--json', '--not-real'], root);
+  assert.equal(result.status, 2, result.stderr);
+  assert.equal(result.stdout, '');
+  const error = JSON.parse(result.stderr);
+  assert.equal(error.exit_code, 2);
+  assert.ok(error.cleanup.report.preserved.some((item) => item.path === record));
+  assert.equal(await readFile(record, 'utf8'), '{invalid');
+});
+
 test('cleanup report failures have equal uninstall behavior across output formats', () => {
   const results = probeResult(runProbe(`
 const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
@@ -304,6 +319,30 @@ console.log(JSON.stringify({ exitCode, errors }));
 `));
   assert.equal(result.exitCode, 130);
   const error = JSON.parse(result.errors.join('\n'));
+  assert.equal(error.exit_code, 130);
+  assert.match(error.message, /agent: ownership conflict/);
+});
+
+test('public CLI preserves lifecycle errors when stop is interrupted', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-cli-stop-interrupted-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workflowUrl = new URL('../packages/cli/dist/core/lifecycle/workflow.js', import.meta.url).href;
+  const probe = `
+const { ServiceManager } = await import(${JSON.stringify(workflowUrl)});
+ServiceManager.prototype.stop = async () => {
+  throw Object.assign(new AggregateError([new Error('agent: ownership conflict')], 'Interrupted after agent: ownership conflict'), { exitCode: 130 });
+};
+process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'stop', '--json'];
+await import(${cliUrl});
+`;
+  const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', probe], {
+    encoding: 'utf8', timeout: 5000, windowsHide: true,
+    env: { ...inheritedEnv, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' },
+  });
+  assert.equal(result.status, 130, result.stderr);
+  assert.equal(result.stdout, '');
+  const error = JSON.parse(result.stderr);
   assert.equal(error.exit_code, 130);
   assert.match(error.message, /agent: ownership conflict/);
 });

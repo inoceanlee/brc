@@ -275,6 +275,7 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
     || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json');
   const jsonErrors: string[] = [];
   let cleanupFailure: string | undefined;
+  let cleanupReport: CleanupReport | undefined;
   let traceFailure: string | undefined;
   const outputDeps: CliDependencies = {
     ...deps,
@@ -294,9 +295,12 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
       for (const failure of report.failures) deps.writeError(`BRC cleanup failed: ${failure.path}: ${failure.reason}`);
       for (const preserved of report.preserved) deps.writeError(`BRC cleanup preserved ${preserved.path}: ${preserved.reason}`);
     }
-    if (report.failures.length && parsed?.name !== 'clean'
+    if ((report.failures.length || report.preserved.length) && parsed?.name !== 'clean'
       && (parsed?.output ?? (requestedJson ? 'json' : 'table')) === 'json') {
-      cleanupFailure = report.failures.map((failure) => `${failure.path}: ${failure.reason}`).join('; ');
+      cleanupReport = report;
+      if (report.failures.length) {
+        cleanupFailure = report.failures.map((failure) => `${failure.path}: ${failure.reason}`).join('; ');
+      }
     }
     return report;
   };
@@ -345,8 +349,10 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
     }
   }
 
-  if (jsonErrors.length || cleanupFailure !== undefined || traceFailure !== undefined) {
-    const cleanup = cleanupFailure === undefined ? undefined : { code: 'CLEANUP_FAILED', message: cleanupFailure };
+  if (jsonErrors.length || cleanupFailure !== undefined || cleanupReport || traceFailure !== undefined) {
+    const cleanup = cleanupFailure !== undefined
+      ? { code: 'CLEANUP_FAILED', message: cleanupFailure, ...(cleanupReport ? { report: cleanupReport } : {}) }
+      : cleanupReport ? { code: 'CLEANUP_PRESERVED', message: 'BRC cleanup preserved protected resources.', report: cleanupReport } : undefined;
     const trace = traceFailure === undefined ? undefined : { code: 'TRACE_WRITE_FAILED', message: traceFailure };
     let primary: Record<string, unknown> | undefined;
     if (jsonErrors.length) {
