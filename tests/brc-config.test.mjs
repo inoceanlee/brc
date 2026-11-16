@@ -339,6 +339,38 @@ test('failed config application restores the last valid file and settings', asyn
   assert.deepEqual(appliedPorts, [[3001, 3000], [3100, 3001], [3001, 3001]]);
 });
 
+test('rollback preserves the exact last-good YAML text', async (t) => {
+  const { paths, env, lock } = await createFixture(t);
+  const filename = path.join(paths.config, 'brc.yaml');
+  const original = '# keep this comment\nversion: 1\nservices:\n  relayPort: 3001\n';
+  await writeFile(filename, original);
+  const manager = await SettingsManager.load(paths, env, {
+    lock,
+    apply: async (settings) => {
+      if (settings.services.relayPort === 3100) throw new Error('apply failed');
+    },
+  });
+  await writeFile(filename, 'version: 1\nservices:\n  relayPort: 3100\n');
+  await assert.rejects(manager.apply(), /apply failed/);
+  assert.equal(await readFile(filename, 'utf8'), original);
+  assert.equal(await readFile(filename + '.last-good', 'utf8'), original);
+});
+
+test('invalid environment overrides do not replace valid configuration with last-good', async (t) => {
+  const { paths, lock } = await createFixture(t);
+  const filename = path.join(paths.config, 'brc.yaml');
+  const contents = '# user configuration\nversion: 1\n';
+  await writeFile(filename, contents);
+  await assert.rejects(
+    SettingsManager.load(paths, { BRC_DATA_ROOT: paths.root, BRC_RELAY_PORT: 'invalid' }, {
+      lock,
+      apply: async () => {},
+    }),
+    /Invalid environment configuration/,
+  );
+  assert.equal(await readFile(filename, 'utf8'), contents);
+});
+
 test('failed first config write removes new file and preserves defaults', async (t) => {
   const { manager, paths } = await createFixture(t, {
     apply: async (settings) => {

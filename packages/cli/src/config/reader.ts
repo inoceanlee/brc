@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readSettingsText } from 'brc-shared';
 import type { BrcPaths } from './paths.js';
 import { resolveSettings, type ResolvedSettings } from './settings.js';
 
@@ -28,7 +28,7 @@ function errorCode(error: unknown): string | undefined {
 }
 
 async function readConfigFile(filename: string, env: NodeJS.ProcessEnv): Promise<LoadedSettings> {
-  const rawContents = await readFile(filename, 'utf8');
+  const rawContents = await readSettingsText(filename);
   const yaml = requireFromHere('js-yaml') as YamlParser;
   let document: unknown;
   try {
