@@ -596,6 +596,18 @@ test('cleanup removes expired diagnostic snapshots and keeps live ones', async (
   assert.equal((await store.read('relay', 'fresh')).state, 'current');
 });
 
+test('cleanup reports an expired snapshot preserved for a live process', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const filename = path.join(brcPaths.diagnostics, 'relay-live.json');
+  await writeFile(filename, JSON.stringify({
+    schema: 1, service: 'relay', instanceId: 'live', pid: process.pid,
+    capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running',
+  }));
+  const report = await cleanRuntime(brcPaths);
+  assert.equal(await exists(filename), true);
+  assert.ok(report.preserved.some((item) => item.path === filename && /active/i.test(item.reason)));
+});
+
 test('cleanup preserves corrupt diagnostic snapshots when process identity is unknown', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const broken = path.join(brcPaths.diagnostics, 'relay-broken.json');
