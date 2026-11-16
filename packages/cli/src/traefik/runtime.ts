@@ -17,6 +17,15 @@ const execFile = promisify(execFileCallback);
 
 type ChildProcess = ReturnType<typeof spawn>;
 
+export interface TraefikBinaryResourceMonitor {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+}
+
+export interface TraefikRuntimeOptions {
+  createBinaryResourceMonitor?: (pid: number, instanceId: string) => Promise<TraefikBinaryResourceMonitor>;
+}
+
 function listen(server: Server): Promise<number> {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -41,18 +50,18 @@ async function reservePorts(count: number): Promise<number[]> {
   }
 }
 
-function requestStatus(port: number, pathname: string): Promise<number> {
-  return new Promise((resolve) => {
-    const requestHandle = request({ host: '127.0.0.1', port, method: 'GET', path: pathname, agent: false }, (response) => {
+function requestStatus(port: number, pathname: string, signal?: AbortSignal): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const requestHandle = request({ host: '127.0.0.1', port, method: 'GET', path: pathname, agent: false, signal }, (response) => {
       response.resume();
       response.once('end', () => resolve(response.statusCode ?? 0));
     });
     requestHandle.setTimeout(1_000, () => requestHandle.destroy());
-    requestHandle.once('error', () => resolve(0));
+    requestHandle.once('error', (error) => signal?.aborted ? reject(signal.reason ?? error) : resolve(0));
     requestHandle.end();
   });
 }
-function requestConfigGeneration(port: number, timeoutMs: number): Promise<string | undefined> {
+function requestConfigGeneration(port: number, timeoutMs: number, signal?: AbortSignal): Promise<string | undefined> {
   return new Promise((resolve, reject) => {
     const requestHandle = request({
       host: '127.0.0.1',
@@ -60,7 +69,7 @@ function requestConfigGeneration(port: number, timeoutMs: number): Promise<strin
       method: 'GET',
       path: '/ping',
       agent: false,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     }, (response) => {
       const generation = response.headers['x-brc-config-generation'];
       response.resume();
@@ -78,21 +87,24 @@ export async function waitForConfigGeneration(
   ports: readonly number[],
   generation: string,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const candidates = [...new Set(ports)];
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     for (const port of candidates) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
       try {
-        if (await requestConfigGeneration(port, Math.min(1_000, remaining)) === generation) return;
+        if (await requestConfigGeneration(port, Math.min(1_000, remaining), signal) === generation) return;
       } catch {
+        signal?.throwIfAborted();
         // Retry until Traefik reports the active generation or the deadline expires.
       }
     }
     const remaining = deadline - Date.now();
-    if (remaining > 0) await sleep(Math.min(50, remaining));
+    if (remaining > 0) await sleep(Math.min(50, remaining), undefined, { signal });
   }
   throw new Error('Traefik did not apply dynamic configuration before the timeout.');
 }
@@ -117,25 +129,29 @@ export async function verifyExecutable(
   filename: string,
   expectedVersion: string,
   settings: Readonly<BrcSettings> = DEFAULT_SETTINGS,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   const info = await stat(filename);
   if (!info.isFile() || info.size === 0) throw new Error('Traefik executable is empty or missing.');
   const { stdout, stderr } = await execFile(filename, ['version'], {
     windowsHide: true,
     timeout: settings.runtime.startupTimeoutMs,
     maxBuffer: 1024 * 1024,
+    signal,
   });
   const output = `${stdout}\n${stderr}`;
   const match = output.match(/\bVersion:\s*v?(\d+\.\d+\.\d+)\b/);
   if (match?.[1] !== expectedVersion) throw new Error(`Traefik executable version does not match ${expectedVersion}: ${output.trim()}`);
 }
 
-async function waitForHealth(child: ChildProcess, port: number, timeoutMs: number, detail: () => string): Promise<void> {
+async function waitForHealth(child: ChildProcess, port: number, timeoutMs: number, detail: () => string, signal?: AbortSignal): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Traefik exited before becoming healthy: ${detail()}`);
-    if (await requestStatus(port, '/ping') === 200) return;
-    await sleep(100);
+    if (await requestStatus(port, '/ping', signal) === 200) return;
+    await sleep(100, undefined, { signal });
   }
   throw new Error(`Traefik did not become healthy on /ping: ${detail()}`);
 }
@@ -145,7 +161,9 @@ export async function runHealthProbe(
   paths: BrcPaths,
   settings: Readonly<BrcSettings>,
   templates: TraefikTemplates,
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted();
   await ensureSafeDirectory(paths.root, paths.tmp);
   const directory = path.join(paths.tmp, `traefik-probe-${randomUUID()}`);
   await mkdir(directory);
@@ -166,7 +184,7 @@ export async function runHealthProbe(
     await writeFile(dynamicPath, config.dynamicConfig, { flag: 'wx' });
     await writeFile(staticPath, config.staticConfig, { flag: 'wx' });
 
-    child = spawn(filename, [`--configFile=${staticPath}`], { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(filename, [`--configFile=${staticPath}`], { cwd: directory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], signal });
     child.stdout?.on('data', (chunk: Buffer) => { logs = `${logs}${chunk.toString('utf8')}`.slice(-8192); });
     child.stderr?.on('data', (chunk: Buffer) => { logs = `${logs}${chunk.toString('utf8')}`.slice(-8192); });
     child.once('error', (error) => { childError = error; });
@@ -174,13 +192,14 @@ export async function runHealthProbe(
       child?.once('spawn', () => resolve());
       child?.once('error', reject);
     });
-    await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => childError?.message ?? logs);
+    await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => childError?.message ?? logs, signal);
 
     const deadline = Date.now() + settings.runtime.startupTimeoutMs;
     while (Date.now() < deadline) {
-      if (await requestStatus(proxyPort, '/__brc_probe') === 200) return;
+      signal?.throwIfAborted();
+      if (await requestStatus(proxyPort, '/__brc_probe', signal) === 200) return;
       if (child.exitCode !== null || child.signalCode !== null) break;
-      await sleep(100);
+      await sleep(100, undefined, { signal });
     }
     throw new Error(`Traefik dynamic route failed its local health probe: ${childError?.message ?? logs}`);
   } finally {
@@ -203,10 +222,12 @@ function environmentPort(name: string): number {
 export async function runManagedTraefikService(
   settings: Readonly<BrcSettings> = DEFAULT_SETTINGS,
   diagnostics?: Pick<DiagnosticsRuntime, 'log'>,
+  options: TraefikRuntimeOptions = {},
 ): Promise<void> {
   const managedLog = installManagedLog();
   let control: ManagedControlServer | undefined;
   let child: ChildProcess | undefined;
+  let binaryMonitor: TraefikBinaryResourceMonitor | undefined;
   let logFailure: Error | undefined;
   let stopping = false;
   let logSink: Writable | undefined;
@@ -250,6 +271,18 @@ export async function runManagedTraefikService(
       child?.once('spawn', () => resolve());
       child?.once('error', reject);
     });
+    if (!child.pid) throw new Error('Traefik binary process did not receive a PID.');
+    const binaryInstanceId = `${process.env.BRC_MANAGED_ID ?? process.pid}-binary`;
+    try {
+      binaryMonitor = await options.createBinaryResourceMonitor?.(child.pid, binaryInstanceId);
+      await binaryMonitor?.start();
+    } catch (error) {
+      diagnostics?.log(`Traefik resource sampling unavailable: ${errorMessage(error)}`, {
+        level: 'warn',
+        source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' },
+      });
+      binaryMonitor = undefined;
+    }
     await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => logFailure?.message ?? 'Traefik did not answer on its local health endpoint.');
     diagnostics?.log(`Traefik ${manifest.current} is healthy.`, { source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' } });
 
@@ -289,6 +322,7 @@ export async function runManagedTraefikService(
       await waitForChildExit(child, settings.runtime.shutdownTimeoutMs);
     }
   } finally {
+    await binaryMonitor?.stop().catch((error: unknown) => diagnostics?.log(`Traefik binary resource sampling stopped: ${errorMessage(error)}`, { level: 'warn' }));
     await control?.close();
     if (logSink && !logSink.destroyed) {
       logSink.end();

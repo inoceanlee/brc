@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
 import { readSettings } from '../config/reader.js';
@@ -40,6 +40,7 @@ export interface ResourceDiagnosticRow {
   peakSource: string | null;
   peakRssBytes: number | null;
   peakWindowMs: number | null;
+  unavailable: string | null;
 }
 
 async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
@@ -50,6 +51,24 @@ async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
     staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
     isSameProcess: async (snapshot: DiagnosticSnapshot) => {
       if (snapshot.service === 'cli') return snapshot.pid === process.pid;
+      if (snapshot.service === 'traefik' && snapshot.instanceId.endsWith('-binary')) {
+        try {
+          const filename = path.join(paths.runtime, 'traefik-child.json');
+          const info = await lstat(filename);
+          if (!info.isFile() || info.isSymbolicLink()) return false;
+          const record = JSON.parse(await readFile(filename, 'utf8')) as {
+            instanceId?: string; pid?: number; createdAt?: string; executablePath?: string; commandLine?: string;
+          };
+          if (record.instanceId !== snapshot.instanceId || record.pid !== snapshot.pid
+            || !record.createdAt || !record.executablePath || !record.commandLine) return false;
+          const current = await inspectProcess(snapshot.pid);
+          return current?.createdAt === record.createdAt
+            && current.executablePath === record.executablePath
+            && current.commandLine === record.commandLine;
+        } catch {
+          return false;
+        }
+      }
       let record: { id?: string; pid?: number; createdAt?: string };
       try {
         record = JSON.parse(await readFile(path.join(paths.runtime, `${snapshot.service}.json`), 'utf8'));
@@ -67,7 +86,7 @@ async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
   });
 }
 
-export async function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnosticResult> {
+async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
   const source = await readManagedLog(paths, 'cli');
   if (!source) return { state: 'missing', summary: null };
   for (const line of source.trimEnd().split(/\r?\n/).reverse()) {
@@ -75,11 +94,19 @@ export async function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnos
     try { event = JSON.parse(line); } catch { continue; }
     if (!event || typeof event !== 'object' || Array.isArray(event)) continue;
     const value = event as Record<string, unknown>;
-    if (value.type !== 'startup_trace' || value.traceSchema !== 1 || value.command !== 'start') continue;
+    if (value.type !== 'startup_trace' || value.traceSchema !== 1 || !acceptedCommands.includes(String(value.command))) continue;
     if (typeof value.runId !== 'string' || typeof value.durationMs !== 'number' || !Array.isArray(value.stages)) continue;
     return { state: 'recorded', summary: value };
   }
   return { state: 'missing', summary: null };
+}
+
+export function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnosticResult> {
+  return readLatestTrace(paths, ['start']);
+}
+
+export function readLatestLifecycle(paths: BrcPaths): Promise<StartupDiagnosticResult> {
+  return readLatestTrace(paths, ['start', 'stop', 'restart']);
 }
 
 export async function readFunctionDiagnostics(paths: BrcPaths): Promise<FunctionDiagnosticRow[]> {
@@ -116,7 +143,7 @@ export async function readResourceDiagnostics(paths: BrcPaths): Promise<Resource
     const { snapshot } = result;
     const resources = snapshot.resources;
     return [{
-      service: snapshot.service,
+      service: snapshot.service === 'traefik' && snapshot.instanceId.endsWith('-binary') ? 'traefik-binary' : snapshot.service,
       instanceId: snapshot.instanceId,
       state: snapshotStateLabel(result.state),
       capturedAt: snapshot.capturedAt,
@@ -128,86 +155,7 @@ export async function readResourceDiagnostics(paths: BrcPaths): Promise<Resource
       peakSource: resources.peak?.source ?? null,
       peakRssBytes: resources.peak?.rssBytes ?? null,
       peakWindowMs: resources.peak?.windowMs ?? null,
+      unavailable: resources.unavailable ?? null,
     }];
   });
-}
-
-const MEBIBYTE = 1024 * 1024;
-
-export async function runStartupDiagnostics(
-  paths: BrcPaths,
-  json: boolean,
-  write: (text: string) => void,
-): Promise<number> {
-  const result = await readLatestStartup(paths);
-  if (json) {
-    write(JSON.stringify(result));
-    return 0;
-  }
-  if (!result.summary) {
-    write('No startup diagnosis has been recorded.');
-    return 0;
-  }
-  const record = result.summary;
-  write(`Startup ${record.status}: ${Number(record.durationMs).toFixed(1)} ms (${record.runId})`);
-  write(`  Accounted: ${Number(record.accountedMs ?? 0).toFixed(1)} ms · unassigned: ${Number(record.unaccountedMs).toFixed(1)} ms`);
-  for (const stage of record.stages as { stage: string; durationMs: number; status: string; service?: string; errorCode?: string }[]) {
-    const label = `${stage.stage}${stage.service ? ' / ' + stage.service : ''}`;
-    const suffix = stage.errorCode ? ` · ${stage.errorCode}` : '';
-    write(`  ${label}: ${stage.durationMs.toFixed(1)} ms (${stage.status}${suffix})`);
-  }
-  return 0;
-}
-
-export async function runFunctionDiagnostics(
-  paths: BrcPaths,
-  json: boolean,
-  write: (text: string) => void,
-): Promise<number> {
-  const rows = await readFunctionDiagnostics(paths);
-  if (json) {
-    write(JSON.stringify({ rows }));
-    return 0;
-  }
-  if (rows.length === 0) {
-    write('No function statistics are available. Start a managed service with diagnostics enabled.');
-    return 0;
-  }
-  write('Service     Instance           State    Calls   Total ms   Max ms   Kind   Function');
-  for (const row of rows.slice(0, 25)) {
-    const calls = String(row.calls).padStart(8);
-    const total = row.totalMs.toFixed(1).padStart(9);
-    const max = row.maxMs.toFixed(1).padStart(8);
-    write(`${row.service.padEnd(11)} ${row.instanceId.padEnd(18)} ${row.state.padEnd(8)} ${calls} ${total} ${max}   ${row.kind.padEnd(6)} ${row.name} (${row.file}:${row.line})`);
-  }
-  const hidden = rows.length - 25;
-  if (hidden > 0) write(`  … ${hidden} more entries; use --json for the full list.`);
-  write('Async wall time includes awaiting; it is not CPU time.');
-  return 0;
-}
-
-export async function runResourceDiagnostics(
-  paths: BrcPaths,
-  json: boolean,
-  write: (text: string) => void,
-): Promise<number> {
-  const rows = await readResourceDiagnostics(paths);
-  if (json) {
-    write(JSON.stringify({ rows }));
-    return 0;
-  }
-  if (rows.length === 0) {
-    write('No resource samples are available. Start a managed service with diagnostics enabled.');
-    return 0;
-  }
-  for (const row of rows) {
-    const rss = (row.rssBytes / MEBIBYTE).toFixed(1);
-    const peak = row.peakRssBytes === null
-      ? 'unavailable'
-      : `${(row.peakRssBytes / MEBIBYTE).toFixed(1)} MiB (${row.peakSource}, ${row.peakWindowMs} ms)`;
-    const cpu = row.cpuPercent === null ? 'sampling' : `${row.cpuPercent}%`;
-    write(`${row.service} · ${row.instanceId} · ${row.state} · captured ${row.capturedAt}`);
-    write(`  RSS ${rss} MiB · peak ${peak} · CPU ${cpu} (user ${row.cpuUserMs} ms, system ${row.cpuSystemMs} ms)`);
-  }
-  return 0;
 }

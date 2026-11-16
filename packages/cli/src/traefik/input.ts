@@ -22,18 +22,21 @@ export class TraefikInput {
     this.releaseApiUrl = options.releaseApiUrl ?? RELEASE_API_URL;
   }
 
-  private async queryRelease(): Promise<Response> {
+  private async queryRelease(signal?: AbortSignal): Promise<Response> {
     const maxAttempts = TRAEFIK_RELEASE_LOOKUP_ATTEMPTS;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       let response: Response;
       try {
+        signal?.throwIfAborted();
+        const timeout = AbortSignal.timeout(30_000);
         response = await this.fetchImpl(this.releaseApiUrl, {
           headers: { accept: 'application/vnd.github+json', 'user-agent': 'brc-unified-cli' },
-          signal: AbortSignal.timeout(30_000),
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
         });
       } catch (error) {
+        signal?.throwIfAborted();
         if (attempt === maxAttempts) throw new Error('Cannot reach the official Traefik release feed. Retry brc setup.', { cause: error });
-        await sleep(TRAEFIK_RELEASE_RETRY_DELAY_MS);
+        await sleep(TRAEFIK_RELEASE_RETRY_DELAY_MS, undefined, { signal });
         continue;
       }
       if (response.ok) return response;
@@ -52,13 +55,13 @@ export class TraefikInput {
         throw new Error(`Cannot query the official Traefik release feed: HTTP ${response.status}. Retry brc setup after verifying GitHub access.`);
       }
       await response.body?.cancel();
-      await sleep(TRAEFIK_RELEASE_RETRY_DELAY_MS);
+      await sleep(TRAEFIK_RELEASE_RETRY_DELAY_MS, undefined, { signal });
     }
     throw new Error('Traefik release lookup failed.');
   }
 
-  async latestRelease(): Promise<TraefikRelease> {
-    const response = await this.queryRelease();
+  async latestRelease(signal?: AbortSignal): Promise<TraefikRelease> {
+    const response = await this.queryRelease(signal);
     return parseRelease(await response.json() as unknown);
   }
 
@@ -80,8 +83,10 @@ export class TraefikInput {
     }
     throw new Error('Traefik deployment templates are missing from the BRC package.');
   }
-  async downloadChecksum(release: TraefikRelease): Promise<string> {
-    const response = await this.fetchImpl(release.checksumUrl, { signal: AbortSignal.timeout(30_000) });
+  async downloadChecksum(release: TraefikRelease, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(30_000);
+    const response = await this.fetchImpl(release.checksumUrl, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!response.ok) throw new Error(`Cannot download the official Traefik checksum file: HTTP ${response.status}.`);
     return response.text();
   }
@@ -89,8 +94,11 @@ export class TraefikInput {
   async downloadArchive(
     release: TraefikRelease,
     onProgress?: (completedBytes: number, totalBytes?: number) => void,
+    signal?: AbortSignal,
   ): Promise<Buffer> {
-    const response = await this.fetchImpl(release.archiveUrl, { signal: AbortSignal.timeout(5 * 60_000) });
+    signal?.throwIfAborted();
+    const timeout = AbortSignal.timeout(5 * 60_000);
+    const response = await this.fetchImpl(release.archiveUrl, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!response.ok || !response.body) throw new Error(`Cannot download the official Traefik ZIP: HTTP ${response.status}.`);
 
     const length = response.headers.get('content-length');
@@ -100,9 +108,14 @@ export class TraefikInput {
     const reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let completedBytes = 0;
+    const cancelReader = () => { void reader.cancel(signal?.reason).catch(() => undefined); };
+    signal?.addEventListener('abort', cancelReader, { once: true });
+    if (signal?.aborted) cancelReader();
     try {
       while (true) {
+        signal?.throwIfAborted();
         const { done, value } = await reader.read();
+        signal?.throwIfAborted();
         if (done) break;
         chunks.push(value);
         completedBytes += value.byteLength;
@@ -110,8 +123,10 @@ export class TraefikInput {
       }
     } catch (error) {
       void reader.cancel().catch(() => undefined);
+      signal?.throwIfAborted();
       throw error;
     } finally {
+      signal?.removeEventListener('abort', cancelReader);
       reader.releaseLock();
     }
     return Buffer.concat(chunks, completedBytes);

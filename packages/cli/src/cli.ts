@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { appendTraceSummary, startDiagnostics, TraceRecorder, type DiagnosticsRuntime, type TraceSummary } from 'brc-shared';
+import { appendTraceSummary, startDiagnostics, TraceRecorder, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type TraceSummary } from 'brc-shared';
 import { readProductVersion } from './config/product.js';
-import { runFunctionDiagnostics, runResourceDiagnostics, runStartupDiagnostics } from './commands/diagnostics.js';
-import { helpText, parseCommand, UsageError, type CliCommandName, type ParsedCommand } from './commands/parser.js';
-import { installCancellationHandlers } from './commands/signals.js';
+import { readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
+import { COMMAND_SPECS, helpText, parseCommand, UsageError, type CliCommandName, type ParsedCommand } from './commands/parser.js';
+import { installCancellationHandlers, SIGNAL_EXIT_CODES } from './commands/signals.js';
+import { completionScript } from './commands/completion.js';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { runConfigCommand } from './commands/config.js';
 import { requestAdministrator } from './commands/setup.js';
@@ -16,31 +18,35 @@ import { readSettings } from './config/reader.js';
 import type { BrcSettings } from './config/settings.js';
 import { LifecycleLock } from './adapters/storage/lock.js';
 import { ProcessManager } from './adapters/process/controller.js';
+import { inspectProcess } from './adapters/process/identity.js';
+import { ManagedProcessResourceSampler } from './adapters/process/resources.js';
 import { ServiceManager } from './core/lifecycle/workflow.js';
 import { createDefaultServices, diagnosticEnvironment } from './adapters/process/specs.js';
 import { startRejection, shouldWriteTraefikConfig } from './core/lifecycle/policy.js';
 import { cleanRuntime } from './adapters/storage/cleanup.js';
 import { createMaintenanceCommands } from './commands/maintenance.js';
+import { confirmBrcUninstall } from './maintenance/uninstall.js';
+import { readManagedLog } from './maintenance/logs.js';
 import { TraefikManager } from './traefik/manager.js';
 import { runManagedTraefikService } from './traefik/runtime.js';
 import { RelayDatabase } from './adapters/storage/relay-database.js';
-import { installProgressInterruptHandler, TraefikProgress } from './progress.js';
+import { TraefikProgress } from './progress.js';
 
 export type CliLogComponent = 'relay' | 'agent' | 'traefik' | 'cli';
-type CommandResult = number | void;
+type CommandResult = number | void | CliResult;
 
 export interface CliDependencies {
   paths: BrcPaths;
   commands: {
-    setup: () => Promise<CommandResult>;
-    start: () => Promise<CommandResult>;
-    stop: () => Promise<CommandResult>;
-    restart: () => Promise<CommandResult>;
+    setup: (signal?: AbortSignal) => Promise<CommandResult>;
+    start: (signal?: AbortSignal) => Promise<CommandResult>;
+    stop: (signal?: AbortSignal) => Promise<CommandResult>;
+    restart: (signal?: AbortSignal) => Promise<CommandResult>;
     status: () => Promise<CommandResult>;
     logs: (component?: CliLogComponent) => Promise<CommandResult>;
-    config: (args: string[], options: { json: boolean }) => Promise<CommandResult>;
-    updateTraefik: () => Promise<CommandResult>;
-    uninstall: (options: { yes: boolean }, clean: () => Promise<void>) => Promise<CommandResult>;
+    config: (args: string[], options: { json: boolean; preview?: boolean; signal?: AbortSignal }) => Promise<CommandResult>;
+    updateTraefik: (signal?: AbortSignal) => Promise<CommandResult>;
+    uninstall: (options: { yes: boolean; structuredOutput?: boolean; signal?: AbortSignal }, clean: () => Promise<void>) => Promise<CommandResult>;
   };
   clean: (paths: BrcPaths) => Promise<void>;
   write: (message: string) => void;
@@ -49,6 +55,7 @@ export interface CliDependencies {
   trace?: TraceRecorder;
   onTrace?: (summary: TraceSummary) => Promise<void>;
   timing?: boolean;
+  signal?: AbortSignal;
 }
 
 function errorMessage(error: unknown): string {
@@ -63,59 +70,127 @@ function errorExitCode(error: unknown): number {
   return 1;
 }
 
+const yaml = createRequire(import.meta.url)('js-yaml') as { safeDump(value: unknown): string };
+
+function renderOutput(result: CliResult, parsed: ParsedCommand, deps: CliDependencies): number {
+  return renderCliResult(result, {
+    format: parsed.output,
+    quiet: parsed.quiet,
+    verbose: parsed.verbose,
+    stringifyYaml: (value) => yaml.safeDump(value),
+  }, {
+    stdout: (value) => deps.write(value.trimEnd()),
+    stderr: (value) => deps.writeError(value.trimEnd()),
+  });
+}
+
+function completeCommand(result: CommandResult, parsed: ParsedCommand, deps: CliDependencies): number {
+  if (result && typeof result === 'object') return renderOutput(result, parsed, deps);
+  if (typeof result === 'number' && result !== 0) return result;
+  if (parsed.output !== 'table') {
+    return renderOutput(cliSuccess({ command: parsed.name, status: 'success' }), parsed, deps);
+  }
+  return 0;
+}
+
+function renderFailure(error: unknown, parsed: ParsedCommand | undefined, format: ParsedCommand['output'], deps: CliDependencies): number {
+  const exitCode = errorExitCode(error);
+  if (exitCode === 130 || exitCode === 143) return exitCode;
+  const code = exitCode === 2 ? 'USAGE_ERROR' : exitCode === 3 ? 'PERMISSION_DENIED'
+    : exitCode === 4 ? 'NOT_FOUND' : exitCode === 5 ? 'CONFLICT' : 'RUNTIME_ERROR';
+  const details = parsed?.debug || parsed?.verbose
+    ? error instanceof Error ? { name: error.name, stack: error.stack } : undefined
+    : undefined;
+  const failure = cliFailure({
+    code,
+    exitCode: exitCode as Exclude<CliExitCode, 0>,
+    message: errorMessage(error),
+    run: 'brc help',
+    retryable: exitCode === 1,
+    ...(details ? { details } : {}),
+  });
+  return renderCliResult(failure, { format, verbose: parsed?.verbose, quiet: parsed?.quiet }, {
+    stdout: deps.write,
+    stderr: (value) => deps.writeError(value.trimEnd()),
+  });
+}
+
 async function dispatch(
   parsed: ParsedCommand,
   deps: CliDependencies,
   clean: () => Promise<void>,
   skipAutomaticCleanup: () => void,
 ): Promise<number> {
+  if (parsed.preview && ['setup', 'start', 'stop', 'restart', 'uninstall', 'clean'].includes(parsed.name)) {
+    throw new UsageError(`--preview is unsupported for brc ${parsed.name}; no changes were made.`);
+  }
+  if (parsed.offline && parsed.name === 'update') {
+    throw new UsageError('Traefik update requires release metadata; --offline prevents remote queries.');
+  }
   switch (parsed.name) {
-    case 'help': {
-      if (parsed.includeStatus) {
-        try {
-          await deps.commands.status();
-        } catch (error) {
-          deps.writeError(`brc: ${errorMessage(error)}`);
-        }
-      }
-      deps.write(parsed.args[0] ? helpText(parsed.args[0] as CliCommandName) : helpText());
-      return 0;
-    }
+    case 'help':
+      return renderOutput(cliSuccess(parsed.output === 'json'
+        ? { commands: COMMAND_SPECS, version: readProductVersion() }
+        : helpText(parsed.args[0] as CliCommandName | undefined)), parsed, deps);
     case 'version':
-      deps.write(parsed.json ? JSON.stringify({ version: readProductVersion() }) : readProductVersion());
-      return 0;
-    case 'diagnose':
-      if (parsed.diagnose === 'functions') return runFunctionDiagnostics(deps.paths, parsed.json, deps.write);
-      if (parsed.diagnose === 'resources') return runResourceDiagnostics(deps.paths, parsed.json, deps.write);
-      return runStartupDiagnostics(deps.paths, parsed.json, deps.write);
-    case 'setup':
-      return (await deps.commands.setup()) ?? 0;
-    case 'start':
-      return (await deps.commands.start()) ?? 0;
-    case 'stop':
-      return (await deps.commands.stop()) ?? 0;
-    case 'restart':
-      return (await deps.commands.restart()) ?? 0;
-    case 'status':
-      if (parsed.json) {
-        if (!deps.statusJson) throw new UsageError('JSON status is unavailable.');
-        deps.write(JSON.stringify(await deps.statusJson()));
-        return 0;
+      return renderOutput(cliSuccess(parsed.output === 'json'
+        ? { version: readProductVersion() } : readProductVersion()), parsed, deps);
+    case 'completion':
+      return renderOutput(cliSuccess(completionScript(parsed.args[0] as 'powershell' | 'bash' | 'zsh' | 'fish')), parsed, deps);
+    case 'diagnose': {
+      if (parsed.diagnose === 'functions') {
+        const rows = await readFunctionDiagnostics(deps.paths);
+        return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No function statistics are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
       }
-      return (await deps.commands.status()) ?? 0;
+      if (parsed.diagnose === 'resources') {
+        const rows = await readResourceDiagnostics(deps.paths);
+        return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No resource samples are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
+      }
+      const result = parsed.diagnose === 'lifecycle'
+        ? await readLatestLifecycle(deps.paths)
+        : await readLatestStartup(deps.paths);
+      return renderOutput(cliSuccess(result.summary ? result : {
+        ...result,
+        message: parsed.diagnose === 'lifecycle'
+          ? 'No lifecycle diagnosis has been recorded.'
+          : 'No startup diagnosis has been recorded.',
+      }), parsed, deps);
+    }
+    case 'setup':
+      return completeCommand(await deps.commands.setup(deps.signal), parsed, deps);
+    case 'start':
+      return completeCommand(await deps.commands.start(deps.signal), parsed, deps);
+    case 'stop':
+      return completeCommand(await deps.commands.stop(deps.signal), parsed, deps);
+    case 'restart':
+      return completeCommand(await deps.commands.restart(deps.signal), parsed, deps);
+    case 'status':
+      if (parsed.output !== 'table' && deps.statusJson) {
+        return renderOutput(cliSuccess(await deps.statusJson()), parsed, deps);
+      }
+      return completeCommand(await deps.commands.status(), parsed, deps);
     case 'logs':
-      return (await deps.commands.logs(parsed.logComponent)) ?? 0;
+      if (parsed.output !== 'table') {
+        const component = parsed.logComponent ?? 'cli';
+        const contents = await readManagedLog(deps.paths, component);
+        return renderOutput(cliSuccess({ component, lines: contents ? contents.trimEnd().split(/\r?\n/) : [] }), parsed, deps);
+      }
+      return completeCommand(await deps.commands.logs(parsed.logComponent), parsed, deps);
     case 'config':
-      return (await deps.commands.config(parsed.args, { json: parsed.json })) ?? 0;
+      return completeCommand(await deps.commands.config(parsed.args, { json: parsed.json, preview: parsed.preview, signal: deps.signal }), parsed, deps);
     case 'update':
-      return (await deps.commands.updateTraefik()) ?? 0;
+      return completeCommand(await deps.commands.updateTraefik(deps.signal), parsed, deps);
     case 'clean':
       skipAutomaticCleanup();
       await clean();
-      return 0;
+      return renderOutput(cliSuccess({ command: 'clean', status: 'success' }), parsed, deps);
     case 'uninstall':
       skipAutomaticCleanup();
-      return (await deps.commands.uninstall({ yes: parsed.args[0] === '--yes' }, clean)) ?? 0;
+      return completeCommand(await deps.commands.uninstall({
+        yes: parsed.args[0] === '--yes',
+        structuredOutput: parsed.output !== 'table',
+        signal: deps.signal,
+      }, clean), parsed, deps);
     default:
       throw new UsageError(`Unknown command: ${parsed.name}. Run brc help for usage.`);
   }
@@ -139,13 +214,30 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
     await deps.clean(deps.paths);
   };
 
+  let parsed: ParsedCommand | undefined;
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  let timeoutController: AbortController | undefined;
   try {
-    const parsed = parseCommand(args);
-    const invoke = () => dispatch(parsed, deps, clean, () => { skipCleanup = true; });
+    parsed = parseCommand(args);
+    if (parsed.timeoutMs !== undefined) {
+      timeoutController = new AbortController();
+      timeoutHandle = setTimeout(() => {
+        const error = Object.assign(new Error(`Command timed out after ${parsed!.timeoutMs} ms.`), { exitCode: 1 });
+        timeoutController?.abort(error);
+      }, parsed.timeoutMs);
+
+    }
+    const signal = deps.signal && timeoutController
+      ? AbortSignal.any([deps.signal, timeoutController.signal])
+      : deps.signal ?? timeoutController?.signal;
+    signal?.throwIfAborted();
+    const commandDeps = signal ? { ...deps, signal } : deps;
+    const invoke = () => dispatch(parsed!, commandDeps, clean, () => { skipCleanup = true; });
     exitCode = deps.trace ? await deps.trace.span('command', invoke) : await invoke();
   } catch (error) {
-    deps.writeError(`brc: ${errorMessage(error)}`);
-    exitCode = errorExitCode(error);
+    const requestedJson = args.includes('--json') || args.includes('--output=json')
+      || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json');
+    exitCode = renderFailure(error, parsed, parsed?.output ?? (requestedJson ? 'json' : 'table'), deps);
   } finally {
     if (!skipCleanup) {
       try {
@@ -155,8 +247,10 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
         deps.writeError(`brc: cleanup failed: ${errorMessage(error)}`);
       }
     }
+    if (timeoutHandle) clearTimeout(timeoutHandle);
     if (deps.trace) {
-      const summary = deps.trace.finish(exitCode === 0 ? 'ok' : 'failed', exitCode === 0 ? undefined : 'COMMAND_FAILED');
+      const traceStatus = exitCode === 130 || exitCode === 143 ? 'cancelled' : exitCode === 0 ? 'ok' : 'failed';
+      const summary = deps.trace.finish(traceStatus, exitCode === 0 ? undefined : exitCode === 130 || exitCode === 143 ? 'INTERRUPTED' : 'COMMAND_FAILED');
       try { await deps.onTrace?.(summary); }
       catch (error) { deps.writeError(`brc: diagnostic write failed: ${errorMessage(error)}`); }
       reportTrace(deps, summary);
@@ -185,9 +279,10 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   let parsed: ParsedCommand | undefined;
   try { parsed = parseCommand(args); } catch { /* reported by runCli */ }
-  const trace = parsed?.name === 'start' ? new TraceRecorder('start', randomUUID()) : undefined;
+  const lifecycleCommand = parsed && ['start', 'stop', 'restart'].includes(parsed.name) ? parsed.name : undefined;
+  const trace = lifecycleCommand ? new TraceRecorder(lifecycleCommand, randomUUID()) : undefined;
   const time = <T>(stage: string, task: () => Promise<T>): Promise<T> => (trace ? trace.span(stage, task) : task());
-  const lightweight = !parsed || parsed.name === 'help' || parsed.name === 'version' || parsed.name === 'diagnose';
+  const lightweight = !parsed || parsed.name === 'help' || parsed.name === 'version' || parsed.name === 'diagnose' || parsed.name === 'completion';
   const clean = async (cleanPaths: BrcPaths) => {
     const { settings: cleanupSettings } = await readSettings(cleanPaths, process.env);
     const report = await cleanRuntime(cleanPaths, { settings: cleanupSettings });
@@ -201,7 +296,7 @@ async function main(): Promise<void> {
     process.exitCode = await runCli(args, {
       paths,
       commands: { setup: unavailable, start: unavailable, stop: unavailable, restart: unavailable, status: unavailable,
-        logs: unavailable, config: (configArgs, options) => runConfigCommand(configArgs, { manager: undefined as unknown as SettingsManager, paths, write: (message) => console.log(message), json: options.json }), updateTraefik: unavailable, uninstall: unavailable },
+        logs: unavailable, config: (configArgs, options) => runConfigCommand(configArgs, { manager: undefined as unknown as SettingsManager, paths, preview: options.preview, signal: options.signal }), updateTraefik: unavailable, uninstall: unavailable },
       clean,
       write: (message) => console.log(message),
       writeError: (message) => console.error(message),
@@ -211,14 +306,16 @@ async function main(): Promise<void> {
   const rootWasEmpty = !existsSync(paths.root) || readdirSync(paths.root).every((entry) =>
     entry === 'runtime' && readdirSync(paths.runtime).length === 0,
   );
+  const serviceParentEnv = parsed?.noTelemetry ? { ...process.env, DO_NOT_TRACK: '1' } : process.env;
   const lifecycleLock = new LifecycleLock(paths);
   let configTraefikManager: TraefikManager | undefined;
   const settingsManager = await SettingsManager.load(paths, process.env, {
     lock: lifecycleLock,
-    apply: async (settings, previous) => {
+    readOnly: parsed?.preview === true,
+    apply: async (settings, previous, signal) => {
       if (!traefikSettingsChanged(previous, settings)) return;
       if (!configTraefikManager) throw new Error('Traefik manager is not initialized for configuration apply.');
-      await configTraefikManager.writeConfigWithLockHeld(settings, previous);
+      await configTraefikManager.writeConfigWithLockHeld(settings, previous, signal);
     },
   });
   const settings = settingsManager.snapshot();
@@ -244,16 +341,16 @@ async function main(): Promise<void> {
   const refreshServices = async () => {
     const currentSettings = await loadSettings();
     processes.updateRuntimeSettings(currentSettings.runtime);
-    return createDefaultServices(paths, currentSettings);
+    return createDefaultServices(paths, currentSettings, serviceParentEnv);
   };
-  const services = createDefaultServices(paths, settings);
+  const services = createDefaultServices(paths, settings, serviceParentEnv);
   const relaySpec = services.find((service) => service.name === 'relay');
   if (!relaySpec) throw new Error('The Relay service is missing from the default service set.');
   const relayDatabase = new RelayDatabase(path.join(paths.data, 'relay.sqlite'), relaySpec);
   const traefikSpec = services.find((service) => service.name === 'traefik');
   if (!traefikSpec) throw new Error('The Traefik service is missing from the default service set.');
-  const serviceManager = new ServiceManager(paths, services, processes, lifecycleLock, refreshServices, trace);
-  const traefikServiceManager = new ServiceManager(paths, [traefikSpec], processes, lifecycleLock, async () => {
+  const serviceManager = new ServiceManager(paths, services, processes, processes, lifecycleLock, refreshServices, trace);
+  const traefikServiceManager = new ServiceManager(paths, [traefikSpec], processes, processes, lifecycleLock, async () => {
     const refreshed = await refreshServices();
     const current = refreshed.find((service) => service.name === 'traefik');
     if (!current) throw new Error('The Traefik service is missing from the refreshed service set.');
@@ -263,62 +360,84 @@ async function main(): Promise<void> {
     paths,
     (message) => console.log(message),
     (message) => console.error(message),
-    { stopServices: () => serviceManager.stop() },
+    {
+      stopServices: (signal) => serviceManager.stop(signal),
+      confirm: (root) => confirmBrcUninstall(root, { interactive: parsed?.interactive, noInput: parsed?.noInput }),
+    },
   );
-  const progress = new TraefikProgress(process.stderr);
+  const commandController = new AbortController();
+  const progress = new TraefikProgress(process.stderr, {
+    color: parsed?.noColor !== true && process.env.NO_COLOR === undefined && process.env.TERM !== 'dumb',
+    enabled: parsed?.quiet !== true,
+  });
   const traefikManager = new TraefikManager(paths, settings, traefikServiceManager, { loadSettings, reporter: (event) => progress.report(event) });
   configTraefikManager = traefikManager;
   const deps: CliDependencies = {
     paths,
     commands: {
-      setup: async () => {
-        const administrator = relayDatabase.exists() ? undefined : await requestAdministrator();
+      setup: async (signal) => {
+        signal?.throwIfAborted();
+        if (parsed?.offline && !await traefikManager.currentVersion()) {
+          throw new UsageError('Traefik is not installed and --offline prevents its download.');
+        }
+        const administrator = relayDatabase.exists() ? undefined : await requestAdministrator({ interactive: parsed?.interactive, noInput: parsed?.noInput, signal });
         await lifecycleLock.runExclusive(async () => {
+          signal?.throwIfAborted();
           relayDatabase.initializeForNewRoot(rootWasEmpty, administrator);
-        });
-        await settingsManager.ensureConfigFile();
-        await traefikManager.setup();
-        console.log('BRC setup completed. Run brc start to connect services.');
+        }, signal);
+        await settingsManager.ensureConfigFile(signal);
+        await traefikManager.setup(signal);
+        if (parsed?.output === 'table') console.log('BRC setup completed. Run brc start to connect services.');
         return 0;
       },
-      start: async () => {
+      start: async (signal) => {
+        signal?.throwIfAborted();
         await time('database-check', async () => relayDatabase.assertExists());
         const lockSpan = trace?.begin('lifecycle-lock');
         try {
           await serviceManager.withLock(async (operations) => {
+            signal?.throwIfAborted();
             lockSpan?.end();
             const statuses = await time('initial-status', () => serviceManager.status());
             const rejection = startRejection(statuses);
             if (rejection) throw new Error(rejection);
             if (shouldWriteTraefikConfig(statuses)) {
-              await time('traefik-config', async () => traefikManager.writeConfigWithLockHeld(await loadSettings()));
+              await time('traefik-config', async () => traefikManager.writeConfigWithLockHeld(await loadSettings(), undefined, signal));
             }
-            await time('services-ready', () => operations.start(statuses));
-          });
+            await time('services-ready', () => operations.start(statuses, signal));
+          }, signal);
         } catch (error) {
           lockSpan?.end('failed');
           throw error;
         }
         const agent = (await time('post-start-status', () => serviceManager.status()))
           .find((item) => item.name === 'agent');
-        console.log(agent?.state === 'pairing'
+        if (parsed?.output === 'table') console.log(agent?.state === 'pairing'
           ? 'Relay and Traefik started. Agent awaits approval; run brc logs agent for the pairing URL and code.'
           : 'BRC services started.');
         return 0;
       },
-      stop: async () => {
-        await serviceManager.stop();
-        console.log('BRC services stopped.');
+      stop: async (signal) => {
+        await time('services-stop', () => serviceManager.stop(signal));
+        if (parsed?.output === 'table') console.log('BRC services stopped.');
         return 0;
       },
-      restart: async () => {
-        relayDatabase.assertExists();
-        await serviceManager.withLock(async (operations) => {
-          await operations.stop();
-          await traefikManager.writeConfigWithLockHeld(await loadSettings());
-          await operations.start();
-        });
-        console.log('BRC services restarted.');
+      restart: async (signal) => {
+        signal?.throwIfAborted();
+        await time('database-check', async () => relayDatabase.assertExists());
+        await time('lifecycle-lock', () => serviceManager.withLock(async (operations) => {
+          signal?.throwIfAborted();
+          await time('restart-stop', () => operations.stop());
+          try {
+            signal?.throwIfAborted();
+            await time('restart-config', async () => traefikManager.writeConfigWithLockHeld(await loadSettings(), undefined, signal));
+            await time('restart-start', () => operations.start(undefined, signal));
+          } catch (error) {
+            if (signal?.aborted) await time('restart-recovery-start', () => operations.start());
+            throw error;
+          }
+        }, signal));
+        if (parsed?.output === 'table') console.log('BRC services restarted.');
         return 0;
       },
       status: async () => {
@@ -333,15 +452,20 @@ async function main(): Promise<void> {
       config: async (configArgs, options) => runConfigCommand(configArgs, {
         manager: settingsManager,
         paths,
-        write: (message) => console.log(message),
-        json: options.json,
+        preview: options.preview,
+        signal: options.signal,
       }),
-      updateTraefik: async () => {
+      updateTraefik: async (signal) => {
+        if (parsed?.offline) throw new UsageError('--offline prevents Traefik release lookup and download.');
+        if (parsed?.preview) {
+          const preview = await traefikManager.previewUpdate(signal);
+          return cliSuccess({ command: 'update', component: 'traefik', preview: true, ...preview });
+        }
         const previous = await traefikManager.currentVersion();
-        await traefikManager.update();
+        await traefikManager.update(signal);
         const current = await traefikManager.currentVersion();
         if (!current) throw new Error('Traefik update completed without an installed version.');
-        console.log(current === previous ? `Traefik ${current} is current.` : `Traefik updated: ${previous ?? 'not installed'} → ${current}.`);
+        if (parsed?.output === 'table') console.log(current === previous ? `Traefik ${current} is current.` : `Traefik updated: ${previous ?? 'not installed'} → ${current}.`);
         return 0;
       },
       uninstall: maintenanceCommands.uninstall,
@@ -355,26 +479,26 @@ async function main(): Promise<void> {
     onTrace: async (summary) => appendTraceSummary(path.join(paths.logs, 'cli.log'), summary, {
       maxBytes: settings.logs.rotateMiB * 1024 * 1024,
     }),
+    signal: commandController.signal,
   };
-  const removeInterruptHandler = installProgressInterruptHandler(progress);
+  let commandPromise: Promise<number> | undefined;
   const removeCancellation = installCancellationHandlers({
+    abort: (signal) => {
+      const error = Object.assign(new Error(`Received ${signal}.`), { exitCode: SIGNAL_EXIT_CODES[signal] });
+      commandController.abort(error);
+    },
     flush: async () => {
       progress.stop();
-      if (trace) {
-        const summary = trace.finish('cancelled', 'INTERRUPTED');
-        try { await appendTraceSummary(path.join(paths.logs, 'cli.log'), summary, {
-          maxBytes: settings.logs.rotateMiB * 1024 * 1024,
-        }); } catch { /* diagnostics must not block exit */ }
-      }
+      await commandPromise?.catch(() => undefined);
       await diagnostics.stop();
     },
     exit: (code) => { process.exitCode = code; process.exit(code); },
   });
   try {
-    process.exitCode = await runCli(process.argv.slice(2), deps);
+    commandPromise = runCli(process.argv.slice(2), deps);
+    process.exitCode = await commandPromise;
   } finally {
     progress.stop();
-    removeInterruptHandler();
     removeCancellation();
     await diagnostics.stop();
   }
@@ -400,7 +524,24 @@ if (isMainModule()) {
       logFile: path.join(paths.logs, 'traefik-diagnostics.log'),
     });
     try {
-      await runManagedTraefikService(settings, diagnostics);
+      const snapshots = settings.diagnostics.enabled ? new FileSnapshotStore({ directory: paths.diagnostics }) : undefined;
+      const createBinaryResourceMonitor = snapshots ? async (pid: number, instanceId: string) => {
+        const identity = await inspectProcess(pid);
+        if (!identity) throw new Error('Traefik binary process identity could not be verified for resource sampling.');
+        return new ManagedProcessResourceSampler({
+          identity,
+          instanceId,
+          runtimeDirectory: paths.runtime,
+          intervalMs: settings.diagnostics.resourceSampleMs,
+          snapshots,
+          onError: (error) => diagnostics.log('Traefik binary resource sample failed.', {
+            level: 'warn',
+            error,
+            source: { file: 'adapters/process/resources.ts', function: 'ManagedProcessResourceSampler' },
+          }),
+        });
+      } : undefined;
+      await runManagedTraefikService(settings, diagnostics, { createBinaryResourceMonitor });
     } finally {
       await diagnostics.stop();
     }

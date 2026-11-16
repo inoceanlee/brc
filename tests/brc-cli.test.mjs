@@ -235,10 +235,12 @@ test('public URL persists through separate CLI invocations', async (t) => {
   const origin = 'https://brc.example.com';
   const saved = runCliProcess(['config', 'set', 'services.publicUrl', origin], root);
   assert.equal(saved.status, 0, saved.stderr);
-  assert.match(saved.stdout, /Restart/);
+  assert.match(saved.stdout, /restartRequired: true/);
   const loaded = runCliProcess(['config', 'get', 'services.publicUrl'], root);
   assert.equal(loaded.status, 0, loaded.stderr);
-  assert.match(loaded.stdout, /services\.publicUrl = https:\/\/brc\.example\.com \(file\)/);
+  assert.match(loaded.stdout, /key: services\.publicUrl/);
+  assert.match(loaded.stdout, /value: https:\/\/brc\.example\.com/);
+  assert.match(loaded.stdout, /source: file/);
 });
 
 test('data-root override resolves isolated paths without using Agent BRC_HOME', () => {
@@ -269,7 +271,8 @@ test('config set persists validated settings in the selected data root', async (
   const result = runCliProcess(['config', 'set', 'proxy.rate.average', '20'], root);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /proxy\.rate\.average = 20/);
+  assert.match(result.stdout, /key: proxy\.rate\.average/);
+  assert.match(result.stdout, /value: 20/);
   const config = await readFile(path.join(root, 'config', 'brc.yaml'), 'utf8');
   assert.match(config, /average: 20/);
 });
@@ -523,4 +526,57 @@ test('non-TTY output error during backpressure permits interrupt cleanup', async
   const stopping = progress.stopAndWait();
   output.emit('error', Object.assign(new Error('closed'), { code: 'EPIPE' }));
   await stopping;
+});
+
+test('no-color progress avoids ANSI and quiet progress emits nothing', async () => {
+  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const output = { isTTY: true, text: '', write(value) { this.text += value; } };
+  const plain = new TraefikProgress(output, { color: false });
+  plain.report({ operation: 'setup', stage: 'download', status: 'started' });
+  plain.stop();
+  assert.doesNotMatch(output.text, /\x1b/);
+  const quietOutput = { isTTY: true, text: '', write(value) { this.text += value; } };
+  const quiet = new TraefikProgress(quietOutput, { enabled: false });
+  quiet.report({ operation: 'update', stage: 'download', status: 'started' });
+  quiet.stop();
+  assert.equal(quietOutput.text, '');
+});
+
+test('command timeout aborts the active operation, reports JSON error, and still cleans', () => {
+  const result = runProbe(`
+const paths = resolveBrcPaths({ BRC_DATA_ROOT: process.env.TEMP + '/brc-cli-timeout-probe' });
+const errors = [];
+let aborted = false;
+let cleaned = false;
+const deps = {
+  paths,
+  commands: {
+    setup: async () => 0,
+    start: async (signal) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => { aborted = true; reject(signal.reason); }, { once: true });
+      if (signal.aborted) { aborted = true; reject(signal.reason); }
+    }),
+    stop: async () => 0,
+    restart: async () => 0,
+    status: async () => 0,
+    logs: async () => 0,
+    config: async () => 0,
+    updateTraefik: async () => 0,
+    uninstall: async () => 0,
+  },
+  clean: async () => { cleaned = true; },
+  write: () => {},
+  writeError: (message) => errors.push(message),
+};
+const exitCode = await runCli(['start', '--timeout=25ms', '--json'], deps);
+console.log(JSON.stringify({ exitCode, aborted, cleaned, error: errors[0] }));
+`);
+  assert.equal(result.status, 0, result.stderr);
+  const value = JSON.parse(result.stdout.trim());
+  assert.equal(value.exitCode, 1);
+  assert.equal(value.aborted, true);
+  assert.equal(value.cleaned, true);
+  const error = JSON.parse(value.error);
+  assert.equal(error.exit_code, 1);
+  assert.match(error.message, /timed out after 25 ms/i);
 });

@@ -19,20 +19,39 @@ export interface TraefikProgressEvent {
 export type TraefikProgressReporter = (event: TraefikProgressEvent) => void;
 
 export interface TraefikManagerOptions extends TraefikInputOptions {
-  verifyExecutable?: (filename: string, version: string) => Promise<void>;
-  healthCheck?: (filename: string, version: string) => Promise<void>;
+  input?: TraefikInput;
+  output?: TraefikOutput;
+  verifyExecutable?: (filename: string, version: string, signal?: AbortSignal) => Promise<void>;
+  healthCheck?: (filename: string, version: string, signal?: AbortSignal) => Promise<void>;
   loadSettings?: () => Promise<Readonly<BrcSettings>>;
   reporter?: TraefikProgressReporter;
 }
 
 export type TraefikLifecycle = Pick<ServiceManager, 'status' | 'withLock'>;
 
+function waitForTraefikQueue(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) return previous;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('Traefik operation cancelled.'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new Error('Traefik operation cancelled.'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    previous.then(() => {
+      signal.removeEventListener('abort', onAbort);
+      if (signal.aborted) reject(signal.reason ?? new Error('Traefik operation cancelled.'));
+      else resolve();
+    }, (error) => {
+      signal.removeEventListener('abort', onAbort);
+      reject(error);
+    });
+  });
+}
+
 export class TraefikManager {
   private queue: Promise<void> = Promise.resolve();
   private readonly input: TraefikInput;
   private readonly output: TraefikOutput;
-  private readonly verify: (filename: string, version: string) => Promise<void>;
-  private readonly healthCheck: (filename: string, version: string) => Promise<void>;
+  private readonly verify: (filename: string, version: string, signal?: AbortSignal) => Promise<void>;
+  private readonly healthCheck: (filename: string, version: string, signal?: AbortSignal) => Promise<void>;
   private readonly loadSettings: () => Promise<Readonly<BrcSettings>>;
   private readonly reporter?: TraefikProgressReporter;
 
@@ -42,23 +61,25 @@ export class TraefikManager {
     private readonly lifecycle: TraefikLifecycle,
     options: TraefikManagerOptions = {},
   ) {
-    this.input = new TraefikInput(options);
-    this.output = new TraefikOutput(paths);
+    this.input = options.input ?? new TraefikInput(options);
+    this.output = options.output ?? new TraefikOutput(paths);
     this.reporter = options.reporter;
     this.loadSettings = options.loadSettings ?? (async () => settings);
-    this.verify = options.verifyExecutable ?? ((filename, version) => verifyExecutable(filename, version, settings));
-    this.healthCheck = options.healthCheck ?? (async (filename) => runHealthProbe(filename, paths, settings, await this.input.readTemplates()));
+    this.verify = options.verifyExecutable ?? ((filename, version, signal) => verifyExecutable(filename, version, settings, signal));
+    this.healthCheck = options.healthCheck ?? (async (filename, _version, signal) => runHealthProbe(filename, paths, settings, await this.input.readTemplates(), signal));
   }
 
-  setup(): Promise<void> {
+  setup(signal?: AbortSignal): Promise<void> {
     return this.exclusive(async () => {
+      signal?.throwIfAborted();
       await this.prepareDirectories();
       const installed = await readManifest(this.paths.traefik);
       if (installed) {
         const executable = await this.output.executableFor(installed.current);
-        await this.progress('setup', 'verify', () => this.verify(executable, installed.current));
-        await this.progress('setup', 'health', () => this.healthCheck(executable, installed.current));
+        await this.progress('setup', 'verify', () => this.verify(executable, installed.current, signal));
+        await this.progress('setup', 'health', () => this.healthCheck(executable, installed.current, signal));
         await this.lifecycle.withLock(async () => {
+          signal?.throwIfAborted();
           const current = await readManifest(this.paths.traefik);
           if (!current || current.current !== installed.current) {
             throw new Error('Traefik installation changed while setup was waiting for the lifecycle lock.');
@@ -67,32 +88,45 @@ export class TraefikManager {
           if (status?.state === 'starting' || status?.state === 'degraded') {
             throw new Error(`Cannot apply Traefik configuration while its service is ${status.state}: ${status.detail}`);
           }
-          if (status?.state !== 'running') await this.writeCurrentConfig();
-        });
+          if (status?.state !== 'running') await this.writeCurrentConfig(signal);
+        }, signal);
         return;
       }
 
-      const release = await this.progress('setup', 'release', () => this.input.latestRelease());
-      const stage = await this.stageRelease(release, 'setup');
+      const release = await this.progress('setup', 'release', () => this.input.latestRelease(signal));
+      const stage = await this.stageRelease(release, 'setup', signal);
       try {
-        await this.progress('setup', 'health', () => this.validateCandidate(stage, release));
+        await this.progress('setup', 'health', () => this.validateCandidate(stage, release, signal));
         await this.lifecycle.withLock(async () => {
+          signal?.throwIfAborted();
           if (await readManifest(this.paths.traefik)) return;
-          await this.writeCurrentConfig();
+          await this.writeCurrentConfig(signal);
           await this.progress('setup', 'activate', () => this.output.promoteVersion(stage, release.version, null));
-        });
+        }, signal);
       } finally {
         await rm(stage, { recursive: true, force: true });
       }
-    });
+    }, signal);
   }
 
-  update(): Promise<void> {
+  async previewUpdate(signal?: AbortSignal): Promise<{ current: string; target: string; changed: boolean }> {
+    const installed = await readManifest(this.paths.traefik);
+    if (!installed) throw new Error('Traefik is not installed. Run brc setup first.');
+    const release = await this.input.latestRelease(signal);
+    return {
+      current: installed.current,
+      target: release.version,
+      changed: installed.current !== release.version,
+    };
+  }
+
+  update(signal?: AbortSignal): Promise<void> {
     return this.exclusive(async () => {
+      signal?.throwIfAborted();
       await this.prepareDirectories();
       const initiallyInstalled = await readManifest(this.paths.traefik);
       if (!initiallyInstalled) throw new Error('Traefik is not installed. Run brc setup first.');
-      const release = await this.progress('update', 'release', () => this.input.latestRelease());
+      const release = await this.progress('update', 'release', () => this.input.latestRelease(signal));
       if (release.version === initiallyInstalled.current) {
         await this.lifecycle.withLock(async () => {
           const current = await readManifest(this.paths.traefik);
@@ -100,14 +134,15 @@ export class TraefikManager {
           if (current.current !== release.version) {
             throw new Error('Traefik installation changed while update was waiting for the lifecycle lock; retry the update.');
           }
-        });
+        }, signal);
         return;
       }
 
-      const stage = await this.stageRelease(release, 'update');
+      const stage = await this.stageRelease(release, 'update', signal);
       try {
-        await this.progress('update', 'health', () => this.validateCandidate(stage, release));
+        await this.progress('update', 'health', () => this.validateCandidate(stage, release, signal));
         await this.lifecycle.withLock(async (operations) => {
+          signal?.throwIfAborted();
           const installed = await readManifest(this.paths.traefik);
           if (!installed) throw new Error('Traefik is not installed. Run brc setup first.');
           if (release.version === installed.current) {
@@ -116,35 +151,39 @@ export class TraefikManager {
           const running = await this.isRunning();
           try {
             if (running) await operations.stop();
+            signal?.throwIfAborted();
             await this.progress('update', 'activate', () => this.output.promoteVersion(stage, release.version, installed.current));
+            signal?.throwIfAborted();
             if (running) {
-              await operations.start();
+              await operations.start(undefined, signal);
               if (!await this.isRunning()) throw new Error('Traefik did not become healthy after update.');
             }
           } catch (error) {
             await this.restoreVersion(installed, running, operations, error);
           }
-        });
+        }, signal);
       } finally {
         await rm(stage, { recursive: true, force: true });
       }
-    });
+    }, signal);
   }
 
   async currentVersion(): Promise<string | null> {
     return (await readManifest(this.paths.traefik))?.current ?? null;
   }
 
-  rollbackUpdate(): Promise<void> {
+  rollbackUpdate(signal?: AbortSignal): Promise<void> {
     return this.exclusive(async () => {
+      signal?.throwIfAborted();
       const initial = await readManifest(this.paths.traefik);
       if (!initial?.previous) throw new Error('No previous Traefik version is available for rollback.');
       const previousVersion = initial.previous;
       const executable = await this.output.executableFor(previousVersion);
-      await this.progress('rollback', 'verify', () => this.verify(executable, previousVersion));
-      await this.progress('rollback', 'health', () => this.healthCheck(executable, previousVersion));
+      await this.progress('rollback', 'verify', () => this.verify(executable, previousVersion, signal));
+      await this.progress('rollback', 'health', () => this.healthCheck(executable, previousVersion, signal));
       const rollback: VersionManifest = { version: 1, current: previousVersion, previous: initial.current };
       await this.lifecycle.withLock(async (operations) => {
+        signal?.throwIfAborted();
         const installed = await readManifest(this.paths.traefik);
         if (!installed || installed.current !== initial.current || installed.previous !== initial.previous) {
           throw new Error('Traefik installation changed while rollback was waiting for the lifecycle lock.');
@@ -152,7 +191,9 @@ export class TraefikManager {
         const wasRunning = await this.isRunning();
         try {
           if (wasRunning) await operations.stop();
+          signal?.throwIfAborted();
           await this.progress('rollback', 'activate', () => this.output.writeManifest(rollback));
+          signal?.throwIfAborted();
           if (wasRunning) {
             await operations.start();
             if (!await this.isRunning()) throw new Error('Traefik did not become healthy after rollback.');
@@ -160,27 +201,29 @@ export class TraefikManager {
         } catch (error) {
           await this.restoreVersion(installed, wasRunning, operations, error);
         }
-      });
-    });
+      }, signal);
+    }, signal);
   }
 
-  writeConfig(previous?: Readonly<BrcSettings>): Promise<void> {
+  writeConfig(previous?: Readonly<BrcSettings>, signal?: AbortSignal): Promise<void> {
     return this.lifecycle.withLock(async () => {
-      await this.progress('config', 'config', async () => this.writeConfigAndConfirm(await this.loadSettings(), previous));
-    });
+      await this.progress('config', 'config', async () => this.writeConfigAndConfirm(await this.loadSettings(), previous, signal));
+    }, signal);
   }
-  writeConfigWithLockHeld(settings: Readonly<BrcSettings>, previous?: Readonly<BrcSettings>): Promise<void> {
-    return this.progress('config', 'config', () => this.writeConfigAndConfirm(settings, previous));
+  writeConfigWithLockHeld(settings: Readonly<BrcSettings>, previous?: Readonly<BrcSettings>, signal?: AbortSignal): Promise<void> {
+    return this.progress('config', 'config', () => this.writeConfigAndConfirm(settings, previous, signal));
   }
 
-  private async writeCurrentConfig(): Promise<void> {
-    await this.writeConfigAndConfirm(await this.loadSettings(), undefined);
+  private async writeCurrentConfig(signal?: AbortSignal): Promise<void> {
+    await this.writeConfigAndConfirm(await this.loadSettings(), undefined, signal);
   }
 
   private async writeConfigAndConfirm(
     settings: Readonly<BrcSettings>,
     previous: Readonly<BrcSettings> | undefined,
+    signal?: AbortSignal,
   ): Promise<void> {
+    signal?.throwIfAborted();
     const status = await this.serviceStatus();
     if (status?.state === 'starting' || status?.state === 'degraded') {
       throw new Error(`Cannot apply Traefik configuration while its service is ${status.state}: ${status.detail}`);
@@ -201,29 +244,30 @@ export class TraefikManager {
     const ports = previous
       ? [settings.services.healthPort, previous.services.healthPort]
       : [settings.services.healthPort];
-    await waitForConfigGeneration(ports, generation, settings.runtime.startupTimeoutMs);
+    await waitForConfigGeneration(ports, generation, settings.runtime.startupTimeoutMs, signal);
   }
 
   private async serviceStatus() {
     return (await this.lifecycle.status()).find((service) => service.name === 'traefik');
   }
 
-  private async validateCandidate(stage: string, release: TraefikRelease): Promise<void> {
+  private async validateCandidate(stage: string, release: TraefikRelease, signal?: AbortSignal): Promise<void> {
     const executableName = process.platform === 'win32' ? 'traefik.exe' : 'traefik';
     const executable = path.join(stage, executableName);
-    await this.verify(executable, release.version);
-    await this.healthCheck(executable, release.version);
+    await this.verify(executable, release.version, signal);
+    await this.healthCheck(executable, release.version, signal);
   }
 
-  private async stageRelease(release: TraefikRelease, operation: 'setup' | 'update'): Promise<string> {
+  private async stageRelease(release: TraefikRelease, operation: 'setup' | 'update', signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     const checksum = await this.progress(operation, 'release', async () =>
-      readChecksum(await this.input.downloadChecksum(release), release.archiveName));
+      readChecksum(await this.input.downloadChecksum(release, signal), release.archiveName));
     this.emit({ operation, stage: 'download', status: 'started' });
     let archive: Buffer;
     try {
       archive = await this.input.downloadArchive(release, (completedBytes, totalBytes) => {
         this.emit({ operation, stage: 'download', status: 'started', completedBytes, totalBytes });
-      });
+      }, signal);
       this.emit({ operation, stage: 'download', status: 'completed' });
     } catch (error) {
       this.emit({ operation, stage: 'download', status: 'failed' });
@@ -293,9 +337,14 @@ export class TraefikManager {
     await ensureSafeDirectory(this.paths.root, this.paths.tmp);
   }
 
-  private exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.queue.then(operation);
-    this.queue = result.then(() => undefined, () => undefined);
-    return result;
+  private exclusive<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) return Promise.reject(signal.reason ?? new Error('Traefik operation cancelled.'));
+    const previous = this.queue;
+    const queued = previous.then(() => {
+      signal?.throwIfAborted();
+      return operation();
+    });
+    this.queue = queued.then(() => undefined, () => undefined);
+    return waitForTraefikQueue(previous, signal).then(() => queued);
   }
 }

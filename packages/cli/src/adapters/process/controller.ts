@@ -13,7 +13,7 @@ import { inspectProcess, inspectProcesses, type ProcessIdentity } from './identi
 export { inspectProcess } from './identity.js';
 export type { ProcessIdentity } from './identity.js';
 
-import type { ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
+import type { ControlHealthPort, ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
 export type { ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
 
 export interface ManagedProcessRecord extends ProcessIdentity {
@@ -86,19 +86,28 @@ function isValidSpec(spec: ManagedServiceSpec): void {
   }
 }
 
+function matchesRecordedInstallation(record: ManagedProcessRecord, spec: ManagedServiceSpec): boolean {
+  if (!isWithin(record.workspaceRoot, record.entrypoint) || !isWithin(spec.workspaceRoot, spec.entrypoint)) return false;
+  if (samePath(record.workspaceRoot, spec.workspaceRoot) && samePath(record.entrypoint, spec.entrypoint)) return true;
+  const previousRelative = path.relative(record.workspaceRoot, record.entrypoint);
+  const currentRelative = path.relative(spec.workspaceRoot, spec.entrypoint);
+  if (process.platform === 'win32') return previousRelative.toLowerCase() === currentRelative.toLowerCase();
+  return previousRelative === currentRelative;
+}
+
 function sameIdentity(record: ManagedProcessRecord, current: ProcessIdentity, spec: ManagedServiceSpec): boolean {
   const commandLine = normalizeCommandLine(current.commandLine);
-  const expectedEntry = normalizeCommandLine(path.resolve(spec.entrypoint));
+  const storedCommand = normalizeCommandLine(record.commandLine);
+  const expectedEntry = normalizeCommandLine(path.resolve(record.entrypoint));
   const managedId = `--brc-managed-id=${record.id}`;
   const normalizedId = process.platform === 'win32' ? managedId.toLowerCase() : managedId;
   return current.pid === record.pid
     && current.createdAt === record.createdAt
     && samePath(current.executablePath, record.executablePath)
     && samePath(current.executablePath, process.execPath)
-    && samePath(record.workspaceRoot, spec.workspaceRoot)
-    && samePath(record.entrypoint, spec.entrypoint)
-    && isWithin(record.workspaceRoot, record.entrypoint)
-    && commandLine.includes(expectedEntry)
+    && matchesRecordedInstallation(record, spec)
+    && commandLine === storedCommand
+    && storedCommand.includes(expectedEntry)
     && commandLine.includes(normalizedId);
 }
 
@@ -164,7 +173,7 @@ export function isStaleFromPreviousBoot(mtimeMs: number): boolean {
 }
 
 
-export class ProcessManager {
+export class ProcessManager implements ControlHealthPort {
   private startupTimeoutMs: number;
   private shutdownTimeoutMs: number;
   private readonly pollIntervalMs: number;
@@ -184,7 +193,8 @@ export class ProcessManager {
     this.shutdownTimeoutMs = settings.shutdownTimeoutMs;
   }
 
-  async start(spec: ManagedServiceSpec): Promise<void> {
+  async start(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     isValidSpec(spec);
     if (this.starting.has(spec.name)) throw new Error(`${spec.name} is already starting.`);
     this.starting.set(spec.name, null);
@@ -197,6 +207,7 @@ export class ProcessManager {
 
     try {
       await mkdir(this.paths.runtime, { recursive: true });
+      signal?.throwIfAborted();
       let current: ManagedProcessRecord | null = null;
       try {
         current = await this.readRecord(spec);
@@ -213,7 +224,7 @@ export class ProcessManager {
           // Safely evict the stale record without killing the unrelated foreign process.
           await this.removeRecord(spec.name);
         } else {
-          const health = await this.readHealth(current);
+          const health = await this.readHealth(current, Infinity, signal);
           if ((health.state === 'running' && health.ok) || (spec.name === 'agent' && health.state === 'pairing')) return;
           throw new Error(`${spec.name} is already managed but unhealthy: ${health.detail}`);
         }
@@ -227,13 +238,16 @@ export class ProcessManager {
         BRC_MANAGED_ID: id,
         BRC_MANAGED_SERVICE: spec.name,
       };
+      signal?.throwIfAborted();
       child = spawn(process.execPath, [spec.entrypoint, ...(spec.args ?? []), `--brc-managed-id=${id}`], {
         cwd: spec.cwd,
         env: environment,
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
+        signal,
       });
+      child.once('error', () => undefined);
       let exit: { code: number | null; signal: NodeJS.Signals | null } | null = null;
       child.on('exit', (code, signal) => { exit = { code, signal }; });
       await once(child, 'spawn');
@@ -242,7 +256,7 @@ export class ProcessManager {
       this.starting.set(spec.name, child.pid);
       const deadline = Date.now() + (spec.startupTimeoutMs ?? this.startupTimeoutMs);
 
-      const ready = await this.waitForReady(child, spec, readyFile, id, () => exit, deadline);
+      const ready = await this.waitForReady(child, spec, readyFile, id, () => exit, deadline, signal);
       const identity = await this.inspect(child.pid);
       if (!identity || !this.isCandidateIdentity(identity, spec, id)) {
         throw new Error(`${spec.name} process identity could not be verified after startup.`);
@@ -261,7 +275,7 @@ export class ProcessManager {
         controlToken: token,
       };
       await this.writeRecord(record);
-      await this.waitForHealthy(record, spec, child, () => exit, deadline);
+      await this.waitForHealthy(record, spec, child, () => exit, deadline, signal);
       await this.removeReadyFile(readyFile);
       readyRemoved = true;
       if (exit || child.exitCode !== null || child.signalCode !== null) {
@@ -276,6 +290,7 @@ export class ProcessManager {
         cleanupError = failure;
       }
       if (cleanupError) throw new AggregateError([error, cleanupError], `${spec.name} failed to start and could not be safely rolled back.`);
+      if (signal?.aborted) throw signal.reason ?? error;
       throw error;
     } finally {
       this.starting.delete(spec.name);
@@ -283,11 +298,27 @@ export class ProcessManager {
     }
   }
 
-  async stop(spec: ManagedServiceSpec): Promise<void> {
+  async stop(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     isValidSpec(spec);
     const record = await this.readRecord(spec);
     if (!record) return;
     await this.stopRecord(spec, record, true);
+  }
+
+  async check(spec: ManagedServiceSpec, signal?: AbortSignal): Promise<{ ready: boolean; detail: string }> {
+    signal?.throwIfAborted();
+    isValidSpec(spec);
+    const record = await this.readRecord(spec);
+    if (!record) return { ready: false, detail: 'No managed process record is available.' };
+    try {
+      const health = await this.readHealth(record, Date.now() + this.startupTimeoutMs, signal);
+      const ready = health.ok && (health.state === 'running' || (spec.name === 'agent' && health.state === 'pairing'));
+      return { ready, detail: health.detail };
+    } catch (error) {
+      signal?.throwIfAborted();
+      return { ready: false, detail: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   async status(spec: ManagedServiceSpec): Promise<ServiceStatus> {
@@ -389,8 +420,10 @@ export class ProcessManager {
     id: string,
     getExit: () => { code: number | null; signal: NodeJS.Signals | null } | null,
     deadline: number,
+    signal?: AbortSignal,
   ): Promise<ReadyInfo> {
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       const exit = getExit();
       if (exit) throw new Error(`${spec.name} exited before readiness (code ${exit.code ?? 'null'}, signal ${exit.signal ?? 'none'}).`);
       if (!child.pid) throw new Error(`${spec.name} did not receive a PID.`);
@@ -401,7 +434,7 @@ export class ProcessManager {
       } catch (error) {
         if (errorCode(error) !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
       }
-      await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())));
+      await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())), undefined, { signal });
     }
     throw new Error(`${spec.name} did not publish a ready control endpoint before timeout.`);
   }
@@ -412,14 +445,16 @@ export class ProcessManager {
     child: ChildProcess,
     getExit: () => { code: number | null; signal: NodeJS.Signals | null } | null,
     deadline: number,
+    signal?: AbortSignal,
   ): Promise<void> {
     let detail = 'Health endpoint did not report ready.';
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       if (getExit() || child.exitCode !== null || child.signalCode !== null) {
         throw new Error(`${spec.name} exited during startup.`);
       }
       try {
-        const health = await this.readHealth(record, deadline);
+        const health = await this.readHealth(record, deadline, signal);
         if (getExit() || child.exitCode !== null || child.signalCode !== null) {
           throw new Error(`${spec.name} exited during startup.`);
         }
@@ -427,36 +462,41 @@ export class ProcessManager {
         if (health.ok && health.state === 'running') return;
         if (spec.name === 'agent' && health.state === 'pairing') return;
       } catch (error) {
+        signal?.throwIfAborted();
         if (getExit() || child.exitCode !== null || child.signalCode !== null) {
           throw new Error(`${spec.name} exited during startup.`, { cause: error });
         }
         detail = processErrorMessage(error);
       }
-      await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())));
+      await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())), undefined, { signal });
     }
     throw new Error(`${spec.name} did not become healthy: ${detail}`);
   }
 
-  private async readHealth(record: ManagedProcessRecord, deadline = Infinity): Promise<HealthInfo> {
+  private async readHealth(record: ManagedProcessRecord, deadline = Infinity, signal?: AbortSignal): Promise<HealthInfo> {
+    signal?.throwIfAborted();
     if (record.controlPort < 1) throw new Error('Missing managed control port.');
     for (let attempt = 0; attempt <= HEALTH_RETRY_COUNT; attempt++) {
       try {
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error('Health request deadline expired.');
         const attemptTimeout = attempt === 0 ? 500 : CONTROL_REQUEST_TIMEOUT_MS;
-        return await this.requestHealth(record, Math.min(attemptTimeout, remaining));
+        return await this.requestHealth(record, Math.min(attemptTimeout, remaining), signal);
       } catch (error) {
+        signal?.throwIfAborted();
         if (attempt === HEALTH_RETRY_COUNT || Date.now() >= deadline) throw error;
-        await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())));
+        await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())), undefined, { signal });
       }
     }
     throw new Error('Health request exhausted all retries.');
   }
 
-  private async requestHealth(record: ManagedProcessRecord, timeoutMs: number): Promise<HealthInfo> {
+  private async requestHealth(record: ManagedProcessRecord, timeoutMs: number, signal?: AbortSignal): Promise<HealthInfo> {
+    const timeoutSignal = AbortSignal.timeout(timeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await fetch(`http://127.0.0.1:${record.controlPort}/health`, {
       headers: { authorization: `Bearer ${record.controlToken}` },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: requestSignal,
     });
     const health = await response.json() as Partial<HealthInfo>;
     return {
@@ -568,7 +608,7 @@ export class ProcessManager {
         return null;
       }
       const record = parseProcessRecord(JSON.parse(await readFile(filename, 'utf8')), spec);
-      if (!samePath(record.workspaceRoot, spec.workspaceRoot) || !samePath(record.entrypoint, spec.entrypoint)) {
+      if (!matchesRecordedInstallation(record, spec)) {
         throw new Error(`${spec.name} process record belongs to another workspace; refusing process control.`);
       }
       return record;

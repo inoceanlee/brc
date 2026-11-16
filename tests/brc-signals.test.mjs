@@ -37,3 +37,18 @@ test('a failing flush still exits with the signal code', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(exits, [143]);
 });
+
+test('signal cancellation aborts the active command before flushing diagnostics', async () => {
+  const source = new EventEmitter();
+  const order = [];
+  const dispose = installCancellationHandlers({
+    abort: (signal) => order.push('abort:' + signal),
+    flush: async () => { order.push('flush'); },
+    exit: (code) => order.push('exit:' + code),
+    signalSource: source,
+  });
+  source.emit('SIGTERM');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ['abort:SIGTERM', 'flush', 'exit:143']);
+  dispose();
+});

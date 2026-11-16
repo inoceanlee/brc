@@ -6,15 +6,17 @@ export function createMaintenanceCommands(
   paths: BrcPaths,
   write: (message: string) => void,
   writeError: (message: string) => void,
-  dependencies: { stopServices: () => Promise<void> },
+  dependencies: { stopServices: (signal?: AbortSignal) => Promise<void>; confirm?: (root: string) => Promise<boolean> },
+
 ) {
   return {
     logs: (component?: LogComponent) => showLogs(paths, component, write, writeError),
-    uninstall: ({ yes }: { yes: boolean }, clean: () => Promise<void>) => uninstallBrc({
+    uninstall: ({ yes, structuredOutput, signal }: { yes: boolean; structuredOutput?: boolean; signal?: AbortSignal }, clean: () => Promise<void>) => uninstallBrc({
       yes,
+      structuredOutput,
+      stopServices: () => dependencies.stopServices(signal),
       paths,
-      confirm: confirmBrcUninstall,
-      stopServices: dependencies.stopServices,
+      confirm: dependencies.confirm ?? confirmBrcUninstall,
       clean,
       preparePackageRemoval: detectGlobalBrcPackageManager,
       removePackage: removeGlobalBrcPackage,
