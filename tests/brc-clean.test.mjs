@@ -219,6 +219,9 @@ test('removes a valid process record only after its process exits', async (t) =>
     if ((await harness.manager.status(harness.spec)).state === 'stopped') break;
     await sleep(100);
   }
+  const recordFile = path.join(harness.paths.runtime, 'relay.json');
+  const previousBoot = new Date(Date.now() - os.uptime() * 1000 - DAY);
+  await utimes(recordFile, previousBoot, previousBoot);
 
   await cleanRuntime(harness.paths);
 

@@ -111,6 +111,14 @@ function sameIdentity(record: ManagedProcessRecord, current: ProcessIdentity, sp
     && commandLine.includes(normalizedId);
 }
 
+function confirmedReused(record: ManagedProcessRecord, current: ProcessIdentity): boolean {
+  const managedId = `--brc-managed-id=${record.id}`;
+  const normalizedId = process.platform === 'win32' ? managedId.toLowerCase() : managedId;
+  const commandLine = normalizeCommandLine(current.commandLine);
+  return current.pid === record.pid && current.createdAt !== record.createdAt
+    && commandLine !== normalizeCommandLine(record.commandLine) && !commandLine.includes(normalizedId);
+}
+
 function parseProcessRecord(value: unknown, spec: ManagedServiceSpec): ManagedProcessRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${spec.name} process record is malformed; refusing process control.`);
@@ -171,9 +179,18 @@ export function isStaleFromPreviousBoot(mtimeMs: number): boolean {
   const bootTimeMs = Date.now() - (os.uptime() * 1000);
   return mtimeMs < (bootTimeMs - 5000);
 }
-function processDefinitelyExited(pid: number): boolean {
+async function processDefinitelyExited(pid: number): Promise<boolean> {
   try {
     process.kill(pid, 0);
+    if (process.platform === 'linux') {
+      try {
+        const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+        const close = stat.lastIndexOf(')');
+        return close >= 0 && stat.slice(close + 2).startsWith('Z ');
+      } catch {
+        return false;
+      }
+    }
     return false;
   } catch (error) {
     return errorCode(error) === 'ESRCH';
@@ -221,12 +238,12 @@ export class ProcessManager implements ControlHealthPort {
       if (current) {
         const identity = await this.inspect(current.pid);
         if (!identity) {
-          if (!processDefinitelyExited(current.pid)) throw new Error(`${spec.name} process identity cannot be verified; refusing to start.`);
+          if (!await processDefinitelyExited(current.pid)) throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to start.`), { exitCode: 5 });
           await this.removeRecord(spec.name);
-        } else if (identity.createdAt !== current.createdAt) {
+        } else if (confirmedReused(current, identity)) {
           await this.removeRecord(spec.name);
         } else if (!sameIdentity(current, identity, spec)) {
-          throw new Error(`${spec.name} process identity cannot be verified; refusing to start.`);
+          throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to start.`), { exitCode: 5 });
         } else {
           const health = await this.readHealth(current, Infinity, signal);
           if ((health.state === 'running' && health.ok) || (spec.name === 'agent' && health.state === 'pairing')) return;
@@ -343,10 +360,10 @@ export class ProcessManager implements ControlHealthPort {
     } catch (error) {
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: `Cannot verify process identity: ${processErrorMessage(error)}` };
     }
-    if (!identity) return processDefinitelyExited(record.pid)
+    if (!identity) return await processDefinitelyExited(record.pid)
       ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
       : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
-    if (identity.createdAt !== record.createdAt) {
+    if (confirmedReused(record, identity)) {
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Recorded PID was reused; process identity changed.' };
     }
     if (!sameIdentity(record, identity, spec)) {
@@ -399,10 +416,10 @@ export class ProcessManager implements ControlHealthPort {
       if (status) return status;
       if (!record) throw new Error('Missing process record.');
       const identity = identities.get(record.pid);
-      if (!identity) return processDefinitelyExited(record.pid)
+      if (!identity) return await processDefinitelyExited(record.pid)
         ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
         : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
-      if (identity.createdAt !== record.createdAt) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Recorded PID was reused; process identity changed.' };
+      if (confirmedReused(record, identity)) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Recorded PID was reused; process identity changed.' };
       if (!sameIdentity(record, identity, spec)) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
       try {
         const health = await this.readHealth(record);
@@ -520,14 +537,23 @@ export class ProcessManager implements ControlHealthPort {
 
   private async stopRecord(spec: ManagedServiceSpec, record: ManagedProcessRecord, removeRecord: boolean, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted();
-    const current = await this.inspect(record.pid);
+    let current: ProcessIdentity | null;
+    try {
+      current = await this.inspect(record.pid);
+    } catch (error) {
+      throw Object.assign(new Error(`${spec.name} process identity cannot be verified: ${processErrorMessage(error)}`, { cause: error }), { exitCode: 5 });
+    }
     signal?.throwIfAborted();
     if (!current) {
-      if (!processDefinitelyExited(record.pid)) throw new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`);
+      if (!await processDefinitelyExited(record.pid)) throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`), { exitCode: 5 });
       if (removeRecord) await this.removeRecord(spec.name);
       return;
     }
-    if (!sameIdentity(record, current, spec)) throw new Error(`${spec.name} process identity changed; refusing to stop PID ${record.pid}.`);
+    if (confirmedReused(record, current)) {
+      if (removeRecord) await this.removeRecord(spec.name);
+      return;
+    }
+    if (!sameIdentity(record, current, spec)) throw Object.assign(new Error(`${spec.name} process identity changed; refusing to stop PID ${record.pid}.`), { exitCode: 5 });
 
     if (record.controlPort > 0) {
       try {
@@ -546,11 +572,11 @@ export class ProcessManager implements ControlHealthPort {
       const latest = await this.inspect(record.pid);
       signal?.throwIfAborted();
       if (!latest) {
-        if (!processDefinitelyExited(record.pid)) throw new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`);
+        if (!await processDefinitelyExited(record.pid)) throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to stop PID ${record.pid}.`), { exitCode: 5 });
         if (removeRecord) await this.removeRecord(spec.name);
         return;
       }
-      if (!sameIdentity(record, latest, spec)) throw new Error(`${spec.name} process identity changed before forced stop; refusing PID ${record.pid}.`);
+      if (!sameIdentity(record, latest, spec)) throw Object.assign(new Error(`${spec.name} process identity changed before forced stop; refusing PID ${record.pid}.`), { exitCode: 5 });
       signal?.throwIfAborted();
       try {
         if (process.platform === 'win32') process.kill(record.pid);
@@ -573,10 +599,10 @@ export class ProcessManager implements ControlHealthPort {
       const current = await this.inspect(record.pid);
       signal?.throwIfAborted();
       if (!current) {
-        if (processDefinitelyExited(record.pid)) return true;
-        throw new Error(`${spec.name} process identity cannot be verified; refusing process control.`);
+        if (await processDefinitelyExited(record.pid)) return true;
+        throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing process control.`), { exitCode: 5 });
       }
-      if (!sameIdentity(record, current, spec)) throw new Error(`${spec.name} PID ${record.pid} no longer matches its recorded identity.`);
+      if (!sameIdentity(record, current, spec)) throw Object.assign(new Error(`${spec.name} PID ${record.pid} no longer matches its recorded identity.`), { exitCode: 5 });
       await sleep(this.pollIntervalMs, undefined, { signal });
     }
     signal?.throwIfAborted();
@@ -636,7 +662,7 @@ export class ProcessManager implements ControlHealthPort {
       return record;
     } catch (error) {
       if (errorCode(error) === 'ENOENT') return null;
-      throw error;
+      throw Object.assign(new Error(`${spec.name} process record cannot be verified: ${processErrorMessage(error)}`, { cause: error }), { exitCode: 5 });
     }
   }
   private async writeRecord(record: ManagedProcessRecord): Promise<void> {

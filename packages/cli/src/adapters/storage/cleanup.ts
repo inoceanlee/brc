@@ -1,5 +1,6 @@
 import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../../config/paths.js';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../../config/settings.js';
 import { inspectProcess, isStaleFromPreviousBoot, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../process/controller.js';
@@ -179,7 +180,7 @@ async function runtimeSnapshot(paths: BrcPaths, report: CleanupReport): Promise<
     const entryPath = path.join(paths.runtime, entry.name);
     try {
       const fileInfo = await lstat(entryPath);
-      if (isStaleFromPreviousBoot(fileInfo.mtimeMs) && entry.name !== 'traefik-child.json') return;
+      if (isStaleFromPreviousBoot(fileInfo.mtimeMs) && !names.has(entry.name)) return;
       const value = JSON.parse((await readRegularFile(entryPath)).contents) as unknown;
       if (value && typeof value === 'object' && 'pid' in value
           && typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0) pids.add(value.pid);
@@ -214,6 +215,16 @@ async function removeUnchangedRecord(
   if (await inspectProcess(pid)) {
     issue(report.preserved, filename, 'Process is live or its PID was reused during cleanup.');
     return false;
+  }
+  try {
+    process.kill(pid, 0);
+    issue(report.preserved, filename, 'Process may still be active.');
+    return false;
+  } catch (error) {
+    if (errorCode(error) !== 'ESRCH') {
+      issue(report.preserved, filename, 'Process state cannot be verified.');
+      return false;
+    }
   }
   if (!await safeDirectory(paths.root, path.dirname(filename), report)) return false;
   if ((await readRegularFile(filename)).contents !== contents) {
@@ -621,10 +632,13 @@ async function cleanDiagnosticSnapshots(
   }
   const store = new FileSnapshotStore({ directory });
   const files = await readdir(directory);
+  const candidates: { target: string; pid: number; contents: string }[] = [];
   for (const file of files) {
     const match = /^(cli|relay|agent|traefik)-([A-Za-z0-9_.-]{1,128})\.json$/.exec(file);
     if (!match) continue;
     const target = path.join(directory, file);
+    let contents: string;
+    try { contents = (await readRegularFile(target)).contents; } catch { continue; }
     const result = await store.read(match[1] as 'cli' | 'relay' | 'agent' | 'traefik', match[2]);
     const snapshot = result.snapshot;
     let deadline = snapshot ? Date.parse(snapshot.capturedAt) : Number.NaN;
@@ -639,17 +653,26 @@ async function cleanDiagnosticSnapshots(
       issue(report.preserved, target, 'Cannot determine the snapshot process identity.');
       continue;
     }
-    try {
-      if (await inspectProcess(snapshot.pid)) {
-        issue(report.preserved, target, 'Snapshot process may still be active.');
-        continue;
-      }
-    } catch (error) {
-      issue(report.preserved, target, `Cannot inspect snapshot process: ${error instanceof Error ? error.message : String(error)}`);
+    candidates.push({ target, pid: snapshot.pid, contents });
+  }
+  let identities: Map<number, ProcessIdentity | null>;
+  const timeout = sleep(1_000, undefined, { ref: false }).then((): never => { throw new Error('Snapshot process inspection timed out.'); });
+  try {
+    identities = await Promise.race([
+      inspectProcesses(candidates.map((candidate) => candidate.pid)),
+      timeout,
+    ]);
+  } catch (error) {
+    for (const candidate of candidates) issue(report.preserved, candidate.target, `Cannot inspect snapshot process: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+  for (const { target, pid, contents } of candidates) {
+    if (!identities.has(pid) || identities.get(pid)) {
+      issue(report.preserved, target, 'Snapshot process may still be active.');
       continue;
     }
     try {
-      process.kill(snapshot.pid, 0);
+      process.kill(pid, 0);
       issue(report.preserved, target, 'Snapshot process may still be active.');
       continue;
     } catch (error) {
@@ -659,6 +682,10 @@ async function cleanDiagnosticSnapshots(
       }
     }
     try {
+      if ((await readRegularFile(target)).contents !== contents) {
+        issue(report.preserved, target, 'Snapshot changed during cleanup.');
+        continue;
+      }
       const bytes = (await lstat(target)).size;
       if (dryRun) { report.wouldRemove += 1; continue; }
       await unlink(target);
