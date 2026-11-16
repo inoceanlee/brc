@@ -659,8 +659,7 @@ async function cleanDiagnosticSnapshots(
       return errorCode(error) === 'ESRCH';
     }
   }).sort((left, right) => left - right);
-  if (!eligible.length) return;
-  const offset = randomInt(eligible.length);
+  const offset = eligible.length ? randomInt(eligible.length) : 0;
   const pids = [...eligible.slice(offset), ...eligible.slice(0, offset)].slice(0, 256);
   const signal = AbortSignal.timeout(1_000);
   let next = 0;
