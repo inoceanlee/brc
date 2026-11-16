@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -82,17 +82,20 @@ export async function publishManagedControlReadyFile(
 }
 
 export async function startManagedControlServer(options: {
+  server: Server;
+  token?: string;
+  readyFile?: string;
+  id?: string;
+  service?: string;
   health: () => ManagedHealth | Promise<ManagedHealth>;
   stop: () => void | Promise<void>;
 }): Promise<ManagedControlServer | undefined> {
-  const token = process.env.BRC_CONTROL_TOKEN;
-  const readyFile = process.env.BRC_CONTROL_READY_FILE;
-  const id = process.env.BRC_MANAGED_ID;
-  const service = process.env.BRC_MANAGED_SERVICE;
+  const { token, readyFile, id, service } = options;
   if (!token && !readyFile && !id && !service) return undefined;
   if (!token || !readyFile || !id || !service) throw new Error('Incomplete BRC managed-control environment.');
 
-  const server: Server = createServer(createManagedControlRequestListener({
+  const server = options.server;
+  server.on('request', createManagedControlRequestListener({
     token,
     health: options.health,
     stop: options.stop,

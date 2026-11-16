@@ -176,16 +176,9 @@ console.log(JSON.stringify({ exitCode, output, errors }));
   assert.match(result.errors.join('\n'), /link|directory/i);
 });
 
-test('managed log rotation honors BRC_LOG_ROTATE_MIB', async (t) => {
+test('managed log rotation honors the supplied limit', async (t) => {
   const fixture = await makeFixture(t);
   const filename = path.join(fixture.logs, 'configured.log');
-  const previous = process.env.BRC_LOG_ROTATE_MIB;
-  process.env.BRC_LOG_ROTATE_MIB = '1';
-  try {
-    await appendRotatingLog(filename, Buffer.alloc(1024 * 1024 + 5, 0x61));
-    assert.equal((await readFile(filename)).length, 1024 * 1024);
-  } finally {
-    if (previous === undefined) delete process.env.BRC_LOG_ROTATE_MIB;
-    else process.env.BRC_LOG_ROTATE_MIB = previous;
-  }
+  await appendRotatingLog(filename, Buffer.alloc(1024 * 1024 + 5, 0x61), 1024 * 1024);
+  assert.equal((await readFile(filename)).length, 1024 * 1024);
 });

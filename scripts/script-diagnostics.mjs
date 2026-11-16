@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { registerHooks } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,16 +22,57 @@ async function runWithDiagnostics() {
     await import(pathToFileURL(target).href);
     return;
   }
-  const { startDiagnostics, resolveDiagnosticsSettings } = await import(pathToFileURL(runtimePath).href);
+  const { createDiagnosticsRuntime } = await import(pathToFileURL(runtimePath).href);
+  const { resolveSettings } = await import(pathToFileURL(
+    path.join(root, 'packages/shared/dist/config/core/settings.js'),
+  ).href);
+  const { FunctionTiming, installFunctionProbe } = await import(pathToFileURL(
+    path.join(root, 'packages/shared/dist/diagnostics/core/functions.js'),
+  ).href);
+  const { DiagnosticSession } = await import(pathToFileURL(
+    path.join(root, 'packages/shared/dist/diagnostics/core/session.js'),
+  ).href);
+  const { NodeResourceSampler } = await import(pathToFileURL(
+    path.join(root, 'packages/shared/dist/diagnostics/adapters/resources-node.js'),
+  ).href);
+  const { FileSnapshotStore } = await import(pathToFileURL(
+    path.join(root, 'packages/shared/dist/diagnostics/adapters/snapshots.js'),
+  ).href);
   const directory = process.env.BRC_DIAGNOSTICS_DIR ?? path.join(os.tmpdir(), 'brc-script-diagnostics');
   const env = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('BRC_DIAGNOSTICS_'))),
     BRC_DIAGNOSTICS_DIR: directory,
     BRC_DIAGNOSTICS_ENABLED: process.env.BRC_DIAGNOSTICS_ENABLED ?? 'true',
   };
-  const settings = resolveDiagnosticsSettings(env);
-  const diagnostics = await startDiagnostics({
-    component: 'cli', instanceId: 'script-' + process.pid + '-' + randomUUID(), env,
+  const settings = resolveSettings({ version: 1 }, env).settings.diagnostics;
+  const instanceId = 'script-' + process.pid + '-' + randomUUID();
+  const functions = settings.enabled ? new FunctionTiming() : undefined;
+  if (functions) {
+    try {
+      const manifest = JSON.parse(await readFile(path.join(root, 'packages/shared/dist/diagnostics-manifest.json'), 'utf8'));
+      for (const entry of manifest.functions ?? []) {
+        if (entry && typeof entry.id === 'string' && typeof entry.name === 'string') {
+          functions.register(entry.id, {
+            name: entry.name,
+            file: typeof entry.file === 'string' ? entry.file : '',
+            line: typeof entry.line === 'number' ? entry.line : 0,
+            kind: entry.kind === 'async' ? 'async' : 'sync',
+          });
+        }
+      }
+    } catch {}
+  }
+  const probe = functions ? installFunctionProbe(functions) : undefined;
+  const resources = functions ? new NodeResourceSampler({ intervalMs: settings.resourceSampleMs }) : undefined;
+  const store = functions ? new FileSnapshotStore({
+    directory,
+    staleAfterMs: Math.max(settings.functionSnapshotMs * 3, 60_000),
+  }) : undefined;
+  const session = functions && resources && store ? new DiagnosticSession({
+    service: 'cli', instanceId, store, functions, resources, snapshotIntervalMs: settings.functionSnapshotMs,
+  }) : undefined;
+  const diagnostics = createDiagnosticsRuntime({
+    enabled: settings.enabled, component: 'cli', instanceId, functions, resources, session,
   });
   const tracked = new Map();
   if (diagnostics.enabled && diagnostics.functions) {
@@ -58,6 +99,7 @@ async function runWithDiagnostics() {
     await import(pathToFileURL(target).href);
   } finally {
     await diagnostics.stop();
+    probe?.uninstall();
     if (diagnostics.enabled) {
       await mkdir(directory, { recursive: true });
       const key = createHash('sha256').update(target).digest('hex').slice(0, 16);
@@ -68,10 +110,7 @@ async function runWithDiagnostics() {
       }) + '\n');
       await rename(temporary, destination);
       const retentionMs = settings.retentionDays * 86_400_000;
-      const { FileSnapshotStore } = await import(pathToFileURL(
-        path.join(root, 'packages/shared/dist/diagnostics/adapters/snapshots.js'),
-      ).href);
-      await new FileSnapshotStore({ directory }).prune(retentionMs, () => false);
+      await store.prune(retentionMs, () => false);
       const now = Date.now();
       for (const entry of await readdir(directory, { withFileTypes: true })) {
         if (!entry.isFile() || !/^coverage-[0-9a-f]{16}\.json$/.test(entry.name)) continue;

@@ -7,7 +7,7 @@ import { Writable } from 'node:stream';
 import { finished } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { appendRotatingLog, installManagedLog, startManagedControlServer, type DiagnosticsRuntime, type ManagedControlServer } from 'brc-shared';
+import { appendRotatingLog, createManagedLog, startManagedControlServer, type InjectedDiagnosticsRuntime, type ManagedControlServer, type ManagedLogSink } from 'brc-shared';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../config/settings.js';
 import type { BrcPaths } from '../config/paths.js';
 import { renderConfig, errorMessage, type TraefikTemplates } from './core.js';
@@ -23,6 +23,8 @@ export interface TraefikBinaryResourceMonitor {
 }
 
 export interface TraefikRuntimeOptions {
+  controlServer?: Server;
+  controlIdentity?: { token?: string; readyFile?: string; id?: string; service?: string };
   createBinaryResourceMonitor?: (pid: number, instanceId: string) => Promise<TraefikBinaryResourceMonitor>;
 }
 
@@ -221,10 +223,10 @@ function environmentPort(name: string): number {
 
 export async function runManagedTraefikService(
   settings: Readonly<BrcSettings> = DEFAULT_SETTINGS,
-  diagnostics?: Pick<DiagnosticsRuntime, 'log'>,
+  diagnostics?: Pick<InjectedDiagnosticsRuntime, 'log'>,
   options: TraefikRuntimeOptions = {},
 ): Promise<void> {
-  const managedLog = installManagedLog();
+  let managedLog: ManagedLogSink | undefined;
   let control: ManagedControlServer | undefined;
   let child: ChildProcess | undefined;
   let binaryMonitor: TraefikBinaryResourceMonitor | undefined;
@@ -238,6 +240,7 @@ export async function runManagedTraefikService(
     if (process.env.BRC_MANAGED_SERVICE !== 'traefik' || !traefikRoot || !configDirectory || !logFile) {
       throw new Error('Traefik service is missing its managed runtime configuration.');
     }
+    managedLog = createManagedLog(logFile, settings.logs.rotateMiB * 1024 * 1024);
     const manifest = await readManifest(traefikRoot);
     if (!manifest) throw new Error('Traefik is not installed. Run brc setup first.');
     await ensureSafeDirectory(traefikRoot, path.join(traefikRoot, 'versions', manifest.current));
@@ -254,7 +257,7 @@ export async function runManagedTraefikService(
     await mkdir(path.dirname(logFile), { recursive: true });
     logSink = new Writable({
       write(chunk, _encoding, callback) {
-        void appendRotatingLog(logFile, chunk).then(
+        void appendRotatingLog(logFile, chunk, settings.logs.rotateMiB * 1024 * 1024).then(
           () => callback(),
           (error: unknown) => callback(error instanceof Error ? error : new Error(String(error))),
         );
@@ -286,7 +289,10 @@ export async function runManagedTraefikService(
     await waitForHealth(child, healthPort, settings.runtime.startupTimeoutMs, () => logFailure?.message ?? 'Traefik did not answer on its local health endpoint.');
     diagnostics?.log(`Traefik ${manifest.current} is healthy.`, { source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' } });
 
+    if (!options.controlServer) throw new Error('Traefik process did not receive a control server.');
     control = await startManagedControlServer({
+      server: options.controlServer,
+      ...options.controlIdentity,
       health: async () => {
         if (logFailure) return { state: 'degraded', detail: `Traefik log output failed: ${logFailure.message}` };
         if (!child || child.exitCode !== null || child.signalCode !== null) return { state: 'degraded', detail: 'Traefik process exited.' };
@@ -307,7 +313,9 @@ export async function runManagedTraefikService(
     const [exitCode, exitSignal] = await childClosed;
     if (!stopping) {
       process.exitCode = exitCode ?? 1;
-      console.error(`Traefik exited unexpectedly${exitSignal ? ` after ${exitSignal}` : ''}.`);
+      const message = `Traefik exited unexpectedly${exitSignal ? ` after ${exitSignal}` : ''}.`;
+      console.error(message);
+      managedLog?.write(message + '\n');
     }
   } catch (error) {
     process.exitCode = 1;
@@ -317,6 +325,7 @@ export async function runManagedTraefikService(
       source: { file: 'traefik/runtime.ts', function: 'runManagedTraefikService' },
     });
     console.error(`Traefik service failed: ${errorMessage(error)}`);
+    managedLog?.write(`Traefik service failed: ${errorMessage(error)}\n`);
     if (child && child.exitCode === null && child.signalCode === null) {
       child.kill();
       await waitForChildExit(child, settings.runtime.shutdownTimeoutMs);

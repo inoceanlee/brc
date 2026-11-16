@@ -23,12 +23,17 @@ const diagnosticsDirectory = process.env.BRC_DIAGNOSTICS_DIR;
 const diagnosticsEnabled = settings.diagnostics.enabled && !!diagnosticsDirectory;
 const functionTiming = diagnosticsEnabled ? new FunctionTiming() : undefined;
 if (functionTiming) {
-  try {
-    const manifest = JSON.parse(readFileSync(new URL('./diagnostics-manifest.json', import.meta.url), 'utf8')) as {
-      functions?: Array<{ id: string; name: string; file: string; line: number; kind: 'sync' | 'async' }>;
-    };
-    for (const entry of manifest.functions ?? []) functionTiming.register(entry.id, entry);
-  } catch {}
+  for (const url of [
+    new URL('./diagnostics-manifest.json', import.meta.url),
+    new URL('./diagnostics-manifest.json', import.meta.resolve('brc-shared')),
+  ]) {
+    try {
+      const manifest = JSON.parse(readFileSync(url, 'utf8')) as {
+        functions?: Array<{ id: string; name: string; file: string; line: number; kind: 'sync' | 'async' }>;
+      };
+      for (const entry of manifest.functions ?? []) functionTiming.register(entry.id, entry);
+    } catch {}
+  }
 }
 const probe = functionTiming ? installFunctionProbe(functionTiming) : undefined;
 const resourceSampler = diagnosticsEnabled
@@ -180,6 +185,11 @@ const stop = async (sig?: string) => {
 process.on('SIGINT', () => { void stop('SIGINT').catch((error: unknown) => log('error', String(error))); });
 process.on('SIGTERM', () => { void stop('SIGTERM').catch((error: unknown) => log('error', String(error))); });
 control = await startManagedControlServer({
+  server: createServer(),
+  token: process.env.BRC_CONTROL_TOKEN,
+  readyFile: process.env.BRC_CONTROL_READY_FILE,
+  id: process.env.BRC_MANAGED_ID,
+  service: process.env.BRC_MANAGED_SERVICE,
   health: async () => {
     try {
       const response = await fetch(`http://127.0.0.1:${cfg.port}/health`);
