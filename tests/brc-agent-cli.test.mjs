@@ -135,3 +135,29 @@ test('service confirmation refuses redirected stderr without changing registrati
   assert.match(result.stderr, /--yes/);
   assert.deepEqual(result.stored, credentials);
 });
+
+test('Agent diagnostics resolves YAML and environment as one configuration', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'brc-agent-diagnostics-'));
+  try {
+    const configFile = path.join(root, 'config', 'brc.yaml');
+    mkdirSync(path.dirname(configFile), { recursive: true });
+    writeFileSync(configFile, 'version: 1\nlogs:\n  maxTotalMiB: 128\n');
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+    const result = spawnSync(process.execPath, [
+      binary, 'connect', '--relay', 'https://relay.example', '--device-id', 'local', '--token-stdin', '--json',
+    ], {
+      encoding: 'utf8',
+      input: '',
+      timeout: 5000,
+      env: {
+        ...env, BRC_DATA_ROOT: root, BRC_CONFIG_FILE: configFile, BRC_DIAGNOSTICS_ENABLED: 'true',
+        BRC_DIAGNOSTICS_DIR: path.join(root, 'diagnostics'), BRC_LOG_ROTATE_MIB: '64',
+      },
+    });
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(JSON.parse(result.stderr).code, 'INVALID_USAGE');
+    assert.doesNotMatch(result.stderr, /logs\.rotateMiB cannot exceed/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
