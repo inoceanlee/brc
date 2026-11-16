@@ -209,7 +209,7 @@ test('preserves PID-reused and corrupt records without stopping either process',
   await harness.manager.stop(harness.spec);
 });
 
-test('cleanup reclaims a previous-boot record with a reused PID without touching that process', async (t) => {
+test('cleanup preserves a previous-boot record when its live PID identity differs', async (t) => {
   const { root, paths: brcPaths } = await makeRoot(t);
   const filename = path.join(brcPaths.runtime, 'relay.json');
   const identity = await inspectProcess(process.pid);
@@ -224,9 +224,30 @@ test('cleanup reclaims a previous-boot record with a reused PID without touching
   }));
   const previousBoot = new Date(Date.now() - os.uptime() * 1000 - DAY);
   await utimes(filename, previousBoot, previousBoot);
-  await cleanRuntime(brcPaths);
-  assert.equal(await exists(filename), false);
+  const report = await cleanRuntime(brcPaths);
+  assert.equal(await exists(filename), true);
+  assert.ok(report.preserved.some((item) => item.path === filename));
   process.kill(process.pid, 0);
+});
+
+test('snapshot cleanup advances to later PID batches without persistent state', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const capturedAt = new Date(Date.now() - 40 * DAY).toISOString();
+  for (let index = 0; index < 257; index++) {
+    await writeFile(path.join(brcPaths.diagnostics, `relay-${index}.json`), JSON.stringify({
+      schema: 1, service: 'relay', instanceId: String(index), pid: 1000000000 + index,
+      capturedAt, status: 'running',
+    }));
+  }
+  const now = Date.now;
+  Date.now = () => 2_000_000_001_000;
+  try {
+    await cleanRuntime(brcPaths);
+  } finally {
+    Date.now = now;
+  }
+  assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-0.json')), true);
+  assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), false);
 });
 
 test('removes a valid process record only after its process exits', async (t) => {

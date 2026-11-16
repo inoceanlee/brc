@@ -273,17 +273,6 @@ async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dry
         }
         const removed = await removeUnchangedRecord(paths, filename, raw, value.pid, report, dryRun);
         result.set(name, { state: removed ? 'inactive' : 'unknown', entrypoint: spec.entrypoint });
-      } else if (status.state === 'degraded' && status.detail.startsWith('Recorded PID was reused') && status.pid) {
-        const previous = snapshotIdentity(snapshot, status.pid);
-        const current = await inspectProcess(status.pid);
-        if (!previous || !current || previous.createdAt !== current.createdAt
-            || previous.commandLine !== current.commandLine || previous.executablePath !== current.executablePath
-            || !isStaleFromPreviousBoot((await lstat(filename)).mtimeMs)
-            || (await readRegularFile(filename)).contents !== raw) {
-          throw new Error('Reused process or record changed during cleanup.');
-        }
-        const removed = await removeFile(paths.root, filename, report, dryRun);
-        result.set(name, { state: removed ? 'inactive' : 'unknown', entrypoint: spec.entrypoint });
       } else {
         if (status.state !== 'running' && status.state !== 'pairing') issue(report.preserved, filename, status.detail);
         result.set(name, { state: status.state === 'running' || status.state === 'pairing' ? 'active' : 'unknown', entrypoint: spec.entrypoint });
@@ -660,7 +649,17 @@ async function cleanDiagnosticSnapshots(
     candidates.push({ target, pid: snapshot.pid, contents });
   }
   const identities = new Map<number, ProcessIdentity | null>();
-  const pids = [...new Set(candidates.map((candidate) => candidate.pid))].slice(0, 256);
+  const eligible = [...new Set(candidates.map((candidate) => candidate.pid))].filter((pid) => {
+    try {
+      process.kill(pid, 0);
+      return process.platform === 'linux' && pid !== process.pid;
+    } catch (error) {
+      return errorCode(error) === 'ESRCH';
+    }
+  }).sort((left, right) => left - right);
+  const batchCount = Math.ceil(eligible.length / 256);
+  const offset = batchCount ? (Math.floor(Date.now() / 1_000) % batchCount) * 256 : 0;
+  const pids = eligible.slice(offset, offset + 256);
   const signal = AbortSignal.timeout(1_000);
   let next = 0;
   const worker = async (): Promise<void> => {

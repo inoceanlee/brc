@@ -280,6 +280,20 @@ test('timeout after a stop failure keeps the failure and does not become cancell
   await assert.rejects(manager.stop(controller.signal), (error) => error.exitCode !== 130 && /agent failed/.test(error.message) && /traefik stop failed/.test(error.message));
 });
 
+test('timeout during status preserves each earlier failure once', async () => {
+  const controller = new AbortController();
+  const processes = {
+    status: async (spec) => {
+      if (spec.name === 'traefik') controller.abort(new Error('command timed out'));
+      return { name: spec.name, state: 'running', pid: 1, detail: '' };
+    },
+    stop: async () => { throw new Error('agent failed'); },
+  };
+  const services = ['traefik', 'agent'].map((name) => ({ name, entrypoint: '/test', workspaceRoot: '/', cwd: '/' }));
+  const manager = new ServiceManager(paths(os.tmpdir()), services, processes, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (run) => run() });
+  await assert.rejects(manager.stop(controller.signal), (error) => error.exitCode === 1 && (error.message.match(/agent failed/g) ?? []).length === 1 && !error.message.includes('traefik:'));
+});
+
 test('repeated service stop does not invoke process stop for stopped services', async () => {
   let calls = 0;
   const processes = {
@@ -966,7 +980,7 @@ test('refuses forced termination when the PID identity changes after shutdown', 
   }
 });
 
-test('start automatically evicts stale process record when PID identity does not match', async (t) => {
+test('start and stop preserve an old record when the PID identity differs', async (t) => {
   const fakeForeignPid = 999999;
   const harness = await makeHarness(t, {
     processOptions: {
@@ -1008,17 +1022,11 @@ test('start automatically evicts stale process record when PID identity does not
   assert.equal(status.state, 'degraded');
   assert.match(status.detail, /identity/i);
 
-  // ServiceManager start should evict the stale degraded service and launch the real process cleanly
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
-  await serviceManager.stop();
-  await assert.rejects(readFile(path.join(harness.paths.runtime, 'relay.json')), { code: 'ENOENT' });
-  await writeFile(path.join(harness.paths.runtime, 'relay.json'), JSON.stringify(staleRecord));
-  await utimes(path.join(harness.paths.runtime, 'relay.json'), previousBoot, previousBoot);
-  await serviceManager.start();
-
-  const statusAfter = await serviceManager.status();
-  assert.equal(statusAfter[0].state, 'running');
-  assert.notEqual(statusAfter[0].pid, fakeForeignPid);
+  await assert.rejects(serviceManager.stop(), (error) => error.exitCode === 5);
+  await assert.rejects(serviceManager.start(), (error) => error.exitCode === 5);
+  assert.deepEqual(JSON.parse(await readFile(path.join(harness.paths.runtime, 'relay.json'), 'utf8')), staleRecord);
+  await rm(path.join(harness.paths.runtime, 'relay.json'));
 });
 
 test('service start preserves a corrupted process record', async (t) => {

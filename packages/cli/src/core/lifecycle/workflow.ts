@@ -124,7 +124,7 @@ export class ServiceManager {
       checkCancellation();
       try {
         const current = await this.processes.status(service);
-        checkCancellation();
+        signal?.throwIfAborted();
         if (current.state !== 'stopped') await this.processes.stop(service, signal);
       } catch (error) {
         const failure = error instanceof Error ? error : new Error(String(error));
