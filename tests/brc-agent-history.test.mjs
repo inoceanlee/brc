@@ -12,7 +12,7 @@ import { pathToFileURL } from 'node:url';
 const root = await mkdtemp(path.join(os.tmpdir(), 'brc-history-'));
 process.env.BRC_DATA_ROOT = path.join(root, 'home');
 process.env.BRC_CONFIG_FILE = path.join(root, 'config', 'brc.yaml');
-const { configureAgentServices } = await import('../packages/agent/dist/index.js');
+const { configureAgentServices } = await import('../packages/agent/dist/cli.js');
 const services = await configureAgentServices();
 const { toolHistory, fuzzySearchLogger, dispatcher } = services;
 const { resolveAgentPaths } = await import('../packages/agent/dist/adapters/storage/agent-paths.js');
@@ -81,7 +81,7 @@ test('simultaneous additions retain their order in the persisted queue', async (
 test('history initialization reports lock contention instead of exposing an empty cache', () => {
   const directory = path.join(root, 'locked-startup');
   const storage = new ToolHistoryStorage(path.join(directory, 'data', 'agent'));
-  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/index.js')).href;
+  const moduleUrl = pathToFileURL(path.resolve('packages/agent/dist/cli.js')).href;
   storage.withLock(() => {
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `const m = await import(${JSON.stringify(moduleUrl)}); await m.configureAgentServices();`], {
       env: { ...process.env, BRC_DATA_ROOT: directory },

@@ -8,7 +8,7 @@ import path from 'node:path';
 const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-privacy-'));
 process.env.BRC_DATA_ROOT = root;
 process.env.DO_NOT_TRACK = '1';
-const { configureAgentServices } = await import('../packages/agent/dist/index.js');
+const { configureAgentServices } = await import('../packages/agent/dist/cli.js');
 const services = await configureAgentServices();
 const { toolHistory, fuzzySearchLogger } = services;
 const { trackToolCall } = await import('../packages/agent/dist/adapters/telemetry/trackTools.js');
@@ -78,7 +78,7 @@ test('config adapter logs do not disclose editable user values', async () => {
 
 test('usage statistics and onboarding diagnostics do not write to stdout', () => {
   const script = `
-    const { configureAgentServices } = await import(${JSON.stringify(new URL('../packages/agent/dist/index.js', import.meta.url).href)});
+    const { configureAgentServices } = await import(${JSON.stringify(new URL('../packages/agent/dist/cli.js', import.meta.url).href)});
     const { usageTracker } = await configureAgentServices();
     await usageTracker.resetOnboardingState();
   `;

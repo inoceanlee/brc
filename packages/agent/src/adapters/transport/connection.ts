@@ -50,7 +50,7 @@ export async function flushAgentHistory(
   } catch {
     report('Agent history could not be flushed before shutdown.');
   } finally {
-    if (timer) clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 

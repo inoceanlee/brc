@@ -64,7 +64,7 @@ test('connection uses instance control environment and skips disabled diagnostic
   const ready = path.join(root, 'ready.json');
   const wrong = path.join(root, 'wrong.json');
   const script = `
-    const { configureAgentServices } = await import(${JSON.stringify(new URL('../packages/agent/dist/index.js', import.meta.url).href)});
+    const { configureAgentServices } = await import(${JSON.stringify(new URL('../packages/agent/dist/cli.js', import.meta.url).href)});
     const { parseAgentInvocation } = await import(${JSON.stringify(new URL('../packages/agent/dist/commands/parser.js', import.meta.url).href)});
     const { runAgentConnection } = await import(${JSON.stringify(new URL('../packages/agent/dist/adapters/transport/connection.js', import.meta.url).href)});
     const { createServer } = await import('node:http');

@@ -12,7 +12,7 @@ import { ConfigStorage } from '../packages/agent/dist/adapters/storage/config-st
 import { BRC_SETTING_KEYS, FileSettingsLock, YamlSettingsStore } from '../packages/shared/dist/index.js';
 
 const yaml = createRequire(import.meta.url)('js-yaml');
-const compositionUrl = pathToFileURL(path.resolve('packages/agent/dist/index.js')).href;
+const compositionUrl = pathToFileURL(path.resolve('packages/agent/dist/cli.js')).href;
 
 async function isolated(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'brc-config-regression-'));

@@ -30,7 +30,7 @@ if (process.platform === 'win32') {
   const previousConfig = process.env.BRC_CONFIG_FILE;
   process.env.BRC_DATA_ROOT = directory;
   process.env.BRC_CONFIG_FILE = path.join(directory, 'config', 'brc.yaml');
-  const { configureAgentServices } = await import('../packages/agent/dist/index.js');
+  const { configureAgentServices } = await import('../packages/agent/dist/cli.js');
   const services = await configureAgentServices();
   ({ configManager, capture } = services);
   const { toolHistory } = services;

@@ -11,6 +11,35 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 
+test('importing the CLI assembly does not execute a command', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-import-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const moduleUrl = new URL('../packages/agent/dist/cli.js', import.meta.url).href;
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  const child = spawnSync(process.execPath, [
+    '--input-type=module', '-e', `await import(${JSON.stringify(moduleUrl)});`, 'invalid-command',
+  ], { env: { ...env, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' }, encoding: 'utf8', timeout: 8000 });
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout, '');
+  assert.equal(child.stderr, '');
+  assert.deepEqual(readdirSync(root), []);
+});
+
+test('offline help, version and preview leave Agent data untouched', (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'brc-agent-light-entry-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const binary = fileURLToPath(new URL('../packages/agent/dist/cli.js', import.meta.url));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  for (const args of [['help', '--offline'], ['version', '--offline'], ['connect', '--preview', '--offline']]) {
+    const child = spawnSync(process.execPath, [binary, ...args], {
+      env: { ...env, BRC_DATA_ROOT: path.join(root, 'data'), DO_NOT_TRACK: '1' },
+      encoding: 'utf8', timeout: 8000,
+    });
+    assert.equal(child.status, 0, child.stderr);
+  }
+  assert.equal(existsSync(path.join(root, 'data')), false);
+});
+
 test('credential preview does not initialize or modify history', (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'brc-credential-preview-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

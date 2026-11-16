@@ -577,7 +577,7 @@ test('Agent activity logs stay bounded during continuous writes', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const trackToolsUrl = JSON.stringify(new URL('../packages/agent/dist/adapters/telemetry/trackTools.js', import.meta.url).href);
   const source = `
-import { configureAgentServices } from ${JSON.stringify(new URL('../packages/agent/dist/index.js', import.meta.url).href)};
+import { configureAgentServices } from ${JSON.stringify(new URL('../packages/agent/dist/cli.js', import.meta.url).href)};
 import { trackToolCall } from ${trackToolsUrl};
 import { DEFAULT_SETTINGS } from ${JSON.stringify(new URL('../packages/shared/dist/index.js', import.meta.url).href)};
 const { fuzzySearchLogger } = await configureAgentServices();
