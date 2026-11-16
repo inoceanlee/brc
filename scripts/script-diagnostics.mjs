@@ -17,6 +17,10 @@ if (!target.startsWith(scriptsRoot + path.sep) || !target.endsWith('.mjs')) {
 process.argv.splice(1, 2, target);
 
 async function runWithDiagnostics() {
+  if (/^(false|0)$/i.test(process.env.BRC_DIAGNOSTICS_ENABLED ?? '')) {
+    await import(pathToFileURL(target).href);
+    return;
+  }
   const runtimePath = path.join(root, 'packages/shared/dist/diagnostics/runtime.js');
   if (!existsSync(runtimePath)) {
     await import(pathToFileURL(target).href);
@@ -38,7 +42,7 @@ async function runWithDiagnostics() {
   const { FileSnapshotStore } = await import(pathToFileURL(
     path.join(root, 'packages/shared/dist/diagnostics/adapters/snapshots.js'),
   ).href);
-  const directory = process.env.BRC_DIAGNOSTICS_DIR ?? path.join(os.tmpdir(), 'brc-script-diagnostics');
+  const directory = process.env.BRC_DIAGNOSTICS_DIR || path.join(os.tmpdir(), 'brc-script-diagnostics');
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('BRC_DIAGNOSTICS_'))),
     BRC_DIAGNOSTICS_DIR: directory,

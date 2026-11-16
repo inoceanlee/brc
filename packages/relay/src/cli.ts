@@ -190,6 +190,10 @@ control = await startManagedControlServer({
   readyFile: process.env.BRC_CONTROL_READY_FILE,
   id: process.env.BRC_MANAGED_ID,
   service: process.env.BRC_MANAGED_SERVICE,
+  onStopError: (error) => {
+    log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  },
   health: async () => {
     try {
       const response = await fetch(`http://127.0.0.1:${cfg.port}/health`);

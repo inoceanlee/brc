@@ -32,3 +32,32 @@ test('production JavaScript scripts report instrumented calls and resource snaps
   assert.ok(diagnosis.functions.entries.some((row) => row.name === 'buildNative' && row.calls > 0));
   assert.ok(diagnosis.resources.rssBytes > 0);
 });
+
+test('disabled script diagnostics ignores inactive sampling configuration', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-script-disabled-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = path.join(root, 'scripts', 'release-config.mjs');
+  const result = spawnSync(process.execPath, [entry, target], {
+    cwd: directory,
+    env: { ...process.env, BRC_DIAGNOSTICS_ENABLED: 'false', BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS: 'invalid', BRC_DIAGNOSTICS_DIR: directory },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test('empty script diagnostics directory uses the temporary directory', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-script-empty-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const target = path.join(root, 'scripts', 'release-config.mjs');
+  const result = spawnSync(process.execPath, [entry, target], {
+    cwd: directory,
+    env: { ...process.env, TEMP: directory, TMP: directory, TMPDIR: directory, BRC_DIAGNOSTICS_ENABLED: 'true', BRC_DIAGNOSTICS_DIR: '' },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const entries = await readdir(directory);
+  assert.deepEqual(entries, ['brc-script-diagnostics']);
+  const snapshots = await readdir(path.join(directory, 'brc-script-diagnostics'));
+  assert.ok(snapshots.some((name) => name.startsWith('cli-script-')));
+});
