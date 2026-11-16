@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { randomInt } from 'node:crypto';
+import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { BrcPaths } from '../../config/paths.js';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../../config/settings.js';
@@ -606,57 +606,6 @@ async function checkProtectedCleanupCandidates(
   }
 }
 
-async function readDiagnosticCursor(paths: BrcPaths, report: CleanupReport): Promise<number | null> {
-  const filename = path.join(paths.runtime, 'diagnostic-cleanup-cursor.json');
-  try {
-    const directory = await lstat(paths.runtime);
-    if (!directory.isDirectory() || directory.isSymbolicLink()
-        || (process.platform !== 'win32' && (directory.mode & 0o022) !== 0)) {
-      throw new Error('Runtime directory permissions or type are unsafe.');
-    }
-    let info;
-    try { info = await lstat(filename); } catch (error) {
-      if (errorCode(error) === 'ENOENT') return 0;
-      throw error;
-    }
-    if (!info.isFile() || info.isSymbolicLink() || info.size > 1024
-        || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) {
-      throw new Error('Cleanup cursor permissions or type are unsafe.');
-    }
-    const contents = (await readRegularFile(filename)).contents;
-    try {
-      const value = JSON.parse(contents) as { version?: unknown; lastPid?: unknown };
-      if (value && value.version === 1 && typeof value.lastPid === 'number'
-          && Number.isSafeInteger(value.lastPid) && value.lastPid >= 0 && value.lastPid <= 0xffffffff) return value.lastPid;
-    } catch {
-      // A malformed cursor can be restarted without affecting snapshots.
-    }
-    issue(report.preserved, filename, 'Malformed cleanup cursor was reset.');
-    return 0;
-  } catch (error) {
-    issue(report.failures, filename, `Cannot use cleanup cursor: ${error instanceof Error ? error.message : String(error)}`);
-    return null;
-  }
-}
-
-async function writeDiagnosticCursor(paths: BrcPaths, report: CleanupReport, lastPid: number): Promise<void> {
-  const filename = path.join(paths.runtime, 'diagnostic-cleanup-cursor.json');
-  const temporary = `${filename}.${randomUUID()}.tmp`;
-  let created = false;
-  try {
-    await writeFile(temporary, JSON.stringify({ version: 1, lastPid }), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    created = true;
-    await rename(temporary, filename);
-  } catch (error) {
-    issue(report.failures, filename, `Cannot save cleanup cursor: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    if (created) {
-      try { await unlink(temporary); } catch (error) {
-        if (errorCode(error) !== 'ENOENT') issue(report.failures, temporary, `Cannot remove temporary cursor: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-  }
-}
 
 /** Preserve snapshots whenever their process may still be active. */
 async function cleanDiagnosticSnapshots(
@@ -711,10 +660,7 @@ async function cleanDiagnosticSnapshots(
     }
   }).sort((left, right) => left - right);
   if (!eligible.length) return;
-  const lastPid = await readDiagnosticCursor(paths, report);
-  if (lastPid === null) return;
-  const nextIndex = eligible.findIndex((pid) => pid > lastPid);
-  const offset = nextIndex < 0 ? 0 : nextIndex;
+  const offset = randomInt(eligible.length);
   const pids = [...eligible.slice(offset), ...eligible.slice(0, offset)].slice(0, 256);
   const signal = AbortSignal.timeout(1_000);
   let next = 0;
@@ -762,7 +708,6 @@ async function cleanDiagnosticSnapshots(
       if (errorCode(error) !== 'ENOENT') issue(report.failures, target, error instanceof Error ? error.message : String(error));
     }
   }
-  if (!dryRun && pids.length) await writeDiagnosticCursor(paths, report, pids[pids.length - 1]!);
 }
 
 async function hasExpiredDiagnosticSnapshots(paths: BrcPaths, cutoff: number): Promise<boolean> {
@@ -816,7 +761,7 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions = {}
       return report;
     }
     try {
-      await mkdir(paths.runtime);
+      await mkdir(paths.runtime, { mode: 0o700 });
     } catch (mkdirError) {
       if (errorCode(mkdirError) !== 'EEXIST') {
         issue(report.failures, paths.runtime, mkdirError instanceof Error ? mkdirError.message : String(mkdirError));
