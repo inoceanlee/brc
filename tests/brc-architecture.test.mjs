@@ -71,7 +71,7 @@ const repository = fileURLToPath(new URL('../', import.meta.url));
 const PACKAGE_NAMES = ['cli', 'relay', 'agent', 'shared'];
 const EXTERNAL_IO = /^(?:node:)?(?:fs(?:\/promises)?|net|http|https|child_process|dgram|os|worker_threads|tty|readline|console|stream|process)(?:\/.*)?$/;
 const EXTERNAL_SDK = /^(?:express|ws|better-sqlite3|sqlite3|proper-lockfile|@modelcontextprotocol\/|@sqlite\/)/;
-const SERVICE_TYPES = /(?:Manager|Store|Storage|Lock|Service|Server|Sampler|Session|Controller|Provider|Tracker|History|Hub|Transport|Client|Dispatcher|Recorder|Logger|Handler)$/;
+const SERVICE_TYPES = /(?:Manager|Store|Storage|Lock|Service|Server|Sampler|Session|Controller|Provider|Tracker|History|Hub|Transport|Client|Dispatcher|Recorder|Logger|Handler|Timing|DiagnosticLog)$/;
 
 const ENTRY_FILES = new Set(['cli.ts', 'main.ts']);
 
@@ -125,7 +125,7 @@ function isControlledSelfConstruction(node) {
   if (!method || !method.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)
     || !ts.isClassDeclaration(method.parent) || method.parent.name?.text !== node.expression.text) return false;
   const methodName = method.name.getText(node.getSourceFile());
-  if (methodName === 'open' && ts.isReturnStatement(node.parent)) return true;
+  if ((methodName === 'open' || methodName === 'load') && ts.isReturnStatement(node.parent)) return true;
   if (methodName !== 'initialize' || !ts.isVariableDeclaration(node.parent)
     || !ts.isIdentifier(node.parent.name)) return false;
   const list = node.parent.parent;
@@ -140,11 +140,22 @@ function isControlledSelfConstruction(node) {
   return ts.isIdentifier(access.expression) && access.expression.text === node.parent.name.text && access.name.text === 'close';
 }
 
+function isDataInterface(statement) {
+  return ts.isInterfaceDeclaration(statement) && statement.members.every((member) => {
+    if (!ts.isPropertySignature(member) || !member.type) return false;
+    function callable(node) {
+      return ts.isFunctionTypeNode(node) || ts.isConstructorTypeNode(node)
+        || ts.isCallSignatureDeclaration(node) || Boolean(ts.forEachChild(node, callable));
+    }
+    return !callable(member.type);
+  });
+}
+
 function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
   const violations = [];
   if (ENTRY_FILES.has(relative)) return violations;
   for (const statement of source.statements) {
-    if (ts.isInterfaceDeclaration(statement) && statement.members.every(ts.isPropertySignature)) dataTypes.add(statement.name.text);
+    if (isDataInterface(statement)) dataTypes.add(statement.name.text);
   }
   const exported = new Set();
   for (const statement of source.statements) {
@@ -213,6 +224,7 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
     return retainedByAnother(scope.body);
   }
   const logFactories = new Set();
+  const logNamespaces = new Set();
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
       && statement.moduleSpecifier.text === 'brc-shared'
@@ -221,13 +233,19 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
         if ((item.propertyName ?? item.name).text === 'createManagedLog') logFactories.add(item.name.text);
       }
     }
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
+      && statement.moduleSpecifier.text === 'brc-shared'
+      && statement.importClause?.namedBindings && ts.isNamespaceImport(statement.importClause.namedBindings)) {
+      logNamespaces.add(statement.importClause.namedBindings.name.text);
+    }
   }
   function visit(node) {
     if (ts.isNewExpression(node)) {
       const className = serviceConstructionName(node);
       if (className && !isControlledSelfConstruction(node)) {
         let parent = node.parent;
-        let retained = /(?:Store|Storage|Lock)$/.test(className);
+        let retained = /(?:Store|Storage|Lock|Timing|DiagnosticLog)$/.test(className);
+        if (!/(?:Session|Transport)$/.test(className) && ts.isReturnStatement(node.parent)) retained = true;
         while (parent && parent !== source) {
           if (ts.isPropertyDeclaration(parent)) retained = true;
           if (ts.isBinaryExpression(parent)
@@ -247,7 +265,9 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
         }
       }
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && logFactories.has(node.expression.text)) {
+    if (ts.isCallExpression(node) && ((ts.isIdentifier(node.expression) && logFactories.has(node.expression.text))
+      || (ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression)
+        && logNamespaces.has(node.expression.expression.text) && node.expression.name.text === 'createManagedLog'))) {
       violations.push(prefix + ': service factory createManagedLog@' + constructionIdentity(node, source));
     }
     ts.forEachChild(node, visit);
@@ -348,7 +368,26 @@ function sharedAdapterImports(source, adapterNames) {
     if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])
       && node.arguments[0].text === 'brc-shared'
       && (node.expression.kind === ts.SyntaxKind.ImportKeyword
-        || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) found.push('*');
+        || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+      let value = node;
+      while (ts.isAwaitExpression(value.parent) || ts.isParenthesizedExpression(value.parent)) value = value.parent;
+      const parent = value.parent;
+      if (ts.isVariableDeclaration(parent) && ts.isObjectBindingPattern(parent.name)) {
+        for (const element of parent.name.elements) {
+          if (element.dotDotDotToken || (element.propertyName && !ts.isIdentifier(element.propertyName)
+            && !ts.isStringLiteral(element.propertyName))) found.push('*');
+          else {
+            const name = (element.propertyName ?? element.name).getText(source).replace(/^['"]|['"]$/g, '');
+            if (adapterNames.has(name)) found.push(name);
+          }
+        }
+      } else if (ts.isPropertyAccessExpression(parent) && parent.expression === value) {
+        if (adapterNames.has(parent.name.text)) found.push(parent.name.text);
+      } else if (ts.isElementAccessExpression(parent) && parent.expression === value
+        && parent.argumentExpression && ts.isStringLiteral(parent.argumentExpression)) {
+        if (adapterNames.has(parent.argumentExpression.text)) found.push(parent.argumentExpression.text);
+      } else found.push('*');
+    }
     ts.forEachChild(node, visit);
   }
   visit(source);
@@ -389,7 +428,7 @@ async function architectureViolations() {
       if (!inCore(path.relative(root, filename).replaceAll('\\', '/'))) continue;
       const core = ts.createSourceFile(filename, await readFile(filename, 'utf8'), ts.ScriptTarget.Latest, true);
       for (const statement of core.statements) {
-        if (ts.isInterfaceDeclaration(statement) && statement.members.every(ts.isPropertySignature)) dataTypes.add(statement.name.text);
+        if (isDataInterface(statement)) dataTypes.add(statement.name.text);
       }
     }
     for (const filename of files) {
@@ -513,10 +552,53 @@ test('ownership detects file handlers, local storage, assigned clients and servi
   assert.ok(actual.includes('agent/adapters/sample.ts: service factory createManagedLog@run:log'));
 });
 
-test('self construction only permits controlled open and immediate initialization close', () => {
+test('ownership identifies diagnostics, direct service returns and callable interfaces', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    import * as shared from 'brc-shared';
+    interface UsageTracker { record: (event: string) => void }
+    interface ActiveSession { pid: number; runtime: number }
+    let tracker: UsageTracker;
+    let active: ActiveSession;
+    function timing() { const value = new FunctionTiming(); return value; }
+    function logging() { const value = new FileDiagnosticLog(); return value; }
+    function client() { return new WsClient(); }
+    function manager() { return new SearchManager(); }
+    function once() { return new RequestSession(); }
+    function sink() { return shared.createManagedLog('log', 1, () => {}); }
+  `, ts.ScriptTarget.Latest, true);
+  const actual = ownershipViolations(source, 'agent/adapters/sample.ts', 'adapters/sample.ts');
+  for (const expected of [
+    'module service reference tracker',
+    'nested service construction FunctionTiming@timing:value',
+    'nested service construction FileDiagnosticLog@logging:value',
+    'nested service construction WsClient@client:<return>',
+    'nested service construction SearchManager@manager:<return>',
+    'service factory createManagedLog@sink:<return>',
+  ]) assert.ok(actual.includes('agent/adapters/sample.ts: ' + expected), expected);
+  assert.equal(actual.some((item) => item.includes('active') || item.includes('RequestSession')), false);
+  assert.deepEqual(ownershipViolations(source, 'agent/cli.ts', 'cli.ts'), []);
+});
+
+test('dynamic shared imports distinguish data from adapter values', () => {
+  const source = ts.createSourceFile('sample.ts', `
+    const { DEFAULT_SETTINGS } = await import('brc-shared');
+    const { DEFAULT_SETTINGS: settings } = require('brc-shared');
+    const { FileSnapshotStore: Snapshot } = await import('brc-shared');
+    const { createManagedLog } = require('brc-shared');
+    const data = (await import('brc-shared')).DEFAULT_SETTINGS;
+    const adapter = (await import('brc-shared')).FileSnapshotStore;
+    const unknown = await import('brc-shared');
+  `, ts.ScriptTarget.Latest, true);
+  const names = new Set(['FileSnapshotStore', 'createManagedLog']);
+  assert.deepEqual(sharedAdapterImports(source, names),
+    ['FileSnapshotStore', 'createManagedLog', 'FileSnapshotStore', '*']);
+});
+
+test('self construction permits controlled factories and immediate initialization close', () => {
   const source = ts.createSourceFile('sample.ts', `
     class SqliteStore {
       static open() { return new SqliteStore(); }
+      static async load() { return new SqliteStore(); }
       static initialize() { const store = new SqliteStore(); store.close(); }
       static other() { return new SqliteStore(); }
       open() { return new SqliteStore(); }
