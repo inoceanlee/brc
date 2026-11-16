@@ -5,13 +5,15 @@ import { test } from 'node:test';
 import { createManagedControlRequestListener } from '../packages/shared/dist/adapters/control/managed-control.js';
 
 test('injected managed control listener checks loopback auth and dispatches health and shutdown', async (t) => {
-  let stopped = 0;
-  const listener = createManagedControlRequestListener({
+  const owner = {
     token: 'secret',
-    health: () => ({ state: 'running', detail: 'ready' }),
-    stop: async () => { stopped += 1; },
-    onStopError: (error) => { throw error; },
-  });
+    detail: 'ready',
+    stopped: 0,
+    health() { return { state: 'running', detail: this.detail }; },
+    async stop() { this.stopped += 1; },
+    onStopError(error) { throw error; },
+  };
+  const listener = createManagedControlRequestListener(owner);
   const server = createServer(listener);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -29,5 +31,5 @@ test('injected managed control listener checks loopback auth and dispatches heal
   assert.equal(first.status, 202);
   assert.equal(second.status, 202);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(stopped, 1);
+  assert.equal(owner.stopped, 1);
 });

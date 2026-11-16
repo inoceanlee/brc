@@ -68,3 +68,14 @@ test('Shared renderer separates machine data and machine errors', () => {
     code: 'NOT_FOUND', exit_code: 4, message: 'Missing', run: 'brc status', retryable: false,
   });
 });
+
+test('Shared renderer formats records as a table and leaves plain mode headerless', () => {
+  const records = [{ name: 'relay', state: 'running' }, { name: 'agent', state: 'stopped' }];
+  const out = [];
+  const streams = { stdout: (text) => out.push(text), stderr: () => undefined };
+  renderCliResult({ status: 'success', data: records }, { format: 'table' }, streams);
+  assert.match(out.join(''), /^name\s+state\nrelay\s+running\nagent\s+stopped\n$/);
+  out.length = 0;
+  renderCliResult({ status: 'success', data: records }, { format: 'plain' }, streams);
+  assert.doesNotMatch(out.join(''), /^name\s+state/);
+});

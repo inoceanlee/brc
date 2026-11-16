@@ -25,6 +25,21 @@ function formatPlain(data: unknown): string {
   }).join('\n');
 }
 
+function formatTable(data: unknown): string {
+  if (!Array.isArray(data) || data.length === 0
+    || !data.every((item) => item !== null && typeof item === 'object' && !Array.isArray(item))) {
+    return formatPlain(data);
+  }
+  const rows = data as Record<string, unknown>[];
+  const keys = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  const value = (item: unknown): string => item === undefined || item === null
+    ? '' : typeof item === 'object' ? JSON.stringify(item) : String(item);
+  const widths = keys.map((key) => Math.max(key.length, ...rows.map((row) => value(row[key]).length)));
+  const header = keys.map((key, index) => key.padEnd(widths[index])).join('  ').trimEnd();
+  const lines = rows.map((row) => keys.map((key, index) => value(row[key]).padEnd(widths[index])).join('  ').trimEnd());
+  return [header, ...lines].join('\n');
+}
+
 export function renderCliResult(
   result: CliResult,
   options: CliRenderOptions,
@@ -56,8 +71,8 @@ export function renderCliResult(
         if (!options.stringifyYaml) throw new Error('YAML renderer requires a serializer.');
         output = options.stringifyYaml(result.data);
         break;
-      case 'plain':
-      case 'table': output = formatPlain(result.data); break;
+      case 'plain': output = formatPlain(result.data); break;
+      case 'table': output = formatTable(result.data); break;
       default: throw new Error('Unsupported CLI output format.');
     }
     if (output) streams.stdout(output.endsWith('\n') ? output : output + '\n');

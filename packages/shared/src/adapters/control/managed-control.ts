@@ -45,7 +45,7 @@ export function createManagedControlRequestListener(options: ManagedControlHandl
     }
 
     if (request.method === 'GET' && request.url === '/health') {
-      void Promise.resolve().then(options.health).then((health) => {
+      void Promise.resolve().then(() => options.health()).then((health) => {
         const ok = health.state === 'running';
         response.writeHead(ok ? 200 : health.state === 'pairing' ? 202 : 503, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok, state: health.state, detail: health.detail }));
@@ -61,7 +61,7 @@ export function createManagedControlRequestListener(options: ManagedControlHandl
       if (!stopping) {
         stopping = true;
         setImmediate(() => {
-          void Promise.resolve().then(options.stop).catch(options.onStopError);
+          void Promise.resolve().then(() => options.stop()).catch((error) => options.onStopError(error));
         });
       }
       return;
