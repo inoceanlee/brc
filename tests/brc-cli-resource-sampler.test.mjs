@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ManagedProcessResourceSampler } from '../packages/cli/dist/adapters/process/resources.js';
 import { inspectProcess } from '../packages/cli/dist/adapters/process/identity.js';
-import { readResourceDiagnostics } from '../packages/cli/dist/commands/diagnostics.js';
 import { FileSnapshotStore } from '../packages/shared/dist/index.js';
 
 test('Traefik binary sampler writes bounded snapshots and marks the final sample exited', async (t) => {
@@ -84,14 +85,13 @@ test('resource diagnostics distinguish the Traefik binary from its Node wrapper'
       peak: { source: 'sampled', rssBytes: 2 * 1024 * 1024, windowMs: 1000 },
     },
   });
-  const rows = await readResourceDiagnostics({
-    root, runtime, diagnostics,
-    traefik: path.join(root, 'traefik'),
-    config: path.join(root, 'config'),
-    data: path.join(root, 'data'),
-    logs: path.join(root, 'logs'),
-    tmp: path.join(root, 'tmp'),
-  });
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+  const result = spawnSync(process.execPath, [
+    fileURLToPath(new URL('../packages/cli/dist/cli.js', import.meta.url)),
+    'diagnose', 'resources', '--json',
+  ], { env: { ...env, BRC_DATA_ROOT: root }, encoding: 'utf8', windowsHide: true, timeout: 20000 });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = JSON.parse(result.stdout);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].service, 'traefik-binary');
   assert.equal(rows[0].state, 'current');

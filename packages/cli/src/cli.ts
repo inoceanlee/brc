@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { appendTraceSummary, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type TraceSummary } from 'brc-shared';
-import { readFile } from 'node:fs/promises';
+import { appendTraceSummary, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
+import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
 import { readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
@@ -185,11 +185,11 @@ async function dispatch(
       return renderOutput(cliSuccess(completionScript(parsed.args[0] as 'powershell' | 'bash' | 'zsh' | 'fish')), parsed, deps);
     case 'diagnose': {
       if (parsed.diagnose === 'functions') {
-        const rows = await readFunctionDiagnostics(deps.paths);
+        const rows = await readFunctionDiagnostics(await snapshotStore(deps.paths));
         return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No function statistics are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
       }
       if (parsed.diagnose === 'resources') {
-        const rows = await readResourceDiagnostics(deps.paths);
+        const rows = await readResourceDiagnostics(await snapshotStore(deps.paths));
         return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No resource samples are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
       }
       const result = parsed.diagnose === 'lifecycle'
@@ -394,6 +394,48 @@ function traefikSettingsChanged(previous: Readonly<BrcSettings>, next: Readonly<
 }
 
 
+async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
+  const { settings } = await readSettings(paths, process.env);
+  const directory = paths.diagnostics ?? path.join(paths.root, 'diagnostics');
+  return new FileSnapshotStore({
+    directory,
+    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+    isSameProcess: async (snapshot: DiagnosticSnapshot) => {
+      if (snapshot.service === 'cli') return snapshot.pid === process.pid;
+      if (snapshot.service === 'traefik' && snapshot.instanceId.endsWith('-binary')) {
+        try {
+          const filename = path.join(paths.runtime, 'traefik-child.json');
+          const info = await lstat(filename);
+          if (!info.isFile() || info.isSymbolicLink()) return false;
+          const record = JSON.parse(await readFile(filename, 'utf8')) as {
+            instanceId?: string; pid?: number; createdAt?: string; executablePath?: string; commandLine?: string;
+          };
+          if (record.instanceId !== snapshot.instanceId || record.pid !== snapshot.pid
+            || !record.createdAt || !record.executablePath || !record.commandLine) return false;
+          const current = await inspectProcess(snapshot.pid);
+          return current?.createdAt === record.createdAt
+            && current.executablePath === record.executablePath
+            && current.commandLine === record.commandLine;
+        } catch {
+          return false;
+        }
+      }
+      let record: { id?: string; pid?: number; createdAt?: string };
+      try {
+        record = JSON.parse(await readFile(path.join(paths.runtime, `${snapshot.service}.json`), 'utf8'));
+      } catch {
+        return false;
+      }
+      if (record.id !== snapshot.instanceId || record.pid !== snapshot.pid || !record.createdAt) return false;
+      try {
+        const current = await inspectProcess(snapshot.pid);
+        return current?.createdAt === record.createdAt;
+      } catch {
+        return false;
+      }
+    },
+  });
+}
 async function main(): Promise<void> {
   const paths = resolveBrcPaths(process.env);
   const args = process.argv.slice(2);

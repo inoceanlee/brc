@@ -1,10 +1,6 @@
-import { lstat, readFile } from 'node:fs/promises';
-import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
-import { readSettings } from '../config/reader.js';
-import { inspectProcess } from '../adapters/process/identity.js';
 import { readManagedLog } from '../maintenance/logs.js';
-import { FileSnapshotStore, snapshotStateLabel, type DiagnosticSnapshot, type SnapshotReadResult } from 'brc-shared';
+import { snapshotStateLabel, type DiagnosticSnapshotPort, type SnapshotReadResult } from 'brc-shared';
 
 export interface StartupDiagnosticResult {
   state: 'missing' | 'recorded';
@@ -43,48 +39,6 @@ export interface ResourceDiagnosticRow {
   unavailable: string | null;
 }
 
-async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
-  const { settings } = await readSettings(paths, process.env);
-  const directory = paths.diagnostics ?? path.join(paths.root, 'diagnostics');
-  return new FileSnapshotStore({
-    directory,
-    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
-    isSameProcess: async (snapshot: DiagnosticSnapshot) => {
-      if (snapshot.service === 'cli') return snapshot.pid === process.pid;
-      if (snapshot.service === 'traefik' && snapshot.instanceId.endsWith('-binary')) {
-        try {
-          const filename = path.join(paths.runtime, 'traefik-child.json');
-          const info = await lstat(filename);
-          if (!info.isFile() || info.isSymbolicLink()) return false;
-          const record = JSON.parse(await readFile(filename, 'utf8')) as {
-            instanceId?: string; pid?: number; createdAt?: string; executablePath?: string; commandLine?: string;
-          };
-          if (record.instanceId !== snapshot.instanceId || record.pid !== snapshot.pid
-            || !record.createdAt || !record.executablePath || !record.commandLine) return false;
-          const current = await inspectProcess(snapshot.pid);
-          return current?.createdAt === record.createdAt
-            && current.executablePath === record.executablePath
-            && current.commandLine === record.commandLine;
-        } catch {
-          return false;
-        }
-      }
-      let record: { id?: string; pid?: number; createdAt?: string };
-      try {
-        record = JSON.parse(await readFile(path.join(paths.runtime, `${snapshot.service}.json`), 'utf8'));
-      } catch {
-        return false;
-      }
-      if (record.id !== snapshot.instanceId || record.pid !== snapshot.pid || !record.createdAt) return false;
-      try {
-        const current = await inspectProcess(snapshot.pid);
-        return current?.createdAt === record.createdAt;
-      } catch {
-        return false;
-      }
-    },
-  });
-}
 
 async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
   const source = await readManagedLog(paths, 'cli');
@@ -109,8 +63,8 @@ export function readLatestLifecycle(paths: BrcPaths): Promise<StartupDiagnosticR
   return readLatestTrace(paths, ['start', 'stop', 'restart']);
 }
 
-export async function readFunctionDiagnostics(paths: BrcPaths): Promise<FunctionDiagnosticRow[]> {
-  const results = await (await snapshotStore(paths)).list();
+export async function readFunctionDiagnostics(store: Pick<DiagnosticSnapshotPort, 'list'>): Promise<FunctionDiagnosticRow[]> {
+  const results = await store.list();
   const rows: FunctionDiagnosticRow[] = [];
   for (const result of results) {
     if (!result.snapshot) continue;
@@ -136,8 +90,8 @@ export async function readFunctionDiagnostics(paths: BrcPaths): Promise<Function
   return rows.sort((left, right) => right.totalMs - left.totalMs);
 }
 
-export async function readResourceDiagnostics(paths: BrcPaths): Promise<ResourceDiagnosticRow[]> {
-  const results: SnapshotReadResult[] = await (await snapshotStore(paths)).list();
+export async function readResourceDiagnostics(store: Pick<DiagnosticSnapshotPort, 'list'>): Promise<ResourceDiagnosticRow[]> {
+  const results: SnapshotReadResult[] = await store.list();
   return results.flatMap((result) => {
     if (!result.snapshot) return [];
     const { snapshot } = result;
