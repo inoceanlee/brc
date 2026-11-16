@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
@@ -230,7 +232,7 @@ test('cleanup preserves a previous-boot record when its live PID identity differ
   process.kill(process.pid, 0);
 });
 
-test('snapshot cleanup advances across fixed-time invocations', async (t) => {
+test('snapshot cleanup selects different batches under a fixed clock', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const capturedAt = new Date(Date.now() - 40 * DAY).toISOString();
   for (let index = 0; index < 257; index++) {
@@ -240,58 +242,51 @@ test('snapshot cleanup advances across fixed-time invocations', async (t) => {
     }));
   }
   const now = Date.now;
+  const randomInt = crypto.randomInt;
   Date.now = () => 2_000_000_001_000;
   try {
+    crypto.randomInt = () => 0;
+    syncBuiltinESMExports();
     await cleanRuntime(brcPaths);
     assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), true);
+    crypto.randomInt = (max) => max - 1;
+    syncBuiltinESMExports();
     await cleanRuntime(brcPaths);
   } finally {
+    crypto.randomInt = randomInt;
+    syncBuiltinESMExports();
     Date.now = now;
   }
-  assert.equal(await exists(path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json')), true);
   assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), false);
+  assert.equal(await exists(path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json')), false);
 });
 
-test('snapshot cursor recovers from malformed content without deleting live snapshots', async (t) => {
+
+test('an interrupted snapshot inspection preserves unchecked snapshots', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
-  const cursor = path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json');
   const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
-  await writeFile(cursor, '{invalid', { mode: 0o600 });
   await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
-  const report = await cleanRuntime(brcPaths);
+  const original = AbortSignal.timeout;
+  AbortSignal.timeout = (ms) => ms === 1000 ? AbortSignal.abort(new Error('inspection timed out')) : original(ms);
+  try { await cleanRuntime(brcPaths); }
+  finally { AbortSignal.timeout = original; }
+  assert.equal(await exists(dead), true);
+});
+
+
+test('cleanup creates a private runtime directory under a permissive umask', { skip: process.platform === 'win32' }, async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  await rm(brcPaths.runtime, { recursive: true });
+  const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
+  await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
+  const module = new URL('../packages/cli/dist/adapters/storage/cleanup.js', import.meta.url).href;
+  const script = `process.umask(0o002); const { cleanRuntime } = await import(${JSON.stringify(module)}); const report = await cleanRuntime(${JSON.stringify(brcPaths)}); console.log(JSON.stringify(report));`;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
+  assert.equal(child.status, 0, child.stderr);
+  const report = JSON.parse(child.stdout);
+  assert.equal(report.failures.length, 0);
+  assert.equal((await stat(brcPaths.runtime)).mode & 0o077, 0);
   assert.equal(await exists(dead), false);
-  assert.ok(report.preserved.some((item) => item.path === cursor));
-  assert.equal(JSON.parse(await readFile(cursor, 'utf8')).lastPid, 2147483647);
-});
-
-test('snapshot cursor refuses a symbolic link and preserves snapshots', async (t) => {
-  const { root, paths: brcPaths } = await makeRoot(t);
-  const target = path.join(root, 'other-data');
-  const cursor = path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json');
-  const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
-  await writeFile(target, 'untouched');
-  try { await symlink(target, cursor); } catch (error) {
-    if (error.code === 'EPERM' || error.code === 'EACCES') return t.skip('symlink creation unavailable');
-    throw error;
-  }
-  await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
-  const report = await cleanRuntime(brcPaths);
-  assert.equal(await readFile(target, 'utf8'), 'untouched');
-  assert.equal(await exists(dead), true);
-  assert.ok(report.failures.some((item) => item.path === cursor) || report.preserved.some((item) => item.path === cursor));
-});
-
-test('snapshot cursor with unsafe permissions preserves candidates', { skip: process.platform === 'win32' }, async (t) => {
-  const { paths: brcPaths } = await makeRoot(t);
-  const cursor = path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json');
-  const dead = path.join(brcPaths.diagnostics, 'relay-dead.json');
-  await writeFile(cursor, JSON.stringify({ version: 1, lastPid: 0 }), { mode: 0o666 });
-  const { chmod } = await import('node:fs/promises');
-  await chmod(cursor, 0o666);
-  await writeFile(dead, JSON.stringify({ schema: 1, service: 'relay', instanceId: 'dead', pid: 2147483647, capturedAt: new Date(Date.now() - 40 * DAY).toISOString(), status: 'running' }));
-  const report = await cleanRuntime(brcPaths);
-  assert.equal(await exists(dead), true);
-  assert.ok(report.failures.some((item) => item.path === cursor));
 });
 
 test('removes a valid process record only after its process exits', async (t) => {
