@@ -14,7 +14,7 @@ import { AgentConfigManager } from '../packages/agent/dist/adapters/storage/conf
 import { resolveAgentPaths } from '../packages/agent/dist/adapters/storage/agent-paths.js';
 import { FileSettingsLock, resolveSettings } from '../packages/shared/dist/index.js';
 
-const require = createRequire(import.meta.url);
+const require = createRequire(new URL('../packages/agent/package.json', import.meta.url));
 const yaml = require('js-yaml');
 
 test('Agent writes keep the shared last-good config current for CLI rollback', async (t) => {
