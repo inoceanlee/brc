@@ -87,7 +87,7 @@ async function inspectNonWindows(pid: number, signal?: AbortSignal): Promise<Pro
     let rawCommand: Buffer;
     try {
       [stat, executablePath, rawCommand] = await Promise.all([
-        readFile(`/proc/${pid}/stat`, 'utf8'), realpath(`/proc/${pid}/exe`), readFile(`/proc/${pid}/cmdline`),
+        readFile(`/proc/${pid}/stat`, { encoding: 'utf8', signal }), realpath(`/proc/${pid}/exe`), readFile(`/proc/${pid}/cmdline`, { signal }),
       ]);
     } catch (error) {
       const err = errorCode(error);
@@ -98,7 +98,7 @@ async function inspectNonWindows(pid: number, signal?: AbortSignal): Promise<Pro
     if (closeParen < 0) throw new Error(`Linux returned malformed process identity for ${pid}.`);
     const startTicks = stat.slice(closeParen + 2).trim().split(/\s+/)[19];
     if (!startTicks) throw new Error(`Linux returned incomplete start time for process ${pid}.`);
-    const bootId = (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+    const bootId = (await readFile('/proc/sys/kernel/random/boot_id', { encoding: 'utf8', signal })).trim();
     const commandLine = rawCommand.toString('utf8').split('\0').filter(Boolean).join(' ');
     if (!commandLine) return null;
     return { pid, createdAt: `${bootId}:${startTicks}`, executablePath, commandLine };
