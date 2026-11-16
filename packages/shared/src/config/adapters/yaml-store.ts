@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { watch as watchFile } from 'node:fs';
+import { mkdirSync, watch as watchFile } from 'node:fs';
 import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { DEFAULT_SETTINGS, resolveSettings, type BrcSettings } from '../core/settings.js';
@@ -72,8 +72,10 @@ export class YamlSettingsStore implements SettingsStorePort {
   }
 
   watch(listener: () => void): () => void {
+    const directory = path.dirname(this.options.filename);
+    mkdirSync(directory, { recursive: true });
     const basename = path.basename(this.options.filename);
-    const watcher = watchFile(path.dirname(this.options.filename), { persistent: false }, (_event, file) => {
+    const watcher = watchFile(directory, { persistent: false }, (_event, file) => {
       if (!file || String(file) === basename) listener();
     });
     return () => watcher.close();

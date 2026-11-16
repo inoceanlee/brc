@@ -210,10 +210,24 @@ async function architectureViolations() {
   return violations.sort();
 }
 
+function unexpectedArchitectureViolations(actual, baseline) {
+  const allowed = new Set(baseline);
+  return actual.filter((entry) => !allowed.has(entry));
+}
+
+test('removing an approved legacy violation does not block independent package work', () => {
+  const removed = LEGACY_ARCHITECTURE_VIOLATIONS.slice(1);
+  assert.deepEqual(unexpectedArchitectureViolations(removed, LEGACY_ARCHITECTURE_VIOLATIONS), []);
+  assert.deepEqual(
+    unexpectedArchitectureViolations([...removed, 'relay/core/auth/unknown.ts: core imports external dependency fs'], LEGACY_ARCHITECTURE_VIOLATIONS),
+    ['relay/core/auth/unknown.ts: core imports external dependency fs'],
+  );
+});
+
 test('Core boundaries and long-lived object ownership reject new violations per file', async () => {
   const actual = await architectureViolations();
   if (process.env.BRC_ARCHITECTURE_PRINT_BASELINE === '1') {
     process.stdout.write('ARCHITECTURE_BASELINE=' + JSON.stringify(actual) + '\n');
   }
-  assert.deepEqual(actual, LEGACY_ARCHITECTURE_VIOLATIONS);
+  assert.deepEqual(unexpectedArchitectureViolations(actual, LEGACY_ARCHITECTURE_VIOLATIONS), []);
 });
