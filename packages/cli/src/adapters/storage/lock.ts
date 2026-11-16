@@ -4,7 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../../config/paths.js';
 import { DEFAULT_SETTINGS } from '../../config/settings.js';
 import { inspectProcess, type ProcessIdentity } from '../process/identity.js';
-import { LockStore, type LockOwner } from './lock-store.js';
+import type { LockStore, LockOwner } from './lock-store.js';
 
 export interface LockWaitOptions { waitMs?: number; pollMs?: number }
 
@@ -40,14 +40,14 @@ export class LifecycleLock {
 
   private queue: Promise<void> = Promise.resolve();
   private readonly context = new AsyncLocalStorage<LifecycleLock>();
-  private readonly store: LockStore;
+  private readonly store: Pick<LockStore, 'acquire' | 'reclaimExpired' | 'isMissing' | 'releaseIfOwned'>;
   private readonly paths: BrcPaths;
   private waitMs: number;
   private pollMs: number;
 
-  constructor(paths: BrcPaths, options: LockWaitOptions = {}) {
+  constructor(paths: BrcPaths, store: Pick<LockStore, 'acquire' | 'reclaimExpired' | 'isMissing' | 'releaseIfOwned'>, options: LockWaitOptions = {}) {
     this.paths = paths;
-    this.store = new LockStore(paths);
+    this.store = store;
     this.waitMs = options.waitMs ?? DEFAULT_SETTINGS.runtime.lockWaitMs;
     this.pollMs = options.pollMs ?? DEFAULT_SETTINGS.runtime.lockPollMs;
   }

@@ -4,8 +4,24 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { inspectProcess } from '../packages/cli/dist/adapters/process/identity.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
+
+test('lifecycle lock uses the supplied store for its lock file', async (t) => {
+  const paths = await sandbox(t);
+  const suppliedPaths = { ...paths, runtime: path.join(paths.root, 'supplied-runtime') };
+  await mkdir(suppliedPaths.runtime);
+  const lock = new LifecycleLockImpl(paths, new LockStore(suppliedPaths));
+  await lock.runExclusive(async () => {
+    assert.ok((await stat(path.join(suppliedPaths.runtime, 'lifecycle.lock'))).isDirectory());
+    await assert.rejects(stat(path.join(paths.runtime, 'lifecycle.lock')), { code: 'ENOENT' });
+  });
+});
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
 async function sandbox(t) {

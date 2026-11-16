@@ -7,10 +7,15 @@ import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
 import { DEFAULT_SETTINGS as SHARED_DEFAULT_SETTINGS } from '../packages/shared/dist/index.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
 import { loadConfig } from '../packages/relay/dist/adapters/http/app.js';
 import { runConfigCommand } from '../packages/cli/dist/commands/config.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
 
 async function createFixture(t, options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'brc-config-test-'));

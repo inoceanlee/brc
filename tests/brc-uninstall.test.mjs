@@ -8,11 +8,28 @@ import { test } from 'node:test';
 import { uninstallBrc } from '../packages/cli/dist/maintenance/uninstall.js';
 import { identifyGlobalPackageManager, packageRemovalArguments, BRC_PACKAGE_NAME } from '../packages/cli/dist/maintenance/global-package.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { inspectProcess, ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
-import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
+import { FileSnapshotStore } from '../packages/shared/dist/diagnostics/adapters/snapshots.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
+
+function cleanRuntime(paths, options = {}) {
+  return runCleanup(paths, options, {
+    lockStore: new LockStore(paths),
+    lifecycleLock: new LifecycleLock(paths, {
+      waitMs: options.settings?.runtime.lockWaitMs,
+      pollMs: options.settings?.runtime.lockPollMs,
+    }),
+    snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+  });
+}
 
 function paths(root) {
   return {

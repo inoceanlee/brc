@@ -9,10 +9,15 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { AgentConfigManager } from '../packages/agent/dist/adapters/storage/config-manager.js';
 import { resolveAgentPaths } from '../packages/agent/dist/adapters/storage/agent-paths.js';
 import { FileSettingsLock, resolveSettings } from '../packages/shared/dist/index.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
 
 const require = createRequire(new URL('../packages/agent/package.json', import.meta.url));
 const yaml = require('js-yaml');

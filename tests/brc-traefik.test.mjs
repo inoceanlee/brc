@@ -14,13 +14,18 @@ import { ProcessManager } from '../packages/cli/dist/adapters/process/controller
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
 import { TraefikManager } from '../packages/cli/dist/traefik/manager.js';
 import { waitForConfigGeneration } from '../packages/cli/dist/traefik/runtime.js';
 import { renderConfig } from '../packages/cli/dist/traefik/core.js';
 import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
 import { TraefikOutput } from '../packages/cli/dist/traefik/output.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
 
 const API_URL = 'https://api.github.com/repos/traefik/traefik/releases/latest';
 const TEST_BINARY = process.env.BRC_TRAEFIK_TEST_BINARY;

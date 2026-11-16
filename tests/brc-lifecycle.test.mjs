@@ -13,9 +13,26 @@ import { inspectProcesses } from '../packages/cli/dist/adapters/process/identity
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { startManagedControlServer } from '../packages/shared/dist/managed-control.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
+import { FileSnapshotStore } from '../packages/shared/dist/diagnostics/adapters/snapshots.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
+
+function cleanRuntime(paths, options = {}) {
+  return runCleanup(paths, options, {
+    lockStore: new LockStore(paths),
+    lifecycleLock: new LifecycleLock(paths, {
+      waitMs: options.settings?.runtime.lockWaitMs,
+      pollMs: options.settings?.runtime.lockPollMs,
+    }),
+    snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+  });
+}
 
 const fakeService = `
 import { createServer } from 'node:http';
@@ -661,6 +678,7 @@ import { readSettings } from ${JSON.stringify(new URL('../packages/cli/dist/conf
 import { ServiceManager } from ${JSON.stringify(new URL('../packages/cli/dist/core/lifecycle/workflow.js', import.meta.url).href)};
 import { createDefaultServices } from ${JSON.stringify(new URL('../packages/cli/dist/adapters/process/specs.js', import.meta.url).href)};
 import { LifecycleLock } from ${JSON.stringify(new URL('../packages/cli/dist/adapters/storage/lock.js', import.meta.url).href)};
+import { LockStore } from ${JSON.stringify(new URL('../packages/cli/dist/adapters/storage/lock-store.js', import.meta.url).href)};
 const paths = resolveBrcPaths(process.env);
 const initial = await readSettings(paths, process.env);
 if (initial.settings.services.relayPort !== 13000) throw new Error('initial settings were not loaded');
@@ -675,7 +693,7 @@ const processes = {
   },
   async stop(spec) { states.set(spec.name, { name: spec.name, state: 'stopped', pid: null, detail: 'stopped' }); },
 };
-const lock = new LifecycleLock(paths);
+const lock = new LifecycleLock(paths, new LockStore(paths));
 const manager = new ServiceManager(paths, relayServices(initial.settings), processes, processes, lock, async () => {
   const current = await readSettings(paths, process.env);
   return relayServices(current.settings);
@@ -819,7 +837,8 @@ test('prevents a second CLI process from acquiring an active lifecycle lock', as
     const lockUrl = new URL('../packages/cli/dist/adapters/storage/lock.js', import.meta.url).href;
     const source = `
       import { LifecycleLock } from ${JSON.stringify(lockUrl)};
-      await new LifecycleLock(${JSON.stringify(runtimePaths)}).runExclusive(async () => {});
+      import { LockStore } from ${JSON.stringify(new URL('../packages/cli/dist/adapters/storage/lock-store.js', import.meta.url).href)};
+      await new LifecycleLock(${JSON.stringify(runtimePaths)}, new LockStore(${JSON.stringify(runtimePaths)})).runExclusive(async () => {});
       console.log('unexpectedly acquired');
     `;
     const child = spawn(process.execPath, ['--input-type=module', '-e', source], {

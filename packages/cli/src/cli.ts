@@ -19,6 +19,7 @@ import { SettingsManager } from './config/manager.js';
 import { readSettings } from './config/reader.js';
 import type { BrcSettings } from './config/settings.js';
 import { LifecycleLock } from './adapters/storage/lock.js';
+import { LockStore } from './adapters/storage/lock-store.js';
 import { ProcessManager } from './adapters/process/controller.js';
 import { inspectProcess } from './adapters/process/identity.js';
 import { ManagedProcessResourceSampler } from './adapters/process/resources.js';
@@ -447,7 +448,15 @@ async function main(): Promise<void> {
   const lightweight = !parsed || parsed.name === 'help' || parsed.name === 'version' || parsed.name === 'diagnose' || parsed.name === 'completion';
   const clean = async (cleanPaths: BrcPaths) => {
     const { settings: cleanupSettings } = await readSettings(cleanPaths, process.env);
-    return cleanRuntime(cleanPaths, { settings: cleanupSettings });
+    const lockStore = new LockStore(cleanPaths);
+    return cleanRuntime(cleanPaths, { settings: cleanupSettings }, {
+      lockStore,
+      lifecycleLock: new LifecycleLock(cleanPaths, lockStore, {
+        waitMs: cleanupSettings.runtime.lockWaitMs,
+        pollMs: cleanupSettings.runtime.lockPollMs,
+      }),
+      snapshotStore: new FileSnapshotStore({ directory: cleanPaths.diagnostics }),
+    });
   };
   if (lightweight) {
     process.exitCode = await runCli(args, {
@@ -464,7 +473,7 @@ async function main(): Promise<void> {
     entry === 'runtime' && readdirSync(paths.runtime).length === 0,
   );
   const serviceParentEnv = parsed?.noTelemetry ? { ...process.env, DO_NOT_TRACK: '1' } : process.env;
-  const lifecycleLock = new LifecycleLock(paths);
+  const lifecycleLock = new LifecycleLock(paths, new LockStore(paths));
   let configTraefikManager: TraefikManager | undefined;
   const sharedConfigLock = new FileSettingsLock(paths.config);
   const settingsManager = await SettingsManager.load(paths, process.env, {

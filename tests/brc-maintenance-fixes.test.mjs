@@ -4,7 +4,25 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
-import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
+import { FileSnapshotStore } from '../packages/shared/dist/diagnostics/adapters/snapshots.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
+
+function cleanRuntime(paths, options = {}) {
+  return runCleanup(paths, options, {
+    lockStore: new LockStore(paths),
+    lifecycleLock: new LifecycleLock(paths, {
+      waitMs: options.settings?.runtime.lockWaitMs,
+      pollMs: options.settings?.runtime.lockPollMs,
+    }),
+    snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+  });
+}
 
 const api = 'https://api.github.com/repos/traefik/traefik/releases/latest';
 const release = (v) => ({ tag_name: 'v' + v, draft: false, prerelease: false, assets: [

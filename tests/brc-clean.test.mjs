@@ -9,11 +9,41 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { cleanRuntime } from '../packages/cli/dist/adapters/storage/cleanup.js';
+import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
 import { ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
-import { LifecycleLock } from '../packages/cli/dist/adapters/storage/lock.js';
+import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { inspectProcess } from '../packages/cli/dist/adapters/process/identity.js';
 import { appendRotatingLog } from '../packages/shared/dist/managed-log.js';
+import { FileSnapshotStore } from '../packages/shared/dist/diagnostics/adapters/snapshots.js';
+import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
+
+function LifecycleLock(paths, options) {
+  return new LifecycleLockImpl(paths, new LockStore(paths), options);
+}
+
+function cleanRuntime(paths, options = {}) {
+  return runCleanup(paths, options, {
+    lockStore: new LockStore(paths),
+    lifecycleLock: new LifecycleLock(paths, {
+      waitMs: options.settings?.runtime.lockWaitMs,
+      pollMs: options.settings?.runtime.lockPollMs,
+    }),
+    snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+  });
+}
+test('cleanup preserves expired logs when the supplied lifecycle lock rejects acquisition', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const filename = path.join(brcPaths.logs, 'expired.log');
+  await writeFile(filename, 'retained');
+  await setAge(filename, 100 * DAY);
+  const report = await runCleanup(brcPaths, {}, {
+    lockStore: new LockStore(brcPaths),
+    lifecycleLock: { runExclusive: async () => { throw new Error('lock unavailable'); } },
+    snapshotStore: new FileSnapshotStore({ directory: brcPaths.diagnostics }),
+  });
+  assert.equal(await readFile(filename, 'utf8'), 'retained');
+  assert.ok(report.preserved.some((entry) => entry.reason.includes('lock unavailable')));
+});
 
 const DAY = 24 * 60 * 60 * 1000;
 const MIB = 1024 * 1024;
