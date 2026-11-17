@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { lstatSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -14,12 +14,31 @@ interface CommandOutput {
 }
 
 function normalizeCandidatePath(target: string): string {
-  let resolved: string;
-  try {
-    resolved = realpathSync.native(target);
-  } catch {
-    resolved = path.resolve(target);
+  const absolute = path.resolve(target);
+  const parsed = path.parse(absolute);
+  const segments = absolute.slice(parsed.root.length).split(path.sep).filter(Boolean);
+  let lastReal = parsed.root;
+  let restIndex = segments.length;
+  for (let i = 0; i < segments.length; i++) {
+    const next = path.join(lastReal, segments[i]);
+    try {
+      if (lstatSync(next).isSymbolicLink()) {
+        restIndex = i;
+        break;
+      }
+      lastReal = next;
+    } catch {
+      restIndex = i;
+      break;
+    }
   }
+  let base: string;
+  try {
+    base = realpathSync.native(lastReal);
+  } catch {
+    base = lastReal;
+  }
+  const resolved = restIndex < segments.length ? path.join(base, ...segments.slice(restIndex)) : base;
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
