@@ -179,7 +179,8 @@ export async function processDefinitelyExited(pid: number): Promise<boolean> {
       try {
         const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
         const close = stat.lastIndexOf(')');
-        return close >= 0 && stat.slice(close + 2).startsWith('Z ');
+        const state = close >= 0 ? stat.slice(close + 2, close + 4) : '';
+        return state === 'Z ' || state === 'X ' || state === 'x ';
       } catch {
         return false;
       }
@@ -646,9 +647,12 @@ export class ProcessManager implements ControlHealthPort {
       signal?.throwIfAborted();
       if (!current) {
         if (await processDefinitelyExited(record.pid)) return true;
-        throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing process control.`), { exitCode: 5 });
+        if (this.customInspector || Date.now() + this.pollIntervalMs >= deadline) {
+          throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing process control.`), { exitCode: 5 });
+        }
+      } else if (!sameIdentity(record, current, spec)) {
+        throw Object.assign(new Error(`${spec.name} PID ${record.pid} no longer matches its recorded identity.`), { exitCode: 5 });
       }
-      if (!sameIdentity(record, current, spec)) throw Object.assign(new Error(`${spec.name} PID ${record.pid} no longer matches its recorded identity.`), { exitCode: 5 });
       await sleep(Math.min(this.pollIntervalMs, Math.max(0, deadline - Date.now())), undefined, { signal });
     }
     signal?.throwIfAborted();
