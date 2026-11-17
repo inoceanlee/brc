@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -12,8 +13,18 @@ interface CommandOutput {
   output: string;
 }
 
+function normalizeCandidatePath(target: string): string {
+  let resolved: string;
+  try {
+    resolved = realpathSync.native(target);
+  } catch {
+    resolved = path.resolve(target);
+  }
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
 function isWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  const relative = path.relative(normalizeCandidatePath(root), normalizeCandidatePath(candidate));
   return relative !== '' && relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
 }
 
