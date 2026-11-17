@@ -110,7 +110,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
     historyFailureReporter = report;
     return () => { historyFailureReporter = (message) => process.stderr.write(message + '\n'); };
   };
-  const toolHistory = new ToolHistory(new ToolHistoryStorage(paths.historyDirectory), paths, env, reportHistoryFailure);
+  const toolHistory = new ToolHistory(new ToolHistoryStorage(paths.historyDirectory), reportHistoryFailure);
   const usageTracker = new UsageTracker({
     configManager, featureFlagManager, getCurrentClient: () => currentClient,
     isOnboardingDisabled: () => 'disableOnboarding' in globalThis && Boolean(globalThis.disableOnboarding),

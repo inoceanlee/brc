@@ -282,8 +282,8 @@ test('injected dispatchers isolate history and report sanitized recording failur
   const { VERSION } = await import('../packages/agent/dist/core/version.js');
   const firstStorage = new ToolHistoryStorage(path.join(root, 'dispatcher-first'));
   const secondStorage = new ToolHistoryStorage(path.join(root, 'dispatcher-second'));
-  const firstHistory = new ToolHistory(firstStorage, resolveAgentPaths(), process.env, () => {});
-  const secondHistory = new ToolHistory(secondStorage, resolveAgentPaths(), process.env, () => {});
+  const firstHistory = new ToolHistory(firstStorage, () => {});
+  const secondHistory = new ToolHistory(secondStorage, () => {});
   t.after(async () => {
     await firstHistory.cleanup();
     await secondHistory.cleanup();
@@ -335,63 +335,6 @@ test('injected dispatchers isolate history and report sanitized recording failur
   }
 });
 
-test('startup recovers a legacy file left after an interrupted migration', async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-recover-'));
-  const previous = process.env.BRC_DATA_ROOT;
-  t.after(async () => {
-    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
-    else process.env.BRC_DATA_ROOT = previous;
-    await rm(directory, { recursive: true, force: true });
-  });
-  process.env.BRC_DATA_ROOT = directory;
-  const destination = path.join(directory, 'data', 'agent');
-  await mkdir(destination, { recursive: true });
-  const record = {
-    timestamp: '2026-01-01T00:00:00.000Z', toolName: 'read_file',
-    arguments: { path: 'recover-private-path' },
-    output: { content: [{ type: 'text', text: 'recover-private-data' }] },
-  };
-  await writeFile(path.join(destination, 'tool-history.json'), JSON.stringify([record]));
-  const legacy = path.join(destination, 'tool-history.jsonl');
-  await writeFile(legacy, JSON.stringify(record) + '\n');
-  const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {});
-  t.after(() => independent.cleanup());
-  assert.equal(independent.getRecentCalls({ maxResults: 10 }).length, 1);
-  assert.doesNotMatch(await readFile(path.join(destination, 'tool-history.json'), 'utf8'), /recover-private/);
-  await assert.rejects(readFile(legacy, 'utf8'), { code: 'ENOENT' });
-});
-
-test('failed migration retains the original legacy history for recovery', async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-failed-migration-'));
-  const previous = process.env.BRC_DATA_ROOT;
-  t.after(async () => {
-    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
-    else process.env.BRC_DATA_ROOT = previous;
-    await rm(directory, { recursive: true, force: true });
-  });
-  process.env.BRC_DATA_ROOT = directory;
-  const destination = path.join(directory, 'data', 'agent');
-  await mkdir(destination, { recursive: true });
-  const legacy = path.join(destination, 'tool-history.jsonl');
-  const source = JSON.stringify({
-    timestamp: '2026-01-01T00:00:00.000Z', toolName: 'read_file',
-    arguments: { path: 'recoverable-private-path' }, output,
-  }) + '\n';
-  await writeFile(legacy, source);
-  const originalRename = fs.renameSync;
-  fs.renameSync = () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); };
-  syncBuiltinESMExports();
-  try {
-    const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-    assert.throws(() => new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {}), /disk failure/);
-  } finally {
-    fs.renameSync = originalRename;
-    syncBuiltinESMExports();
-  }
-  assert.equal(await readFile(legacy, 'utf8'), source);
-});
-
 test('startup rewrites existing history without sensitive fields', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-sanitize-'));
   const previous = process.env.BRC_DATA_ROOT;
@@ -411,40 +354,11 @@ test('startup rewrites existing history without sensitive fields', async (t) => 
     extra: 'old-private-extra',
   }]));
   const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {});
+  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), () => {});
   t.after(() => independent.cleanup());
   const stored = await readFile(canonical, 'utf8');
   assert.doesNotMatch(stored, /old-private-/);
   const records = independent.getRecentCalls({ maxResults: 10 });
   assert.equal(records[0].toolName, 'read_file');
   assert.equal(records[0].output.isError, true);
-});
-
-test('existing JSONL history migrates into a private JSON record collection', async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'brc-history-legacy-'));
-  const previous = process.env.BRC_DATA_ROOT;
-  t.after(async () => {
-    if (previous === undefined) delete process.env.BRC_DATA_ROOT;
-    else process.env.BRC_DATA_ROOT = previous;
-    await rm(directory, { recursive: true, force: true });
-  });
-  process.env.BRC_DATA_ROOT = directory;
-  const destination = path.join(directory, 'data', 'agent');
-  await mkdir(destination, { recursive: true });
-  const legacy = path.join(destination, 'tool-history.jsonl');
-  await writeFile(legacy, JSON.stringify({
-    timestamp: new Date().toISOString(), toolName: 'read_file',
-    arguments: { path: 'private-record-path' },
-    output: { content: [{ type: 'text', text: 'private-record-data' }] },
-  }) + '\n');
-  const { ToolHistory } = await import('../packages/agent/dist/adapters/telemetry/toolHistory.js');
-  const independent = new ToolHistory(new ToolHistoryStorage(resolveAgentPaths().historyDirectory), resolveAgentPaths(), process.env, () => {});
-  t.after(() => independent.cleanup());
-  const records = independent.getRecentCalls({ maxResults: 10 });
-  assert.equal(records.length, 1);
-  assert.equal(records[0].toolName, 'read_file');
-  const stored = await readFile(path.join(destination, 'tool-history.json'), 'utf8');
-  assert.equal(Array.isArray(JSON.parse(stored)), true);
-  assert.doesNotMatch(stored, /private-record-/);
-  await assert.rejects(readFile(legacy, 'utf8'), { code: 'ENOENT' });
 });

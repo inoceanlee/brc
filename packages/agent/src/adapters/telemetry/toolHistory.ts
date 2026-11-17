@@ -1,7 +1,4 @@
-import { existsSync, lstatSync, readFileSync, unlinkSync } from 'node:fs';
-import path from 'node:path';
 import { ServerResult } from '../../core/types.js';
-import { resolveAgentPaths, type AgentPaths } from '../storage/agent-paths.js';
 import type { ToolHistoryStorage } from './toolHistoryStorage.js';
 
 export interface ToolCallRecord {
@@ -55,54 +52,14 @@ export class ToolHistory {
   private isWriting = false;
   private writeInterval?: NodeJS.Timeout;
 
-  constructor(storage: ToolHistoryStorage, paths: AgentPaths, env: NodeJS.ProcessEnv, private readonly reportWriteFailure: () => void) {
+  constructor(storage: ToolHistoryStorage, private readonly reportWriteFailure: () => void) {
     this.storage = storage;
-    this.migrateLegacyHistory(paths, env);
 
     // Load existing history on startup
     this.loadFromDisk();
     
     // Start async write processor
     this.startWriteProcessor();
-  }
-
-  private migrateLegacyHistory(paths: AgentPaths, env: NodeJS.ProcessEnv): void {
-    const candidates = [path.join(paths.historyDirectory, 'tool-history.jsonl')];
-    const defaultRoot = resolveAgentPaths({ ...env, BRC_DATA_ROOT: undefined }).root;
-    if (path.normalize(paths.root).toLowerCase() === path.normalize(defaultRoot).toLowerCase()) {
-      candidates.push(path.join(paths.legacyDirectory, 'tool-history.jsonl'));
-    }
-    for (const legacy of candidates) {
-      this.storage.withLock(() => {
-        if (!existsSync(legacy)) return;
-        const stat = lstatSync(legacy);
-        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Legacy Agent history must be a plain file.');
-        const lines = readFileSync(legacy, 'utf8').split('\n').filter((line) => line.trim());
-        const records = lines.map((line) => JSON.parse(line) as ToolCallRecord);
-        const safe = records.slice(-this.MAX_ENTRIES).map((record) => this.sanitizeRecord(record));
-        const existing = (this.storage.readText() ?? '').split('\n').filter(Boolean)
-          .map((line) => this.sanitizeRecord(JSON.parse(line) as ToolCallRecord));
-        const available = new Map<string, number>();
-        for (const record of existing) {
-          const key = JSON.stringify(record);
-          available.set(key, (available.get(key) ?? 0) + 1);
-        }
-        const missing = safe.filter((record) => {
-          const key = JSON.stringify(record);
-          const count = available.get(key) ?? 0;
-          if (count === 0) return true;
-          available.set(key, count - 1);
-          return false;
-        });
-        const merged = [...existing, ...missing].slice(-this.MAX_ENTRIES);
-        this.storage.rewriteText(merged.map((record) => JSON.stringify(record)).join('\n') + (merged.length ? '\n' : ''));
-        const persisted = JSON.parse(readFileSync(this.storage.file, 'utf8')) as unknown;
-        if (JSON.stringify(persisted) !== JSON.stringify(merged)) {
-          throw new Error('Migrated Agent history failed verification.');
-        }
-        unlinkSync(legacy);
-      });
-    }
   }
 
   private loadFromDisk(): void {
