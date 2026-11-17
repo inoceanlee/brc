@@ -188,8 +188,18 @@ async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: str
         normalizedPathToCheck = normalizedPathToCheck.slice(0, -1);
     }
 
+    const resolvedAllowed = await Promise.all(
+        allowedDirectories.map(async (allowedDir) => {
+            try {
+                return await fs.realpath(allowedDir, { encoding: 'utf8' });
+            } catch {
+                return allowedDir;
+            }
+        }),
+    );
+
     // Check if the path is within any allowed directory
-    const isAllowed = allowedDirectories.some(allowedDir => {
+    const isAllowed = resolvedAllowed.some(allowedDir => {
         let normalizedAllowedDir = normalizePath(allowedDir);
         if (normalizedAllowedDir.slice(-1) === path.sep) {
             normalizedAllowedDir = normalizedAllowedDir.slice(0, -1);
