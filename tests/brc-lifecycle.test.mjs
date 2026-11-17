@@ -1085,6 +1085,7 @@ test('refuses forced termination when the PID identity changes after shutdown', 
 
 test('start and stop preserve an old record when the PID identity differs', async (t) => {
   const fakeForeignPid = 999999;
+  const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
   const harness = await makeHarness(t, {
     processOptions: {
       inspectProcess: async (pid) => {
@@ -1092,7 +1093,7 @@ test('start and stop preserve an old record when the PID identity differs', asyn
           return {
             pid: fakeForeignPid,
             createdAt: '1234567890',
-            executablePath: 'C:\\Windows\\System32\\svchost.exe',
+            executablePath: foreignExecutable,
             commandLine: 'svchost.exe -k netsvcs',
           };
         }
@@ -1108,7 +1109,7 @@ test('start and stop preserve an old record when the PID identity differs', asyn
     service: harness.spec.name,
     pid: fakeForeignPid,
     createdAt: '9999999999', // Mismatched creation time
-    executablePath: 'C:\\Windows\\System32\\svchost.exe',
+    executablePath: foreignExecutable,
     commandLine: `node ${harness.spec.entrypoint} --brc-managed-id=11111111-2222-3333-4444-555555555555`,
     workspaceRoot: harness.spec.workspaceRoot,
     entrypoint: harness.spec.entrypoint,

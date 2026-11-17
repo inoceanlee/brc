@@ -14,6 +14,7 @@ import { ProcessManager } from '../packages/cli/dist/adapters/process/controller
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
+import { PlatformEnvironment } from '../packages/cli/dist/config/platform-environment.js';
 import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
@@ -136,10 +137,18 @@ function makeTarGz(entries) {
 }
 
 
+const traefikTarget = new PlatformEnvironment().resolveTraefikTarget();
+const traefikBinary = traefikTarget.executableName;
+const traefikAssetSuffix = `_${traefikTarget.platform}_${traefikTarget.arch}.${traefikTarget.archiveExt}`;
+
+function makeArchive(entries) {
+  return traefikTarget.archiveExt === 'zip' ? makeZip(entries) : makeTarGz(entries);
+}
+
 function makeRelease(version, options = {}) {
-  const filename = `traefik_v${version}_windows_amd64.zip`;
+  const filename = `traefik_v${version}${traefikAssetSuffix}`;
   const checksumFilename = `traefik_v${version}_checksums.txt`;
-  const archive = options.archive ?? makeZip([{ name: 'traefik.exe', contents: Buffer.from(`binary-${version}`) }]);
+  const archive = options.archive ?? makeArchive([{ name: traefikBinary, contents: Buffer.from(`binary-${version}`) }]);
   const digest = options.checksum ?? createHash('sha256').update(archive).digest('hex');
   const release = {
     tag_name: `v${version}`,
@@ -158,7 +167,7 @@ function makeRelease(version, options = {}) {
       return new Response(JSON.stringify(state.release), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     const checksumAsset = state.release.assets.find((asset) => asset.name.endsWith('_checksums.txt'));
-    const archiveAsset = state.release.assets.find((asset) => asset.name.endsWith('_windows_amd64.zip'));
+    const archiveAsset = state.release.assets.find((asset) => asset.name.endsWith(traefikAssetSuffix));
     if (url.href === checksumAsset?.browser_download_url) return new Response(state.checksumText, { status: 200 });
     if (url.href === archiveAsset?.browser_download_url) {
       if (state.interrupted) {
@@ -341,7 +350,7 @@ async function manifest(paths) {
 }
 
 async function installedExecutable(paths, version) {
-  return readFile(path.join(paths.traefik, 'versions', version, 'traefik.exe'), 'utf8');
+  return readFile(path.join(paths.traefik, 'versions', version, traefikBinary), 'utf8');
 }
 
 test('setup reports operation stages and download failures without changing the error', async (t) => {
@@ -362,7 +371,7 @@ test('missing deployment templates leave the installed version and both configur
   const release = makeRelease('3.7.16');
   await makeManager(brcPaths, release).setup();
   const files = [
-    path.join(brcPaths.traefik, 'versions', '3.7.16', 'traefik.exe'),
+    path.join(brcPaths.traefik, 'versions', '3.7.16', traefikBinary),
     path.join(brcPaths.traefik, 'versions.json'),
     path.join(brcPaths.traefik, 'config', 'dynamic.yml'),
     path.join(brcPaths.traefik, 'config', 'traefik.yml'),
@@ -407,7 +416,7 @@ test('unsafe archives and checksum failures preserve installed files and both co
   const manager = makeManager(brcPaths, release);
   await manager.setup();
   const files = [
-    path.join(brcPaths.traefik, 'versions', '3.7.16', 'traefik.exe'),
+    path.join(brcPaths.traefik, 'versions', '3.7.16', traefikBinary),
     path.join(brcPaths.traefik, 'versions.json'),
     path.join(brcPaths.traefik, 'config', 'dynamic.yml'),
     path.join(brcPaths.traefik, 'config', 'traefik.yml'),
@@ -415,8 +424,8 @@ test('unsafe archives and checksum failures preserve installed files and both co
   const before = await Promise.all(files.map((file) => readFile(file)));
   for (const options of [
     { checksum: '0'.repeat(64) },
-    { archive: makeZip([{ name: 'traefik.exe', contents: Buffer.from('binary') }, { name: '../escape', contents: Buffer.from('bad') }]) },
-    { archive: makeZip([{ name: 'traefik.exe', contents: Buffer.from('binary') }, { name: 'traefik.exe', contents: Buffer.from('other') }]) },
+    { archive: makeArchive([{ name: traefikBinary, contents: Buffer.from('binary') }, { name: '../escape', contents: Buffer.from('bad') }]) },
+    { archive: makeArchive([{ name: traefikBinary, contents: Buffer.from('binary') }, { name: traefikBinary, contents: Buffer.from('other') }]) },
   ]) {
     release.setVersion('3.7.17', options);
     await assert.rejects(manager.update());
@@ -442,7 +451,7 @@ test('failed release acquisition leaves installed executable and configuration u
   const manager = makeManager(brcPaths, release);
   await manager.setup();
   const files = [
-    path.join(brcPaths.traefik, 'versions', '3.7.16', 'traefik.exe'),
+    path.join(brcPaths.traefik, 'versions', '3.7.16', traefikBinary),
     path.join(brcPaths.traefik, 'versions.json'),
     path.join(brcPaths.traefik, 'config', 'dynamic.yml'),
     path.join(brcPaths.traefik, 'config', 'traefik.yml'),
@@ -555,12 +564,12 @@ test('setup installs verified stable release once and retains its executable', a
   await manager.setup();
   assert.deepEqual(await manifest(brcPaths), { version: 1, current: '3.7.16', previous: null });
   assert.equal(await installedExecutable(brcPaths, '3.7.16'), 'binary-3.7.16');
-  const downloadCount = release.requests.filter((url) => url.endsWith('windows_amd64.zip')).length;
+  const downloadCount = release.requests.filter((url) => url.endsWith(traefikAssetSuffix)).length;
 
   release.setVersion('3.7.17');
   await manager.setup();
   assert.deepEqual(await manifest(brcPaths), { version: 1, current: '3.7.16', previous: null });
-  assert.equal(release.requests.filter((url) => url.endsWith('windows_amd64.zip')).length, downloadCount);
+  assert.equal(release.requests.filter((url) => url.endsWith(traefikAssetSuffix)).length, downloadCount);
 });
 
 test('an interrupted update leaves the current executable and version metadata unchanged', async (t) => {
@@ -574,7 +583,7 @@ test('an interrupted update leaves the current executable and version metadata u
   await assert.rejects(manager.update());
   assert.deepEqual(await manifest(brcPaths), { version: 1, current: '3.7.16', previous: null });
   assert.equal(await installedExecutable(brcPaths, '3.7.16'), 'binary-3.7.16');
-  await assert.rejects(stat(path.join(brcPaths.traefik, 'versions', '3.7.17', 'traefik.exe')));
+  await assert.rejects(stat(path.join(brcPaths.traefik, 'versions', '3.7.17', traefikBinary)));
 });
 
 test('a checksum mismatch cannot replace an installed release', async (t) => {
@@ -592,8 +601,8 @@ test('a checksum mismatch cannot replace an installed release', async (t) => {
 test('a ZIP entry that escapes staging is rejected before it can write outside the version directory', async (t) => {
   const { root, paths: brcPaths } = await makeRoot(t);
   const release = makeRelease('3.7.16', {
-    archive: makeZip([
-      { name: 'traefik.exe', contents: Buffer.from('binary-3.7.16') },
+    archive: makeArchive([
+      { name: traefikBinary, contents: Buffer.from('binary-3.7.16') },
       { name: '../../outside.exe', contents: Buffer.from('escape') },
     ]),
   });
@@ -601,7 +610,7 @@ test('a ZIP entry that escapes staging is rejected before it can write outside t
 
   await assert.rejects(manager.setup(), /zip|archive|path|entry/i);
   await assert.rejects(stat(path.join(root, 'outside.exe')));
-  await assert.rejects(stat(path.join(brcPaths.traefik, 'versions', '3.7.16', 'traefik.exe')));
+  await assert.rejects(stat(path.join(brcPaths.traefik, 'versions', '3.7.16', traefikBinary)));
 });
 
 test('a candidate that fails health validation leaves the old release available for rollback', async (t) => {
@@ -654,7 +663,7 @@ test('concurrent setup calls share one validated installation', async (t) => {
   await Promise.all([manager.setup(), manager.setup(), manager.setup()]);
   assert.deepEqual(await manifest(brcPaths), { version: 1, current: '3.7.16', previous: null });
   assert.equal(release.requests.filter((url) => url === API_URL).length, 1);
-  assert.equal(release.requests.filter((url) => url.endsWith('windows_amd64.zip')).length, 1);
+  assert.equal(release.requests.filter((url) => url.endsWith(traefikAssetSuffix.slice(1))).length, 1);
 });
 
 test('service order keeps Relay behind Traefik and routes Agent traffic through the proxy', async (t) => {
@@ -906,7 +915,7 @@ test('official Traefik routes all paths and shares global rate and in-flight lim
   assert.ok(version, versionResult.stdout);
   const versionDir = path.join(brcPaths.traefik, 'versions', version);
   await mkdir(versionDir, { recursive: true });
-  const binaryPath = path.join(versionDir, 'traefik.exe');
+  const binaryPath = path.join(versionDir, traefikBinary);
   try {
     await link(TEST_BINARY, binaryPath);
   } catch (error) {
@@ -1072,8 +1081,9 @@ test('Traefik input, processing, and output keep isolated responsibilities', asy
     }), { headers: { 'content-length': String(release.archive.length) } }),
   });
 
+  const archiveName = `traefik_v3.7.16${traefikAssetSuffix}`;
   const archive = await input.downloadArchive(
-    { version: '3.7.16', archiveName: 'traefik_v3.7.16_windows_amd64.zip', archiveUrl: 'https://example.test/archive.zip', checksumUrl: '' },
+    { version: '3.7.16', archiveName, archiveUrl: `https://example.test/${archiveName}`, checksumUrl: '' },
     (completedBytes, totalBytes) => downloadBytes.push([completedBytes, totalBytes]),
   );
   assert.ok(archive instanceof Uint8Array);
@@ -1084,12 +1094,12 @@ test('Traefik input, processing, and output keep isolated responsibilities', asy
   assert.deepEqual(await (await import('node:fs/promises')).readdir(brcPaths.root), []);
 
   const { processArchive } = await import('../packages/cli/dist/traefik/core.js');
-  const executable = await processArchive(archive, createHash('sha256').update(release.archive).digest('hex'));
-  assert.equal(executable.path, 'traefik.exe');
+  const executable = await processArchive(archive, createHash('sha256').update(release.archive).digest('hex'), archiveName, traefikBinary);
+  assert.equal(executable.path, traefikBinary);
   assert.deepEqual(await (await import('node:fs/promises')).readdir(brcPaths.root), []);
 
   const stage = await new TraefikOutput(brcPaths).stageArchive({ version: '3.7.16' }, executable);
-  assert.equal(await readFile(path.join(stage, 'traefik.exe'), 'utf8'), 'binary-3.7.16');
+  assert.equal(await readFile(path.join(stage, traefikBinary), 'utf8'), 'binary-3.7.16');
 });
 
 test('setup emits streamed download bytes and verifies before staging', async (t) => {
@@ -1101,7 +1111,7 @@ test('setup emits streamed download bytes and verifies before staging', async (t
     reporter: (event) => events.push(event),
     fetch: async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (!url.endsWith('_windows_amd64.zip')) return originalFetch(input, init);
+      if (!url.endsWith(traefikAssetSuffix)) return originalFetch(input, init);
       const half = Math.floor(release.archive.length / 2);
       return new Response(new ReadableStream({
         start(controller) {

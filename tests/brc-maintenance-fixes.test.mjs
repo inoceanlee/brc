@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
+import { PlatformEnvironment } from '../packages/cli/dist/config/platform-environment.js';
 import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
 import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
@@ -25,8 +26,10 @@ function cleanRuntime(paths, options = {}) {
 }
 
 const api = 'https://api.github.com/repos/traefik/traefik/releases/latest';
+const target = new PlatformEnvironment().resolveTraefikTarget();
+const archiveName = (v) => `traefik_v${v}_${target.platform}_${target.arch}.${target.archiveExt}`;
 const release = (v) => ({ tag_name: 'v' + v, draft: false, prerelease: false, assets: [
- {name:'traefik_v'+v+'_windows_amd64.zip',browser_download_url:'https://github.com/traefik/traefik/releases/download/v'+v+'/traefik_v'+v+'_windows_amd64.zip'},
+ {name:archiveName(v),browser_download_url:'https://github.com/traefik/traefik/releases/download/v'+v+'/'+archiveName(v)},
  {name:'traefik_v'+v+'_checksums.txt',browser_download_url:'https://github.com/traefik/traefik/releases/download/v'+v+'/traefik_v'+v+'_checksums.txt'}
 ]});
 test('release discovery retries a transient GitHub 403 and retains validation', async () => {
