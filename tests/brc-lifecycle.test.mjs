@@ -454,6 +454,7 @@ test('unpaired agent starts without treating human approval as a process failure
   await harness.manager.start(harness.spec);
   await harness.manager.start(harness.spec);
   assert.equal((await harness.manager.status(harness.spec)).state, 'pairing');
+  assert.deepEqual(await harness.manager.check(harness.spec), { ready: true, detail: 'Awaiting device approval.' });
 });
 
 test('startup health polling does not repeat process identity inspection', async (t) => {

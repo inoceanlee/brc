@@ -95,6 +95,6 @@ export function createDefaultServices(
   return [
     { name: 'relay', entrypoint: relayEntry, workspaceRoot, cwd: workspaceRoot, env: relayEnv },
     { name: 'traefik', entrypoint: cliEntry, args: ['--run-traefik'], workspaceRoot, cwd: workspaceRoot, env: traefikEnv },
-    { name: 'agent', entrypoint: agentEntry, workspaceRoot, cwd: workspaceRoot, env: agentEnv },
+    { name: 'agent', entrypoint: agentEntry, args: ['connect'], workspaceRoot, cwd: workspaceRoot, env: agentEnv },
   ];
 }

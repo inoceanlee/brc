@@ -48,6 +48,15 @@ interface HealthInfo {
   detail: string;
 }
 
+function serviceHealthState(spec: Pick<ManagedServiceSpec, 'name'>, health: Readonly<HealthInfo>): 'running' | 'pairing' | 'degraded' {
+  if (spec.name === 'agent' && health.state === 'pairing') return 'pairing';
+  return health.ok && health.state === 'running' ? 'running' : 'degraded';
+}
+
+function isReadyHealth(spec: Pick<ManagedServiceSpec, 'name'>, health: Readonly<HealthInfo>): boolean {
+  return serviceHealthState(spec, health) !== 'degraded';
+}
+
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const CONTROL_REQUEST_TIMEOUT_MS = HEALTH_REQUEST_TIMEOUT_MS;
 
@@ -238,7 +247,7 @@ export class ProcessManager implements ControlHealthPort {
           throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to start.`), { exitCode: 5 });
         } else {
           const health = await this.readHealth(current, Infinity, signal);
-          if ((health.state === 'running' && health.ok) || (spec.name === 'agent' && health.state === 'pairing')) return;
+          if (isReadyHealth(spec, health)) return;
           throw new Error(`${spec.name} is already managed but unhealthy: ${health.detail}`);
         }
       }
@@ -331,7 +340,7 @@ export class ProcessManager implements ControlHealthPort {
     if (!record) return { ready: false, detail: 'No managed process record is available.' };
     try {
       const health = await this.readHealth(record, Date.now() + this.startupTimeoutMs, signal);
-      const ready = health.ok && (health.state === 'running' || (spec.name === 'agent' && health.state === 'pairing'));
+      const ready = isReadyHealth(spec, health);
       return { ready, detail: health.detail };
     } catch (error) {
       signal?.throwIfAborted();
@@ -371,7 +380,7 @@ export class ProcessManager implements ControlHealthPort {
       const health = await this.readHealth(record, Infinity, signal);
       return {
         name: spec.name,
-        state: health.state === 'pairing' && spec.name === 'agent' ? 'pairing' : health.ok && health.state === 'running' ? 'running' : 'degraded',
+        state: serviceHealthState(spec, health),
         pid: record.pid,
         detail: health.detail,
       };
@@ -420,7 +429,7 @@ export class ProcessManager implements ControlHealthPort {
       if (!sameIdentity(record, identity, spec)) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
       try {
         const health = await this.readHealth(record);
-        return { name: spec.name, state: health.state === 'pairing' && spec.name === 'agent' ? 'pairing' : health.ok && health.state === 'running' ? 'running' : 'degraded', pid: record.pid, detail: health.detail };
+        return { name: spec.name, state: serviceHealthState(spec, health), pid: record.pid, detail: health.detail };
       } catch (error) {
         return { name: spec.name, state: 'degraded', pid: record.pid, detail: `Health check failed: ${processErrorMessage(error)}` };
       }
@@ -486,8 +495,7 @@ export class ProcessManager implements ControlHealthPort {
           throw new Error(`${spec.name} exited during startup.`);
         }
         detail = health.detail;
-        if (health.ok && health.state === 'running') return;
-        if (spec.name === 'agent' && health.state === 'pairing') return;
+        if (isReadyHealth(spec, health)) return;
       } catch (error) {
         signal?.throwIfAborted();
         if (getExit() || child.exitCode !== null || child.signalCode !== null) {

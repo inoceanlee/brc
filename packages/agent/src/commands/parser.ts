@@ -38,7 +38,9 @@ const BOOLEAN_OPTIONS = new Set([
   'interactive', 'quiet', 'verbose', 'debug', 'no-color',
   'offline', 'no-telemetry', 'no-browser', 'token-stdin',
 ]);
-const VALUE_OPTIONS = new Set(['output', 'relay', 'name', 'device-id', 'allow-dir', 'timeout', 'confirm']);
+const VALUE_OPTIONS = new Set([
+  'output', 'relay', 'name', 'device-id', 'allow-dir', 'timeout', 'confirm', 'brc-managed-id',
+]);
 const SHORT_OPTIONS: Record<string, string> = {
   h: 'help', n: 'preview', y: 'yes', q: 'quiet', v: 'verbose',
 };
@@ -107,6 +109,7 @@ export function parseAgentInvocation(argv: readonly string[]): AgentInvocation {
   const allowDirectories = [...(flags.get('allow-dir') ?? []), ...(command === 'config allow-dir' ? operands : [])];
   if (command === 'config allow-dir' && allowDirectories.length === 0) throw new AgentUsageError('Provide a directory to allow.');
   if (has('token-stdin') && command !== 'connect') throw new AgentUsageError('--token-stdin is only valid for connect.');
+  if (has('brc-managed-id') && command !== 'connect') throw new AgentUsageError('--brc-managed-id is only valid for connect.');
   return {
     command, positionals: operands, format: (formats[0] ?? 'plain') as CliOutputFormat,
     relay: one('relay'), name: one('name'), deviceId: one('device-id'),

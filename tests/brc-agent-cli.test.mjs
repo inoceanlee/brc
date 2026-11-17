@@ -178,3 +178,18 @@ test('disabled Agent diagnostics does not validate inactive sampling overrides',
   assert.equal(JSON.parse(result.stderr).code, 'INVALID_USAGE');
   assert.doesNotMatch(result.stderr, /BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS/);
 });
+
+test('Agent CLI accepts the supervisor managed identity marker', () => {
+  const managedId = '11111111-2222-3333-4444-555555555555';
+  const accepted = run(['connect', '--relay', 'https://relay.example', '--preview', `--brc-managed-id=${managedId}`, '--json']);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(JSON.parse(accepted.stdout).action, 'connect');
+
+  const wrongCommand = run(['version', `--brc-managed-id=${managedId}`, '--json']);
+  assert.equal(wrongCommand.status, 2, wrongCommand.stderr);
+  assert.equal(JSON.parse(wrongCommand.stderr).code, 'INVALID_USAGE');
+
+  const empty = run(['connect', '--relay', 'https://relay.example', '--preview', '--brc-managed-id=', '--json']);
+  assert.equal(empty.status, 2, empty.stderr);
+  assert.equal(JSON.parse(empty.stderr).code, 'INVALID_USAGE');
+});
