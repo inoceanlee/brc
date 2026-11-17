@@ -1,4 +1,3 @@
-import { randomInt } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { BrcPaths } from '../../config/paths.js';
@@ -632,24 +631,26 @@ async function cleanDiagnosticSnapshots(
     return;
   }
   const files = await readdir(directory);
-  const candidates: { target: string; pid: number; contents: string }[] = [];
+  const candidates: { target: string; pid: number }[] = [];
   for (const file of files) {
     const match = /^(cli|relay|agent|traefik)-([A-Za-z0-9_.-]{1,128})\.json$/.exec(file);
     if (!match) continue;
     const target = path.join(directory, file);
-    let contents: string;
+    let info;
     try {
-      contents = (await readRegularFile(target)).contents;
+      info = await lstat(target);
     } catch (error) {
       if (errorCode(error) !== 'ENOENT') issue(report.failures, target, error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    if (!info.isFile() || info.isSymbolicLink()) {
+      issue(report.failures, target, 'Snapshot path is not a regular file.');
       continue;
     }
     const result = await store.read(match[1] as 'cli' | 'relay' | 'agent' | 'traefik', match[2]);
     const snapshot = result.snapshot;
     let deadline = snapshot ? Date.parse(snapshot.capturedAt) : Number.NaN;
-    if (!Number.isFinite(deadline)) {
-      try { deadline = (await lstat(target)).mtimeMs; } catch { continue; }
-    }
+    if (!Number.isFinite(deadline)) deadline = info.mtimeMs;
     if (deadline > cutoff) {
       if (result.state === 'corrupt') issue(report.preserved, target, `Unreadable snapshot (${snapshotStateLabel(result.state)}).`);
       continue;
@@ -658,9 +659,8 @@ async function cleanDiagnosticSnapshots(
       issue(report.preserved, target, 'Cannot determine the snapshot process identity.');
       continue;
     }
-    candidates.push({ target, pid: snapshot.pid, contents });
+    candidates.push({ target, pid: snapshot.pid });
   }
-  const identities = new Map<number, ProcessIdentity | null>();
   const eligible = [...new Set(candidates.map((candidate) => candidate.pid))].filter((pid) => {
     try {
       process.kill(pid, 0);
@@ -668,33 +668,16 @@ async function cleanDiagnosticSnapshots(
     } catch (error) {
       return errorCode(error) === 'ESRCH';
     }
-  }).sort((left, right) => left - right);
-  const offset = eligible.length ? randomInt(eligible.length) : 0;
-  const pids = [...eligible.slice(offset), ...eligible.slice(0, offset)].slice(0, 256);
-  const signal = AbortSignal.timeout(1_000);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < pids.length && !signal.aborted) {
-      const batch = pids.slice(next, next + 32);
-      next += batch.length;
-      try {
-        const found = await inspectProcesses(batch, signal);
-        for (const [pid, identity] of found) identities.set(pid, identity);
-      } catch {
-        for (const pid of batch) {
-          if (signal.aborted) break;
-          try {
-            const found = await inspectProcesses([pid], signal);
-            if (found.has(pid)) identities.set(pid, found.get(pid) ?? null);
-          } catch {
-            continue;
-          }
-        }
-      }
+  });
+  let identities = new Map<number, ProcessIdentity | null>();
+  if (eligible.length > 0) {
+    try {
+      identities = await inspectProcesses(eligible, AbortSignal.timeout(1_000));
+    } catch {
+      identities = new Map();
     }
-  };
-  await Promise.all(Array.from({ length: 4 }, () => worker()));
-  for (const { target, pid, contents } of candidates) {
+  }
+  for (const { target, pid } of candidates) {
     if (!identities.has(pid) || identities.get(pid)) {
       issue(report.preserved, target, 'Snapshot process may still be active.');
       continue;
@@ -704,10 +687,6 @@ async function cleanDiagnosticSnapshots(
       continue;
     }
     try {
-      if ((await readRegularFile(target)).contents !== contents) {
-        issue(report.preserved, target, 'Snapshot changed during cleanup.');
-        continue;
-      }
       const bytes = (await lstat(target)).size;
       if (dryRun) { report.wouldRemove += 1; continue; }
       await unlink(target);

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -270,36 +269,6 @@ test('cleanup preserves a previous-boot record when its live PID identity differ
   assert.ok(report.preserved.some((item) => item.path === filename));
   process.kill(process.pid, 0);
 });
-
-test('snapshot cleanup selects different batches under a fixed clock', async (t) => {
-  const { paths: brcPaths } = await makeRoot(t);
-  const capturedAt = new Date(Date.now() - 40 * DAY).toISOString();
-  for (let index = 0; index < 257; index++) {
-    await writeFile(path.join(brcPaths.diagnostics, `relay-${index}.json`), JSON.stringify({
-      schema: 1, service: 'relay', instanceId: String(index), pid: 1000000000 + index,
-      capturedAt, status: 'running',
-    }));
-  }
-  const now = Date.now;
-  const randomInt = crypto.randomInt;
-  Date.now = () => 2_000_000_001_000;
-  try {
-    crypto.randomInt = () => 0;
-    syncBuiltinESMExports();
-    await cleanRuntime(brcPaths);
-    assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), true);
-    crypto.randomInt = (max) => max - 1;
-    syncBuiltinESMExports();
-    await cleanRuntime(brcPaths);
-  } finally {
-    crypto.randomInt = randomInt;
-    syncBuiltinESMExports();
-    Date.now = now;
-  }
-  assert.equal(await exists(path.join(brcPaths.diagnostics, 'relay-256.json')), false);
-  assert.equal(await exists(path.join(brcPaths.runtime, 'diagnostic-cleanup-cursor.json')), false);
-});
-
 
 test('an interrupted snapshot inspection preserves unchecked snapshots', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
