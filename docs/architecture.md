@@ -32,11 +32,11 @@ Relay 只信任一个 loopback 代理跳点（`TRUST_PROXY=loopback`）。Traefi
   - `src/core/lifecycle/`：无 I/O 的启停规则、依赖接口与编排。
   - `src/adapters/process/`：进程启动、身份核验、就绪与健康请求、启动规格。
   - `src/adapters/storage/`：生命周期锁、运行记录、清理与 Relay 数据库。
-  - `src/config/`：配置类型、默认值、校验与平台路径（唯一来源）。
+  - `src/config/`：配置路径与环境解析，配置模型和校验复用 Shared。
   - `src/traefik/`：代理专属逻辑、模板与二进制管理。
-- `packages/relay/`：`core/auth` 保存登录限流与会话规则；`adapters/http` 承载 Express、MCP 与页面；`adapters/storage` 独占 SQLite；`device-hub` 管理连接。
-- `packages/agent/`：`adapters/{filesystem,terminal,system,telemetry}` 对接文件、终端、系统探测与工具日志；`core` 保留与 I/O 无关的规则；`transport` 负责配对与出站 WebSocket。
-- `packages/shared/`：通信协议、受管控制接口与共享诊断模块。
+- `packages/relay/`：`core/auth` 保存登录限流与会话规则，`adapters/http` 承载 Express、MCP 与页面，`adapters/storage` 独占 SQLite，`adapters/transport` 管理设备连接。
+- `packages/agent/`：`adapters/` 承载文件、MCP、网络、系统服务、存储、终端与传输适配，`core` 保留与 I/O 无关的规则，`cli.ts` 负责入口组装。
+- `packages/shared/`：唯一配置模型与校验（`config/`）、统一 CLI 结果与渲染（`cli/`）、统一诊断模块（`diagnostics/`）以及受管控制与日志接口。
 - `native/brc-process/`：Rust 进程身份查询器，含自有函数与资源探针。
 - `deploy/traefik/`：统一代理的静态和动态配置模板。
 - `scripts/`：构建（含函数插桩）、测试发现、隔离基准与发布流程。
@@ -44,7 +44,7 @@ Relay 只信任一个 loopback 代理跳点（`TRUST_PROXY=loopback`）。Traefi
 
 ## 配置与身份
 
-用户数据根默认位置：Windows 为 `%LOCALAPPDATA%\BRC\`，macOS 为 `~/Library/Application Support/brc/`，Linux 为 `$XDG_DATA_HOME/brc/`。可用 `BRC_DATA_ROOT` 覆盖。唯一可编辑配置文件为 `config/brc.yaml`，使用 `brc config show/get/set/apply/path` 管理。默认值、类型和校验集中在 `packages/cli/src/config/settings.ts`。
+用户数据根默认位置：Windows 为 `%LOCALAPPDATA%\BRC\`，macOS 为 `~/Library/Application Support/brc/`，Linux 为 `$XDG_DATA_HOME/brc/`。可用 `BRC_DATA_ROOT` 覆盖。唯一可编辑配置文件为 `config/brc.yaml`，使用 `brc config show/get/set/apply/path` 管理。默认值、类型和校验集中在 `packages/shared/src/config/core/settings.ts`。
 
 Relay 使用 SQLite 保存管理员、OAuth 客户端、访问令牌和设备归属。审计默认保留 30 天、50,000 条，定期分批清理。正常重启、升级和配置应用保留这些身份。数据库缺失、归属不一致或管理员异常时，拒绝危险的自动重建；新建数据库由 `brc setup` 初始化。
 
@@ -54,7 +54,7 @@ Relay 使用 SQLite 保存管理员、OAuth 客户端、访问令牌和设备归
 
 - 日志：组件日志写入 `logs/<component>.log`，CLI 启动轨迹与结构化诊断写入 `logs/cli.log`、`logs/<component>-diagnostics.log`。跨进程写入由独立日志锁保护，轮转按容量和保留期执行。
 - 启动轨迹：`brc start --timing` 在 stderr 输出阶段耗时；`brc diagnose startup [--json]` 显示最近一次启动的总时长、阶段、失败位置与未归属时间。
-- 函数统计：构建期对各包自有 TypeScript 函数插桩，运行时按函数 ID 聚合调用次数、累计时长与最大时长。异步函数的墙钟时长单独统计并标注，生成器不插桩，避免把挂起时间算作执行时间。`brc diagnose functions [--json]` 读取各服务实例的原子快照。
+- 函数统计：构建期对各包自有 TypeScript 函数插桩，运行时按函数 ID 聚合调用次数、累计时长与最大时长。异步函数的墙钟时长单独统计并标注，生成器按每次步进执行片段计时，避免把挂起等待算作执行时间。`brc diagnose functions [--json]` 读取各服务实例的原子快照。
 - 资源统计：CLI、Relay、Agent 持续采样 CPU 时间、RSS 与堆内存；Traefik 由管理进程采样；Rust 查询器报告系统峰值。`brc diagnose resources [--json]` 区分系统峰值与采样峰值，并标出已退出、过期或缺测状态。
 - 快照：每个受管实例在 `diagnostics/` 下以原子替换写入 `service-instanceId.json`，退出时尽力刷写。CLI 只读查询，不读取其他进程内存。
 
