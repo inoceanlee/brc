@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  DEFAULT_SETTINGS, resolveSettings, withSettingValue,
+  DEFAULT_AGENT_FILE_READ_LINE_LIMIT,
+  DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT,
+  DEFAULT_SETTINGS,
+  FILE_SIZE_LIMITS,
+  RESOURCE_SAMPLE_INTERVAL_MAX_MS,
+  RESOURCE_SAMPLE_INTERVAL_MIN_MS,
+  resolveSettings,
+  withSettingValue,
 } from '../packages/shared/dist/config/core/settings.js';
 import { YamlSettingsStore } from '../packages/shared/dist/config/adapters/yaml-store.js';
 import { renderCliResult } from '../packages/shared/dist/cli/adapters/renderer.js';
@@ -90,4 +97,48 @@ test('Shared renderer formats records as a table and leaves plain mode headerles
   out.length = 0;
   renderCliResult({ status: 'success', data: records }, { format: 'plain' }, streams);
   assert.doesNotMatch(out.join(''), /^name\s+state/);
+});
+
+test('configuration model publishes the single source for default values', () => {
+  assert.equal(FILE_SIZE_LIMITS.LINE_COUNT_LIMIT, 10 * 1024 * 1024);
+  assert.equal(DEFAULT_AGENT_FILE_READ_LINE_LIMIT, 1000);
+  assert.equal(DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT, 50);
+  assert.equal(DEFAULT_SETTINGS.agent.fileReadLineLimit, DEFAULT_AGENT_FILE_READ_LINE_LIMIT);
+  assert.equal(DEFAULT_SETTINGS.agent.fileWriteLineLimit, DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT);
+  assert.equal(RESOURCE_SAMPLE_INTERVAL_MIN_MS, 100);
+  assert.equal(RESOURCE_SAMPLE_INTERVAL_MAX_MS, 60_000);
+});
+
+test('sampling interval bounds come from the configuration model', () => {
+  assert.throws(
+    () => resolveSettings({ version: 1, diagnostics: { resourceSampleMs: 99 } }, {}),
+    /between 100 and 60000/,
+  );
+  assert.throws(
+    () => resolveSettings({ version: 1, diagnostics: { resourceSampleMs: 60_001 } }, {}),
+    /between 100 and 60000/,
+  );
+  const resolved = resolveSettings({
+    version: 1, diagnostics: { resourceSampleMs: RESOURCE_SAMPLE_INTERVAL_MAX_MS },
+  }, {});
+  assert.equal(resolved.fileSettings.diagnostics.resourceSampleMs, RESOURCE_SAMPLE_INTERVAL_MAX_MS);
+});
+
+test('last-good checkpoint recovers settings after the primary file is damaged', async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-shared-recovery-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const filename = path.join(dir, 'config', 'brc.yaml');
+  const backupFilename = filename + '.last-good';
+  const codec = { parse: JSON.parse, stringify: JSON.stringify };
+  const store = new YamlSettingsStore({
+    filename, codec, lock: { runExclusive: async (task) => task() },
+    backupFilename, backupKeys: ['agent.fileReadLineLimit'],
+  });
+  const initial = await store.read();
+  await store.write(withSettingValue(initial.settings, 'agent.fileReadLineLimit', 64), initial.revision);
+  const backup = JSON.parse(await readFile(backupFilename, 'utf8'));
+  assert.equal(backup.agent.fileReadLineLimit, 64);
+  await writeFile(filename, '{ damaged', 'utf8');
+  const recovered = resolveSettings(JSON.parse(await readFile(backupFilename, 'utf8')), {}).fileSettings;
+  assert.equal(recovered.agent.fileReadLineLimit, 64);
 });
