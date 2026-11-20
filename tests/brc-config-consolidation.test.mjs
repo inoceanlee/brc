@@ -139,6 +139,7 @@ test('last-good checkpoint recovers settings after the primary file is damaged',
   const backup = JSON.parse(await readFile(backupFilename, 'utf8'));
   assert.equal(backup.agent.fileReadLineLimit, 64);
   await writeFile(filename, '{ damaged', 'utf8');
-  const recovered = resolveSettings(JSON.parse(await readFile(backupFilename, 'utf8')), {}).fileSettings;
-  assert.equal(recovered.agent.fileReadLineLimit, 64);
+  const recovered = await store.read();
+  assert.equal(recovered.settings.agent.fileReadLineLimit, 64);
+  assert.equal(recovered.revision, null);
 });

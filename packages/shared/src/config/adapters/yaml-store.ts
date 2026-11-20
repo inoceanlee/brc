@@ -65,11 +65,31 @@ export class YamlSettingsStore implements SettingsStorePort {
       contents = await readSettingsText(this.options.filename);
     } catch (error) {
       if (errorCode(error) !== 'ENOENT') throw error;
-      return { settings: structuredClone(DEFAULT_SETTINGS), revision: null };
+      const recovered = await this.recoverFromBackup();
+      return recovered ?? { settings: structuredClone(DEFAULT_SETTINGS), revision: null };
     }
-    const parsed = this.options.codec.parse(contents);
-    const { fileSettings } = resolveSettings(parsed, {});
-    return { settings: fileSettings, revision: fileRevision(contents) };
+    try {
+      const parsed = this.options.codec.parse(contents);
+      const { fileSettings } = resolveSettings(parsed, {});
+      return { settings: fileSettings, revision: fileRevision(contents) };
+    } catch (error) {
+      const recovered = await this.recoverFromBackup();
+      if (recovered) return recovered;
+      throw error;
+    }
+  }
+
+  private async recoverFromBackup(): Promise<SettingsSnapshot | null> {
+    const filename = this.options.backupFilename;
+    if (!filename) return null;
+    try {
+      const info = await lstat(filename);
+      if (!info.isFile() || info.isSymbolicLink()) return null;
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return null;
+      throw error;
+    }
+    return { settings: await this.readBackup(filename), revision: null };
   }
 
   async write(settings: Readonly<BrcSettings>, expectedRevision?: string | null): Promise<SettingsSnapshot> {
