@@ -106,7 +106,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
     historyFailureReporter = report;
     return () => { historyFailureReporter = (message) => process.stderr.write(message + '\n'); };
   };
-  const historyDatabasePath = resolveDiagnosticsDbPath(paths.root, env);
+  const historyDatabasePath = resolveDiagnosticsDbPath(path.join(paths.root, 'data'), env);
   const toolHistory = new ToolHistory(new SqliteToolHistoryStore({ databasePath: historyDatabasePath }), reportHistoryFailure, historyDatabasePath);
   await toolHistory.load();
   const usageTracker = new UsageTracker({
