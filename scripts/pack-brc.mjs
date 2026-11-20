@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installLockedRuntimeDependencies } from './release-dependencies.mjs';
 import { pruneStagedDependencies } from './release-prune.mjs';
+import { assertNativeBinary, nativeBinaryPath } from './build-native.mjs';
 
 const workspaceRoot = fileURLToPath(new URL('../', import.meta.url));
 const outputDir = path.resolve(process.argv[2] ?? path.join(workspaceRoot, 'dist-pack'));
@@ -142,6 +143,7 @@ try {
   });
   if (native.error) throw native.error;
   if (native.status !== 0) throw new Error('Native process inspector build failed.');
+  assertNativeBinary(nativeBinaryPath());
 
   const manifests = await Promise.all(sourcePackages.map(async (name) =>
     JSON.parse(await readFile(path.join(packageDir, name, 'package.json'), 'utf8'))));

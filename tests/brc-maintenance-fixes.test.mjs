@@ -3,12 +3,13 @@ import { test } from 'node:test';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
+import { TraefikInput } from '../packages/cli/dist/adapters/traefik/input.js';
 import { PlatformEnvironment } from '../packages/cli/dist/config/platform-environment.js';
 import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
 import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { FileSnapshotStore } from '../packages/shared/dist/diagnostics/adapters/snapshots.js';
+import { ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
 
 function LifecycleLock(paths, options) {
   return new LifecycleLockImpl(paths, new LockStore(paths), options);
@@ -22,6 +23,7 @@ function cleanRuntime(paths, options = {}) {
       pollMs: options.settings?.runtime.lockPollMs,
     }),
     snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+    createProcessManager: (options) => new ProcessManager(paths, options),
   });
 }
 

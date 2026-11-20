@@ -682,7 +682,7 @@ export class ProcessManager implements ControlHealthPort {
     let ready: ReadyInfo | null = null;
     try {
       ready = parseReady(JSON.parse(await readFile(readyFile, 'utf8')) as unknown, spec, id, pid);
-    } catch { /* The service may have failed before publishing its control endpoint. */ }
+    } catch {}
     const record: ManagedProcessRecord = {
       version: 1,
       id,

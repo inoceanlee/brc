@@ -31,6 +31,7 @@ function cleanRuntime(paths, options = {}) {
       pollMs: options.settings?.runtime.lockPollMs,
     }),
     snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+    createProcessManager: (options) => new ProcessManager(paths, options),
   });
 }
 

@@ -19,7 +19,7 @@ const requiredFiles = [
   'package/dist/native/win32-x64/brc-process.exe',
   'package/dist/services/relay/cli.js',
   'package/dist/services/agent/cli.js',
-  'package/dist/maintenance/uninstall-worker.js',
+  'package/dist/adapters/package/uninstall-worker.js',
   'package/deploy/traefik/traefik.yml',
   'package/deploy/traefik/dynamic.yml',
   'package/node_modules/brc-shared/package.json',

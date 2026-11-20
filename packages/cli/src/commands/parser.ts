@@ -1,19 +1,29 @@
 import { isBrcSettingKey, parseSettingArgument } from '../config/settings.js';
-import { normalizeGlobalOptions } from './options.js';
+import { GLOBAL_FLAGS, normalizeGlobalOptions } from './options.js';
 import { readProductVersion } from '../config/product.js';
 
 export type CliCommandName =
   | 'help' | 'version' | 'setup' | 'start' | 'stop' | 'restart' | 'status'
   | 'logs' | 'config' | 'update' | 'uninstall' | 'clean' | 'diagnose' | 'completion';
 
-export type DiagnoseTarget = 'startup' | 'lifecycle' | 'functions' | 'resources';
+export type DiagnoseTarget = 'startup' | 'lifecycle' | 'functions' | 'resources' | 'logs';
+
+export interface DiagnosticLogFilter {
+  since?: string;
+  until?: string;
+  source?: string;
+  runId?: string;
+  level?: 'debug' | 'info' | 'warn' | 'error';
+  component?: 'cli' | 'relay' | 'agent' | 'traefik' | 'native';
+  limit?: number;
+}
 
 export interface CliLogComponents {
   readonly components: readonly string[];
 }
 
 export const LOG_COMPONENTS = ['relay', 'agent', 'traefik', 'cli'] as const;
-export const DIAGNOSE_TARGETS: readonly DiagnoseTarget[] = ['startup', 'lifecycle', 'functions', 'resources'];
+export const DIAGNOSE_TARGETS: readonly DiagnoseTarget[] = ['startup', 'lifecycle', 'functions', 'resources', 'logs'];
 
 export class UsageError extends Error {
   readonly exitCode = 2;
@@ -53,6 +63,7 @@ export interface ParsedCommand {
   noTelemetry: boolean;
   preview: boolean;
   diagnose?: DiagnoseTarget;
+  diagnoseFilter?: DiagnosticLogFilter;
   logComponent?: (typeof LOG_COMPONENTS)[number];
 }
 
@@ -80,25 +91,25 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'setup',
     usage: 'brc setup',
     summary: 'Initialize local configuration and Traefik.',
-    examples: ['brc setup'],
+    examples: ['brc setup', 'BRC_ADMIN_PASSWORD=secret brc setup --no-input', 'brc setup --offline'],
   },
   {
     name: 'start',
     usage: 'brc start [--timing]',
     summary: 'Start Relay, Traefik, and Agent.',
-    examples: ['brc start', 'brc start --timing'],
+    examples: ['brc start', 'brc start --timing', 'brc start --json'],
   },
   {
     name: 'stop',
     usage: 'brc stop',
     summary: 'Stop the managed services.',
-    examples: ['brc stop'],
+    examples: ['brc stop', 'brc stop --json', 'brc stop --timeout 15s'],
   },
   {
     name: 'restart',
     usage: 'brc restart',
     summary: 'Restart the managed services.',
-    examples: ['brc restart'],
+    examples: ['brc restart', 'brc restart --json', 'brc restart --timeout 2m'],
   },
   {
     name: 'status',
@@ -110,7 +121,7 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'logs',
     usage: 'brc logs [relay|agent|traefik|cli]',
     summary: 'Show recent logs for one component.',
-    examples: ['brc logs', 'brc logs cli'],
+    examples: ['brc logs', 'brc logs cli', 'brc logs relay --json'],
   },
   {
     name: 'config',
@@ -122,13 +133,13 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
     name: 'update',
     usage: 'brc update traefik [--preview]',
     summary: 'Update the managed Traefik binary.',
-    examples: ['brc update traefik'],
+    examples: ['brc update traefik', 'brc update traefik --preview', 'brc update traefik --offline'],
   },
   {
     name: 'clean',
     usage: 'brc clean',
     summary: 'Run safe cleanup of expired BRC data.',
-    examples: ['brc clean'],
+    examples: ['brc clean', 'brc clean --json', 'brc clean --timeout 15s'],
   },
   {
     name: 'uninstall',
@@ -138,15 +149,15 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'diagnose',
-    usage: 'brc diagnose <startup|lifecycle|functions|resources> [--output <format>]',
-    summary: 'Show startup and lifecycle timings, function timings, or resource samples.',
-    examples: ['brc diagnose startup', 'brc diagnose functions --json', 'brc diagnose resources'],
+    usage: 'brc diagnose <startup|lifecycle|functions|resources|logs> [--output <format>]',
+    summary: 'Show startup and lifecycle timings, function timings, resource samples, or structured logs.',
+    examples: ['brc diagnose startup', 'brc diagnose logs --level error --json', 'brc diagnose resources --plain'],
   },
   {
     name: 'completion',
     usage: 'brc completion <powershell|bash|zsh|fish>',
     summary: 'Generate shell command completion.',
-    examples: ['brc completion powershell', 'brc completion bash'],
+    examples: ['brc completion powershell', 'brc completion bash', 'brc completion zsh'],
   },
 ];
 
@@ -154,6 +165,41 @@ const UNINSTALL_NOTE = [
   'pnpm remove -g @inoceanlee/brc removes only the package and keeps BRC data.',
   'Run brc uninstall --yes to stop services and remove BRC data and the global package.',
 ];
+
+function docsUrl(): string {
+  return `https://github.com/inoceanlee/brc/tree/v${readProductVersion()}`;
+}
+
+function editDistance(left: string, right: string): number {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row++) {
+    const current = [row];
+    for (let column = 1; column <= right.length; column++) {
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      current[column] = Math.min(current[column - 1] + 1, previous[column] + 1, previous[column - 1] + cost);
+    }
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+export function suggestCommand(name: string): string | undefined {
+  let best: string | undefined;
+  let distance = Number.POSITIVE_INFINITY;
+  for (const candidate of COMMAND_SPECS) {
+    const value = editDistance(name.toLowerCase(), candidate.name);
+    if (value < distance) {
+      distance = value;
+      best = candidate.name;
+    }
+  }
+  return distance <= 3 ? best : undefined;
+}
+
+function unknownCommand(name: string): UsageError {
+  const suggestion = suggestCommand(name);
+  return new UsageError(`Unknown command: ${name}.${suggestion ? ` Did you mean "${suggestion}"?` : ''} Run brc help.`);
+}
 
 function specFor(name: CliCommandName): CommandSpec {
   const spec = COMMAND_SPECS.find((item) => item.name === name);
@@ -169,32 +215,19 @@ export function helpText(command?: CliCommandName): string {
       lines.push('', 'Examples:');
       for (const example of spec.examples) lines.push(`  ${example}`);
     }
-    lines.push('', `Docs: https://github.com/inoceanlee/brc/tree/v${readProductVersion()}`);
+    lines.push('', `Docs: ${docsUrl()}`);
     return lines.join('\n');
   }
   const lines = ['BRC unified CLI', '', 'Usage: brc <command>', '', 'Commands:'];
   for (const spec of COMMAND_SPECS) {
     lines.push(`  ${spec.usage.replace(/^brc /, 'brc ').padEnd(46)} ${spec.summary}`);
   }
-  lines.push(
-    '',
-    'Global flags:',
-    '  -q, --quiet                 Suppress progress output.',
-    '  -v, --verbose               Include additional diagnostics.',
-    '  --debug                     Include error stack details.',
-    '  --no-color                  Disable terminal control sequences.',
-    '  --no-input                  Never prompt.',
-    '  --interactive               Allow prompts in CI when stdin and stderr are TTYs.',
-    '  --output <table|plain|json|yaml>, -o <format>',
-    '  --json, --plain             Output aliases.',
-    '  --timeout <duration>        Bound command waits (for example 1500ms, 15s, 2m).',
-    '  --offline                   Prevent network release lookups and downloads.',
-    '  --no-telemetry              Set DO_NOT_TRACK=1 for managed child processes.',
-    '  --preview                   Preview supported config and Traefik update changes.',
-    '  -h, --help                  Show help.',
-    '',
-    ...UNINSTALL_NOTE,
-  );
+  lines.push('', 'Global flags:');
+  for (const flag of GLOBAL_FLAGS) {
+    const label = flag.short ? `${flag.short}, ${flag.long}` : flag.long;
+    lines.push(`  ${label.padEnd(46)} ${flag.description}`);
+  }
+  lines.push('', `Docs: ${docsUrl()}`, '', ...UNINSTALL_NOTE);
   return lines.join('\n');
 }
 
@@ -228,6 +261,16 @@ function parseConfigArgs(args: string[]): { args: string[]; json: boolean } {
     || (subcommand === 'set' && rest.length === 3 && validKey)
   );
   if (!shapeValid) {
+    const subcommands = ['show', 'get', 'set', 'apply', 'path'];
+    if (!subcommand) throw new UsageError(`Missing config subcommand. Expected: ${subcommands.join(', ')}.`);
+    if (!subcommands.includes(subcommand)) throw new UsageError(`Unknown config subcommand "${subcommand}". Expected: ${subcommands.join(', ')}.`);
+    if ((subcommand === 'get' || subcommand === 'set') && key === undefined) {
+      throw new UsageError(`Missing required <key> for brc config ${subcommand}.`);
+    }
+    if ((subcommand === 'get' || subcommand === 'set') && !validKey) {
+      throw new UsageError(`Invalid setting key "${key}" for brc config ${subcommand}.`);
+    }
+    if (subcommand === 'set' && value === undefined) throw new UsageError(`Missing required <value> for brc config set ${key}.`);
     throw new UsageError(`Usage: ${specFor('config').usage}`);
   }
   if (subcommand === 'set') parseSettingArgument(key as Parameters<typeof parseSettingArgument>[0], value as string);
@@ -252,7 +295,7 @@ function parseLegacyCommand(argv: string[]): ParsedCommand {
 
   const names = COMMAND_SPECS.map((spec) => spec.name);
   if (!names.includes(command as CliCommandName)) {
-    throw new UsageError(`Unknown command: ${command}. Run brc help.`);
+    throw unknownCommand(command);
   }
   const name = command as CliCommandName;
   if (name === 'version') return parseVersion(rest, base);
@@ -309,20 +352,68 @@ function parseLegacyCommand(argv: string[]): ParsedCommand {
       return { ...base, name, args: rest };
     case 'diagnose': {
       const values = rest.filter((value) => value !== '--json');
-      if (values.length !== 1 || !DIAGNOSE_TARGETS.includes(values[0] as DiagnoseTarget)) {
+      if (values.length < 1 || !DIAGNOSE_TARGETS.includes(values[0] as DiagnoseTarget)) {
         throw new UsageError(`Usage: ${specFor('diagnose').usage}`);
       }
+      const diagnose = values[0] as DiagnoseTarget;
+      if (diagnose === 'logs') {
+        return {
+          ...base,
+          name,
+          args: values,
+          json: rest.includes('--json'),
+          diagnose,
+          diagnoseFilter: parseDiagnosticLogFilter(values.slice(1)),
+        };
+      }
+      if (values.length !== 1) throw new UsageError(`Usage: ${specFor('diagnose').usage}`);
       return {
         ...base,
         name,
         args: values,
         json: rest.includes('--json'),
-        diagnose: values[0] as DiagnoseTarget,
+        diagnose,
       };
     }
     default:
-      throw new UsageError(`Unknown command: ${name}. Run brc help.`);
+      throw unknownCommand(name);
   }
+}
+
+function parseDiagnosticLogFilter(tokens: readonly string[]): DiagnosticLogFilter {
+  const filter: DiagnosticLogFilter = {};
+  const levels = ['debug', 'info', 'warn', 'error'];
+  const components = ['cli', 'relay', 'agent', 'traefik', 'native'];
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    const assignment = /^(--[a-z-]+)=(.*)$/.exec(token);
+    const flag = assignment?.[1] ?? token;
+    const value = assignment?.[2] ?? tokens[++index];
+    if (!value || value.startsWith('--')) throw new UsageError(`${flag} requires a value.`);
+    switch (flag) {
+      case '--since': filter.since = value; break;
+      case '--until': filter.until = value; break;
+      case '--source': filter.source = value; break;
+      case '--run-id': filter.runId = value; break;
+      case '--level':
+        if (!levels.includes(value)) throw new UsageError('--level must be debug, info, warn, or error.');
+        filter.level = value as DiagnosticLogFilter['level'];
+        break;
+      case '--component':
+        if (!components.includes(value)) throw new UsageError('--component must be cli, relay, agent, traefik, or native.');
+        filter.component = value as DiagnosticLogFilter['component'];
+        break;
+      case '--limit': {
+        const limit = Number(value);
+        if (!Number.isSafeInteger(limit) || limit <= 0) throw new UsageError('--limit must be a positive integer.');
+        filter.limit = limit;
+        break;
+      }
+      default:
+        throw new UsageError(`Unknown diagnose logs flag: ${flag}.`);
+    }
+  }
+  return filter;
 }
 
 function parseVersion(rest: string[], base: ParsedCommand): ParsedCommand {

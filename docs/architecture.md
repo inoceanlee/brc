@@ -33,7 +33,8 @@ Relay 只信任一个 loopback 代理跳点（`TRUST_PROXY=loopback`）。Traefi
   - `src/adapters/process/`：进程启动、身份核验、就绪与健康请求、启动规格。
   - `src/adapters/storage/`：生命周期锁、运行记录、清理与 Relay 数据库。
   - `src/config/`：配置路径与环境解析，配置模型和校验复用 Shared。
-  - `src/traefik/`：代理专属逻辑、模板与二进制管理。
+  - `src/core/traefik/`：版本清单、配置渲染与归档规则；`src/adapters/traefik/`：发行查询、归档解压、配置写入、流程协调与子进程运行。
+  - `src/core/maintenance/`：卸载与清理策略；`src/adapters/package/`：全局包管理；`src/adapters/terminal/`：进度显示。
 - `packages/relay/`：`core/auth` 保存登录限流与会话规则，`adapters/http` 承载 Express、MCP 与页面，`adapters/storage` 独占 SQLite，`adapters/transport` 管理设备连接。
 - `packages/agent/`：`adapters/` 承载文件、MCP、网络、系统服务、存储、终端与传输适配，`core` 保留与 I/O 无关的规则，`cli.ts` 负责入口组装。
 - `packages/shared/`：唯一配置模型与校验（`config/`）、统一 CLI 结果与渲染（`cli/`）、统一诊断模块（`diagnostics/`）以及受管控制与日志接口。

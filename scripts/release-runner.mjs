@@ -1,5 +1,18 @@
 import { spawn, spawnSync } from 'node:child_process';
 
+export function interruptChild(child, platform = process.platform, kill = process.kill) {
+  if (!child?.pid) return;
+  if (platform === 'win32') {
+    spawnSync('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+    return;
+  }
+  try {
+    kill(-child.pid, 'SIGINT');
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+  }
+}
+
 export class ReleaseRunner {
   constructor({ output = process.stdout, errorOutput = process.stderr } = {}) {
     this.output = output;
@@ -8,12 +21,7 @@ export class ReleaseRunner {
     this.interrupted = false;
     this.onInterrupt = () => {
       this.interrupted = true;
-      if (!this.child?.pid) return;
-      if (process.platform === 'win32') {
-        spawnSync('taskkill.exe', ['/PID', String(this.child.pid), '/T', '/F'], { windowsHide: true });
-      } else {
-        this.child.kill('SIGINT');
-      }
+      interruptChild(this.child);
     };
   }
 
@@ -21,6 +29,7 @@ export class ReleaseRunner {
     const shell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(file);
     const child = spawn(file, args, {
       cwd, env, shell, windowsHide: true,
+      detached: process.platform !== 'win32',
       stdio: interactive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;

@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { TraefikManager } from '../packages/cli/dist/traefik/manager.js';
+import { TraefikManager } from '../packages/cli/dist/adapters/traefik/manager.js';
 import { DEFAULT_SETTINGS } from '../packages/shared/dist/index.js';
 
 test('Traefik update preview fetches target version without downloading or modifying install', async (t) => {

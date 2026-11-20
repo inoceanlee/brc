@@ -37,6 +37,8 @@ jobs:
           chcp 65001 > $null
           pnpm test:unit
       - if: runner.os != 'Windows'
+        run: pnpm test:unit
+      - if: runner.os != 'Windows'
         run: node --test tests/brc-cross-platform.test.mjs tests/brc-platform.test.mjs tests/brc-agent-shell-coordinator.test.mjs
       - if: runner.os == 'Windows'
         run: pnpm test:e2e

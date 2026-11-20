@@ -1,6 +1,33 @@
 import type { BrcPaths } from '../config/paths.js';
-import { readManagedLog } from '../maintenance/logs.js';
-import { snapshotStateLabel, type DiagnosticSnapshotPort, type SnapshotReadResult } from 'brc-shared';
+import { readManagedLog } from '../adapters/storage/logs.js';
+import {
+  snapshotStateLabel,
+  type DiagnosticEvent,
+  type DiagnosticQueryFilter,
+  type DiagnosticSnapshotPort,
+  type SnapshotReadResult,
+} from 'brc-shared';
+
+interface SharedQueryModule {
+  SqliteDiagnosticQuery: new (options: { databasePath: string }) => {
+    query(filter: DiagnosticQueryFilter): Promise<DiagnosticEvent[]>;
+    close(): void;
+  };
+  resolveDiagnosticsDbPath(directory: string, env?: NodeJS.ProcessEnv): string;
+}
+
+let sharedQueryModule: Promise<SharedQueryModule> | undefined;
+
+function loadSharedQueryModule(): Promise<SharedQueryModule> {
+  sharedQueryModule ??= (async () => {
+    let module = await import('brc-shared') as unknown as SharedQueryModule;
+    if (typeof module.SqliteDiagnosticQuery !== 'function' || typeof module.resolveDiagnosticsDbPath !== 'function') {
+      module = await import(new URL('../../../shared/dist/index.js', import.meta.url).href) as unknown as SharedQueryModule;
+    }
+    return module;
+  })();
+  return sharedQueryModule;
+}
 
 export interface StartupDiagnosticResult {
   state: 'missing' | 'recorded';
@@ -39,6 +66,16 @@ export interface ResourceDiagnosticRow {
   unavailable: string | null;
 }
 
+
+export async function readDiagnosticLogs(paths: BrcPaths, filter: DiagnosticQueryFilter): Promise<DiagnosticEvent[]> {
+  const shared = await loadSharedQueryModule();
+  const query = new shared.SqliteDiagnosticQuery({ databasePath: shared.resolveDiagnosticsDbPath(paths.data, process.env) });
+  try {
+    return await query.query(filter);
+  } finally {
+    query.close();
+  }
+}
 
 async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
   const source = await readManagedLog(paths, 'cli');

@@ -10,25 +10,29 @@ import { ReleaseRunner } from './release-runner.mjs';
 import { withReleaseWorkspace } from './release-workspace.mjs';
 import { assertRegistryIntegrity, registryRepublishAt } from './npm-registry-policy.mjs';
 import { assertReleaseVersion } from './release-version.mjs';
+import { releaseActions } from './release-actions.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dryRun = process.argv.includes('--dry-run');
+const verifyOnly = process.argv.includes('--verify-only');
 const verbose = process.argv.includes('--verbose');
 const help = process.argv.includes('--help');
 if (process.argv.slice(2).some((arg) => !['--dry-run', '--verbose', '--help', '--verify-only'].includes(arg))) {
   throw new Error('Usage: pnpm release:brc [--dry-run] [--verbose] [--verify-only]');
 }
 if (help) {
-  console.log('pnpm release:brc [--dry-run] [--verbose]');
+  console.log('pnpm release:brc [--dry-run] [--verbose] [--verify-only]');
   console.log('Validate, build, test and publish @inoceanlee/brc with interactive npm authentication.');
   console.log('Use --dry-run to validate without uploading or tagging.');
+  console.log('Use --verify-only to verify a published release without publishing or pushing.');
   process.exit(0);
 }
-if (!dryRun && !process.stdin.isTTY && !process.argv.includes('--verify-only')) {
+if (!dryRun && !verifyOnly && !process.stdin.isTTY) {
   console.error('npm publish requires a local interactive terminal for authentication. Run pnpm release:brc locally.');
   process.exit(2);
 }
 
+const actions = releaseActions({ dryRun, verifyOnly });
 const progress = new ReleaseProgress({ verbose });
 const runner = new ReleaseRunner();
 const store = new ReleaseArtifactStore();
@@ -136,8 +140,8 @@ async function verifyAndTag(artifact) {
     const remoteCommit = remoteLines.find((line) => line.endsWith('refs/tags/' + artifact.tag + '^{}'))?.split(/\s+/)[0]
       ?? remoteLines.find((line) => line.endsWith('refs/tags/' + artifact.tag))?.split(/\s+/)[0];
     if (remoteCommit && remoteCommit !== artifact.revision) throw new Error('Remote release tag points to a different source revision.');
-    if (!local) quick('git', ['tag', artifact.tag, artifact.revision]);
-    if (!remoteCommit) await command('git', ['push', 'origin', artifact.tag]);
+    if (!local && actions.publish) quick('git', ['tag', artifact.tag, artifact.revision]);
+    if (!remoteCommit && actions.push) await command('git', ['push', 'origin', artifact.tag]);
     await store.markRegistryVerified(artifact);
   });
   progress.print('  Published and tagged: ' + artifact.name + '@' + artifact.version);
@@ -157,7 +161,7 @@ async function runStage(title, operation, options = {}) {
 
 async function release() {
   const branch = git('branch', '--show-current');
-  if (!dryRun && branch !== 'main') throw new Error('Real releases must run from main.');
+  if (!dryRun && !verifyOnly && branch !== 'main') throw new Error('Real releases must run from main.');
   if (git('status', '--porcelain')) throw new Error('Commit all changes before release.');
   const revision = git('rev-parse', 'HEAD');
   const manifest = JSON.parse(readFileSync(path.join(root, 'packages', 'cli', 'package.json'), 'utf8'));
@@ -165,6 +169,14 @@ async function release() {
   const version = manifest.version;
   const tag = RELEASE_CONFIG.tagPrefix + version;
   const buildFingerprint = hashBuildInputs(revision);
+
+  if (verifyOnly) {
+    const artifact = await store.load(version);
+    if (!artifact) throw new Error('No validated release artifact is available for verification.');
+    progress.print('Verify-only: no package will be published and no tag will be pushed.');
+    await verifyAndTag(artifact);
+    return;
+  }
 
   const pending = await store.load(version);
   if (pending?.publishAttempted) {
@@ -176,7 +188,7 @@ async function release() {
 
   let artifact = await store.find({ revision, name: manifest.name, version, buildFingerprint });
   if (!artifact) {
-    if (git('tag', '--points-at', 'HEAD', '--list', 'brc-v*')) throw new Error('Current source commit already released.');
+    if (git('tag', '--points-at', 'HEAD', '--list', RELEASE_CONFIG.tagPrefix + '*')) throw new Error('Current source commit already released.');
     if (!dryRun) {
       if (git('ls-remote', 'origin', 'refs/heads/main').split(/\s+/)[0] !== revision) throw new Error('Push main to origin before release.');
       const account = quick('npm', ['whoami', '--registry', RELEASE_CONFIG.registry]).stdout.trim();
@@ -213,11 +225,15 @@ async function release() {
     progress.print('Dry run passed. No package published or tag created.');
     return;
   }
-  progress.print('Validated archive reused: ' + artifact.archivePath);
-  artifact.tag = tag;
-  artifact = await store.markAttempted(artifact);
-  artifact.tag = tag;
-  await runStage('Upload npm package', () => command('npm', ['publish', artifact.archivePath, '--access', 'public', '--registry', RELEASE_CONFIG.registry], { interactive: true }), { interactive: true });
+  if (actions.publish) {
+    progress.print('Validated archive reused: ' + artifact.archivePath);
+    artifact.tag = tag;
+    artifact = await store.markAttempted(artifact);
+    artifact.tag = tag;
+    await runStage('Upload npm package', () => command('npm', ['publish', artifact.archivePath, '--access', 'public', '--registry', RELEASE_CONFIG.registry], { interactive: true }), { interactive: true });
+  } else {
+    progress.print('Package upload skipped.');
+  }
   await verifyAndTag(artifact);
 }
 

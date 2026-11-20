@@ -1,4 +1,4 @@
-import type { TraefikProgressEvent } from './traefik/manager.js';
+import type { TraefikProgressEvent } from '../traefik/manager.js';
 
 const MAX_PENDING_STAGE_LINES = 64;
 

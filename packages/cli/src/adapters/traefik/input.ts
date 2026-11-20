@@ -2,8 +2,9 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { TRAEFIK_RELEASE_LOOKUP_ATTEMPTS, TRAEFIK_RELEASE_RETRY_DELAY_MS } from '../config/settings.js';
-import { errorCode, parseManifest, parseRelease, type TraefikRelease, type TraefikTemplates, type VersionManifest } from './core.js';
+import { TRAEFIK_RELEASE_LOOKUP_ATTEMPTS, TRAEFIK_RELEASE_RETRY_DELAY_MS } from '../../config/settings.js';
+import { errorCode, parseManifest, type TraefikRelease, type TraefikTemplates, type VersionManifest } from '../../core/traefik/rules.js';
+import { parseRelease } from './release.js';
 import { ensureRegularFile } from './output.js';
 
 const RELEASE_API_URL = 'https://api.github.com/repos/traefik/traefik/releases/latest';
@@ -68,8 +69,8 @@ export class TraefikInput {
   async readTemplates(): Promise<TraefikTemplates> {
     const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
     const candidates = [
-      path.resolve(moduleDirectory, '../../deploy/traefik'),
-      path.resolve(moduleDirectory, '../../../../deploy/traefik'),
+      path.resolve(moduleDirectory, '../../../deploy/traefik'),
+      path.resolve(moduleDirectory, '../../../../../deploy/traefik'),
     ];
     for (const directory of candidates) {
       try {

@@ -5,7 +5,7 @@ import { appendTraceSummary, createDiagnosticsRuntime, createManagedLog, Diagnos
 import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
-import { readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
+import { readDiagnosticLogs, readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
 import { COMMAND_SPECS, helpText, parseCommand, UsageError, type CliCommandName, type ParsedCommand } from './commands/parser.js';
 import { installCancellationHandlers, SIGNAL_EXIT_CODES } from './commands/signals.js';
 import { completionScript } from './commands/completion.js';
@@ -20,20 +20,21 @@ import { readSettings } from './config/reader.js';
 import type { BrcSettings } from './config/settings.js';
 import { LifecycleLock } from './adapters/storage/lock.js';
 import { LockStore } from './adapters/storage/lock-store.js';
-import { ProcessManager } from './adapters/process/controller.js';
+import { ProcessManager, type ProcessInspector } from './adapters/process/controller.js';
 import { inspectProcess } from './adapters/process/identity.js';
 import { ManagedProcessResourceSampler } from './adapters/process/resources.js';
 import { ServiceManager } from './core/lifecycle/workflow.js';
 import { createDefaultServices } from './adapters/process/specs.js';
 import { startRejection, shouldWriteTraefikConfig } from './core/lifecycle/policy.js';
 import { cleanRuntime, type CleanupReport } from './adapters/storage/cleanup.js';
+import { assertNoLegacyIdentity, runEntryMigration, type LegacyIdentityCandidate } from './adapters/storage/migration.js';
 import { createMaintenanceCommands } from './commands/maintenance.js';
-import { confirmBrcUninstall } from './maintenance/uninstall.js';
-import { readManagedLog } from './maintenance/logs.js';
-import { TraefikManager } from './traefik/manager.js';
-import { runManagedTraefikService } from './traefik/runtime.js';
+import { confirmBrcUninstall } from './adapters/storage/uninstall.js';
+import { readManagedLog } from './adapters/storage/logs.js';
+import { TraefikManager } from './adapters/traefik/manager.js';
+import { runManagedTraefikService } from './adapters/traefik/runtime.js';
 import { RelayDatabase } from './adapters/storage/relay-database.js';
-import { TraefikProgress } from './progress.js';
+import { TraefikProgress } from './adapters/terminal/progress.js';
 
 async function createProcessDiagnostics(
   component: 'cli' | 'traefik',
@@ -96,6 +97,7 @@ export interface CliDependencies {
     uninstall: (options: { yes: boolean; structuredOutput?: boolean; signal?: AbortSignal }, clean: () => Promise<void>) => Promise<CommandResult>;
   };
   clean: (paths: BrcPaths) => Promise<void | CleanupReport>;
+  legacyCandidates?: readonly LegacyIdentityCandidate[];
   write: (message: string) => void;
   writeError: (message: string) => void;
   statusJson?: () => Promise<unknown>;
@@ -107,6 +109,11 @@ export interface CliDependencies {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function cleanupProcessManagerFactory(cleanPaths: BrcPaths) {
+  return (options: { inspectProcess: ProcessInspector }) =>
+    new ProcessManager(cleanPaths, { inspectProcess: options.inspectProcess });
 }
 
 function errorExitCode(error: unknown): number {
@@ -185,6 +192,10 @@ async function dispatch(
     case 'completion':
       return renderOutput(cliSuccess(completionScript(parsed.args[0] as 'powershell' | 'bash' | 'zsh' | 'fish')), parsed, deps);
     case 'diagnose': {
+      if (parsed.diagnose === 'logs') {
+        const rows = await readDiagnosticLogs(deps.paths, parsed.diagnoseFilter ?? {});
+        return renderOutput(cliSuccess(rows), parsed, deps);
+      }
       if (parsed.diagnose === 'functions') {
         const rows = await readFunctionDiagnostics(await snapshotStore(deps.paths));
         return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No function statistics are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
@@ -203,8 +214,10 @@ async function dispatch(
           : 'No startup diagnosis has been recorded.',
       }), parsed, deps);
     }
-    case 'setup':
+    case 'setup': {
+      assertNoLegacyIdentity(deps.legacyCandidates ?? []);
       return completeCommand(await deps.commands.setup(deps.signal), parsed, deps);
+    }
     case 'start':
       return completeCommand(await deps.commands.start(deps.signal), parsed, deps);
     case 'stop':
@@ -439,9 +452,10 @@ async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
 }
 async function main(): Promise<void> {
   const paths = resolveBrcPaths(process.env);
+  const legacyCandidates = runEntryMigration(paths, process.env).candidates;
   const args = process.argv.slice(2);
   let parsed: ParsedCommand | undefined;
-  try { parsed = parseCommand(args); } catch { /* reported by runCli */ }
+  try { parsed = parseCommand(args); } catch {}
   const lifecycleCommand = parsed && ['start', 'stop', 'restart'].includes(parsed.name) ? parsed.name : undefined;
   const trace = lifecycleCommand ? new TraceRecorder(lifecycleCommand, randomUUID()) : undefined;
   const time = <T>(stage: string, task: () => Promise<T>): Promise<T> => (trace ? trace.span(stage, task) : task());
@@ -456,6 +470,7 @@ async function main(): Promise<void> {
         pollMs: cleanupSettings.runtime.lockPollMs,
       }),
       snapshotStore: new FileSnapshotStore({ directory: cleanPaths.diagnostics }),
+      createProcessManager: cleanupProcessManagerFactory(cleanPaths),
     });
   };
   if (lightweight) {
@@ -464,6 +479,7 @@ async function main(): Promise<void> {
       commands: { setup: unavailable, start: unavailable, stop: unavailable, restart: unavailable, status: unavailable,
         logs: unavailable, config: (configArgs, options) => runConfigCommand(configArgs, { manager: undefined as unknown as SettingsManager, paths, preview: options.preview, signal: options.signal }), updateTraefik: unavailable, uninstall: unavailable },
       clean,
+      legacyCandidates,
       write: (message) => console.log(message),
       writeError: (message) => console.error(message),
     });
@@ -645,6 +661,7 @@ async function main(): Promise<void> {
       uninstall: maintenanceCommands.uninstall,
     },
     clean,
+    legacyCandidates,
     write: (message) => console.log(message),
     writeError: (message) => console.error(message),
     statusJson: async () => ({ services: await serviceManager.status() }),

@@ -12,7 +12,7 @@ export interface ProcessIdentity {
 }
 
 const run = promisify(execFile);
-const nativeBinary = fileURLToPath(new URL('../../native/win32-x64/brc-process.exe', import.meta.url));
+export const NATIVE_PROCESS_BINARY = fileURLToPath(new URL('../../native/win32-x64/brc-process.exe', import.meta.url));
 
 function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined;
@@ -35,7 +35,7 @@ function parseProcessIdentity(value: unknown): ProcessIdentity {
 async function inspectWindows(pids: readonly number[], signal?: AbortSignal): Promise<Map<number, ProcessIdentity | null>> {
   let stdout: string;
   try {
-    ({ stdout } = await run(nativeBinary, ['inspect', ...pids.map(String)], {
+    ({ stdout } = await run(NATIVE_PROCESS_BINARY, ['inspect', ...pids.map(String)], {
       encoding: 'utf8', timeout: 5_000, windowsHide: true, shell: false, signal,
       maxBuffer: Math.min(pids.length * 64 * 1024, 64 * 1024 * 1024),
     }));

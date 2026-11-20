@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +9,16 @@ const crate = path.join(root, 'native', 'brc-process');
 const target = 'x86_64-pc-windows-msvc';
 const defaultSource = path.join(crate, 'target', target, 'release', 'brc-process.exe');
 const defaultDestination = path.join(root, 'packages', 'cli', 'dist', 'native', 'win32-x64', 'brc-process.exe');
+
+export function nativeBinaryPath(platform = process.platform, arch = process.arch) {
+  return platform === 'win32' && arch === 'x64' ? defaultDestination : null;
+}
+
+export function assertNativeBinary(filename) {
+  if (!filename || !existsSync(filename)) {
+    throw new Error('Native process inspector binary is missing: ' + filename);
+  }
+}
 
 export function validatePe(bytes) {
   if (bytes.length < 256 || bytes.toString('ascii', 0, 2) !== 'MZ') throw new Error('Native process inspector is not a Windows executable.');

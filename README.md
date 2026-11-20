@@ -32,7 +32,7 @@ The Agent opens an outbound WebSocket connection to Relay. It does not need a pu
 ## Requirements
 
 - Windows 10/11 x64, Linux x64/arm64, or macOS x64/Apple Silicon.
-- Node.js 22.13 or newer and either pnpm or npm.
+- Node.js 22.15.0 or newer and either pnpm or npm.
 - Network access to GitHub during `brc setup` to download and verify Traefik.
 - A public HTTPS endpoint for remote clients, configured separately from BRC.
 

@@ -28,6 +28,7 @@ function cleanRuntime(paths, options = {}) {
       pollMs: options.settings?.runtime.lockPollMs,
     }),
     snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+    createProcessManager: (options) => new ProcessManager(paths, options),
   });
 }
 test('cleanup preserves expired logs when the supplied lifecycle lock rejects acquisition', async (t) => {
@@ -39,6 +40,7 @@ test('cleanup preserves expired logs when the supplied lifecycle lock rejects ac
     lockStore: new LockStore(brcPaths),
     lifecycleLock: { runExclusive: async () => { throw new Error('lock unavailable'); } },
     snapshotStore: new FileSnapshotStore({ directory: brcPaths.diagnostics }),
+    createProcessManager: (options) => new ProcessManager(brcPaths, options),
   });
   assert.equal(await readFile(filename, 'utf8'), 'retained');
   assert.ok(report.preserved.some((entry) => entry.reason.includes('lock unavailable')));
@@ -150,6 +152,7 @@ test('cleanup bypasses the lifecycle lock when only fresh logs and active versio
     lockStore: new LockStore(brcPaths),
     lifecycleLock: { runExclusive: async () => { lockCalls++; throw new Error('unexpected lock'); } },
     snapshotStore: new FileSnapshotStore({ directory: brcPaths.diagnostics }),
+    createProcessManager: (options) => new ProcessManager(brcPaths, options),
   });
   assert.equal(lockCalls, 0);
   assert.equal(report.removed, 0);
@@ -291,7 +294,8 @@ test('cleanup creates a private runtime directory under a permissive umask', { s
   const lockModule = new URL('../packages/cli/dist/adapters/storage/lock.js', import.meta.url).href;
   const storeModule = new URL('../packages/cli/dist/adapters/storage/lock-store.js', import.meta.url).href;
   const snapshotModule = new URL('../packages/shared/dist/diagnostics/adapters/snapshots.js', import.meta.url).href;
-  const script = `process.umask(0o002); const { cleanRuntime } = await import(${JSON.stringify(module)}); const { LifecycleLock } = await import(${JSON.stringify(lockModule)}); const { LockStore } = await import(${JSON.stringify(storeModule)}); const { FileSnapshotStore } = await import(${JSON.stringify(snapshotModule)}); const paths = ${JSON.stringify(brcPaths)}; const lockStore = new LockStore(paths); const report = await cleanRuntime(paths, {}, { lockStore, lifecycleLock: new LifecycleLock(paths, lockStore), snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics }) }); console.log(JSON.stringify(report));`;
+  const processModule = new URL('../packages/cli/dist/adapters/process/controller.js', import.meta.url).href;
+  const script = `process.umask(0o002); const { cleanRuntime } = await import(${JSON.stringify(module)}); const { LifecycleLock } = await import(${JSON.stringify(lockModule)}); const { LockStore } = await import(${JSON.stringify(storeModule)}); const { FileSnapshotStore } = await import(${JSON.stringify(snapshotModule)}); const { ProcessManager } = await import(${JSON.stringify(processModule)}); const paths = ${JSON.stringify(brcPaths)}; const lockStore = new LockStore(paths); const report = await cleanRuntime(paths, {}, { lockStore, lifecycleLock: new LifecycleLock(paths, lockStore), snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics }), createProcessManager: (options) => new ProcessManager(paths, options) }); console.log(JSON.stringify(report));`;
   const child = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' });
   assert.equal(child.status, 0, child.stderr);
   const report = JSON.parse(child.stdout);
@@ -530,7 +534,7 @@ test('Traefik reports managed log write failure through diagnostics', async (t) 
 test('Traefik logs missing managed configuration before exiting', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const logFile = path.join(brcPaths.logs, 'traefik.log');
-  const moduleUrl = JSON.stringify(new URL('../packages/cli/dist/traefik/runtime.js', import.meta.url).href);
+  const moduleUrl = JSON.stringify(new URL('../packages/cli/dist/adapters/traefik/runtime.js', import.meta.url).href);
   const sharedUrl = JSON.stringify(new URL('../packages/shared/dist/managed-log.js', import.meta.url).href);
   const source = `import { runManagedTraefikService } from ${moduleUrl};\nimport { createManagedLog } from ${sharedUrl};\nconst managedLog = createManagedLog(${JSON.stringify(logFile)}, 256, (error) => { throw error; });\nawait runManagedTraefikService(undefined, undefined, { managedLog });`;
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));

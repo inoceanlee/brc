@@ -9,7 +9,7 @@ import type {
   FunctionTimingSnapshot,
   ResourceSample,
 } from 'brc-shared';
-import type { ProcessIdentity } from './identity.js';
+import { NATIVE_PROCESS_BINARY, type ProcessIdentity } from './identity.js';
 
 const execFile = promisify(execFileCallback);
 const EMPTY_FUNCTIONS: FunctionTimingSnapshot = {
@@ -38,102 +38,67 @@ export interface ManagedProcessResourceSamplerOptions {
   sample?: (pid: number) => Promise<RawProcessSample>;
 }
 
-let clockTicksPerSecond: Promise<number> | undefined;
-
-async function linuxClockTicks(): Promise<number> {
-  clockTicksPerSecond ??= execFile('getconf', ['CLK_TCK'], { encoding: 'utf8', windowsHide: true })
-    .then(({ stdout }) => Number.parseInt(stdout.trim(), 10))
-    .then((value) => {
-      if (!Number.isSafeInteger(value) || value <= 0) throw new Error('Linux clock tick frequency is unavailable.');
-      return value;
-    });
-  return clockTicksPerSecond;
+export interface NativeRunResult {
+  stdout: string;
 }
 
-function parseCpuTime(value: string): number {
-  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/.exec(value);
-  if (!match) throw new Error('Process CPU time is malformed.');
-  const days = Number(match[1] ?? 0);
-  const hours = Number(match[2] ?? 0);
-  const minutes = Number(match[3]);
-  const seconds = Number(match[4]);
-  return (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000;
+export interface NativeProcessSampleOptions {
+  executablePath?: string;
+  run?: (command: string, args: readonly string[]) => Promise<NativeRunResult>;
 }
 
-async function sampleWindows(pid: number): Promise<RawProcessSample> {
-  const script = `$p = Get-Process -Id ${pid} -ErrorAction Stop; [pscustomobject]@{ userMs = [double]$p.UserProcessorTime.TotalMilliseconds; systemMs = [double]$p.PrivilegedProcessorTime.TotalMilliseconds; rssBytes = [long]$p.WorkingSet64; peakBytes = [long]$p.PeakWorkingSet64 } | ConvertTo-Json -Compress`;
-  const { stdout } = await execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf8',
-    timeout: 2_000,
-    windowsHide: true,
-    maxBuffer: 8_192,
-  });
-  const value = JSON.parse(stdout.trim()) as Record<string, unknown>;
-  const number = (key: string): number => {
-    const item = value[key];
-    if (typeof item !== 'number' || !Number.isFinite(item) || item < 0) throw new Error(`Windows process resource field ${key} is invalid.`);
-    return item;
-  };
-  return {
-    cpuUserMs: number('userMs'),
-    cpuSystemMs: number('systemMs'),
-    cpuPercent: null,
-    rssBytes: number('rssBytes'),
-    systemPeakBytes: number('peakBytes'),
-  };
+function sampleNumber(value: unknown, key: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Native process sample field ${key} is invalid.`);
+  }
+  return value;
 }
 
-async function sampleLinux(pid: number): Promise<RawProcessSample> {
-  const [stat, status, ticksPerSecond] = await Promise.all([
-    readFile(`/proc/${pid}/stat`, 'utf8'),
-    readFile(`/proc/${pid}/status`, 'utf8'),
-    linuxClockTicks(),
-  ]);
-  const endOfCommand = stat.lastIndexOf(')');
-  if (endOfCommand < 0) throw new Error('Linux process stat is malformed.');
-  const fields = stat.slice(endOfCommand + 2).trim().split(/\s+/);
-  const userTicks = Number(fields[11]);
-  const systemTicks = Number(fields[12]);
-  if (!Number.isSafeInteger(userTicks) || !Number.isSafeInteger(systemTicks)) throw new Error('Linux process CPU counters are invalid.');
-  const current = /^VmRSS:\s+(\d+)\s+kB$/m.exec(status);
-  const peak = /^VmHWM:\s+(\d+)\s+kB$/m.exec(status);
-  if (!current) throw new Error('Linux process RSS is unavailable.');
-  return {
-    cpuUserMs: userTicks * 1000 / ticksPerSecond,
-    cpuSystemMs: systemTicks * 1000 / ticksPerSecond,
-    cpuPercent: null,
-    rssBytes: Number(current[1]) * 1024,
-    systemPeakBytes: peak ? Number(peak[1]) * 1024 : null,
-  };
+function sampleNullableNumber(value: unknown, key: string): number | null {
+  if (value === null || value === undefined) return null;
+  return sampleNumber(value, key);
 }
 
-async function sampleDarwin(pid: number): Promise<RawProcessSample> {
-  const { stdout } = await execFile('ps', ['-p', String(pid), '-o', '%cpu=,rss=,time='], {
-    encoding: 'utf8',
-    timeout: 2_000,
-    windowsHide: true,
-    maxBuffer: 8_192,
-  });
-  const [cpuText, rssText, timeText] = stdout.trim().split(/\s+/);
-  const cpuPercent = Number(cpuText);
-  const rssKiB = Number(rssText);
-  if (!Number.isFinite(cpuPercent) || !Number.isFinite(rssKiB) || rssKiB < 0 || !timeText) {
-    throw new Error('macOS process resource sample is incomplete.');
+export function parseNativeSamplePayload(payload: unknown, pid: number): RawProcessSample {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+      || !('samples' in payload) || !Array.isArray((payload as { samples: unknown }).samples)) {
+    throw new Error('Native sample payload has no samples array.');
+  }
+  const rows = (payload as { samples: unknown[] }).samples;
+  const row = rows.find((item) => item && typeof item === 'object' && !Array.isArray(item)
+    && 'pid' in item && item.pid === pid) ?? rows[0];
+  if (!row || typeof row !== 'object' || Array.isArray(row) || !('status' in row)) {
+    throw new Error('Native sample payload has no matching process row.');
+  }
+  const value = row as Record<string, unknown>;
+  if (value.status !== 'found') {
+    const reason = typeof value.unavailable === 'string' && value.unavailable
+      ? value.unavailable
+      : typeof value.code === 'string' && value.code ? value.code : `Native sample status ${String(value.status)}.`;
+    throw new Error(reason);
   }
   return {
-    cpuUserMs: parseCpuTime(timeText),
-    cpuSystemMs: 0,
-    cpuPercent: null,
-    rssBytes: rssKiB * 1024,
-    systemPeakBytes: null,
+    cpuUserMs: sampleNumber(value.cpuUserMs, 'cpuUserMs'),
+    cpuSystemMs: sampleNumber(value.cpuSystemMs, 'cpuSystemMs'),
+    cpuPercent: sampleNullableNumber(value.cpuPercent, 'cpuPercent'),
+    rssBytes: sampleNumber(value.rssBytes, 'rssBytes'),
+    systemPeakBytes: sampleNullableNumber(value.systemPeakBytes, 'systemPeakBytes'),
   };
 }
 
-async function sampleProcess(pid: number): Promise<RawProcessSample> {
-  if (process.platform === 'win32') return sampleWindows(pid);
-  if (process.platform === 'linux') return sampleLinux(pid);
-  if (process.platform === 'darwin') return sampleDarwin(pid);
-  throw new Error(`Process resource sampling is unsupported on ${process.platform}.`);
+export function createNativeProcessSample(options: NativeProcessSampleOptions = {}): (pid: number) => Promise<RawProcessSample> {
+  const executablePath = options.executablePath ?? NATIVE_PROCESS_BINARY;
+  const run = options.run ?? ((command: string, args: readonly string[]) => execFile(command, [...args], {
+    encoding: 'utf8', timeout: 2_000, windowsHide: true, maxBuffer: 8_192,
+  }));
+  return async (pid: number): Promise<RawProcessSample> => {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Native sampler requires a valid PID.');
+    const { stdout } = await run(executablePath, ['sample', String(pid)]);
+    let payload: unknown;
+    try { payload = JSON.parse(stdout) as unknown; }
+    catch { throw new Error('Native sample returned malformed JSON.'); }
+    return parseNativeSamplePayload(payload, pid);
+  };
 }
 
 function unavailableSample(windowMs: number, reason: string): ResourceSample {
@@ -185,7 +150,7 @@ export class ManagedProcessResourceSampler {
     this.intervalMs = options.intervalMs;
     this.snapshots = options.snapshots;
     this.onError = options.onError;
-    this.sample = options.sample ?? sampleProcess;
+    this.sample = options.sample ?? createNativeProcessSample();
   }
 
   async start(): Promise<void> {

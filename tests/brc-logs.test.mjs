@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { appendRotatingLog } from '../packages/shared/dist/managed-log.js';
 
-const logsEntry = fileURLToPath(new URL('../packages/cli/dist/maintenance/logs.js', import.meta.url));
+const logsEntry = fileURLToPath(new URL('../packages/cli/dist/adapters/storage/logs.js', import.meta.url));
 const logsUrl = JSON.stringify(pathToFileURL(logsEntry).href);
 
 function runProbe(body) {
