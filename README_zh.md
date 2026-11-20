@@ -32,7 +32,7 @@ Agent 主动通过出站 WebSocket 连接 Relay，无须向公网开放 Agent �
 ## 环境要求
 
 - 操作系统：Windows 10/11 x64、Linux x64/arm64、macOS x64/Apple Silicon。
-- 运行环境：Node.js 22.13 或更高版本，包管理器使用 pnpm 或 npm。
+- 运行环境：Node.js 22.15.0 或更高版本，包管理器使用 pnpm 或 npm。
 - 初始化时需能访问 GitHub，以下载并校验 Traefik。
 - 远程连接需要单独配置公网 HTTPS 入口。
 
