@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { TraefikManager } from '../packages/cli/dist/traefik/manager.js';
+import { TraefikManager } from '../packages/cli/dist/adapters/traefik/manager.js';
 
 async function reservePorts(count, excluded = new Set()) {
   const servers = [];
