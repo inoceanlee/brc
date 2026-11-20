@@ -8,7 +8,10 @@ import type { DeviceHub } from '../transport/device-hub.js';
 import type { RelayStorePort } from '../../core/auth/ports.js';
 import type { RelayOAuthProvider } from './oauth-provider.js';
 import type { Sessions } from './sessions.js';
+import type { RelayAudit } from '../../core/auth/ports.js';
 import type { LoginLimiter } from '../../core/auth/rate-limit.js';
+import type { RelayAuditEntry } from 'brc-shared';
+import type { RelayAuditLog } from '../storage/relay-audit.js';
 import { SCOPES, DEVICE_CODE_TTL_MS, DEVICE_POLL_INTERVAL_S } from '../../core/auth/policy.js';
 import type { RelayConfig } from './config.js';
 import { createMcpServer } from './mcp/server.js';
@@ -17,10 +20,38 @@ import * as adminPages from './pages/admin.js';
 
 export { parseTrustProxy, loadConfig } from './config.js';
 
+export interface RelayAuditFacade {
+  append(entry: RelayAuditEntry): Promise<void>;
+  recentAudit(userId: string, limit?: number): RelayAudit[];
+  auditStats(userId: string): { total: number; failed: number; last24h: number };
+}
+
+function storeAuditFacade(store: RelayStorePort): RelayAuditFacade {
+  return {
+    append: (entry) => {
+      store.audit({
+        ts: entry.ts,
+        user_id: entry.userId ?? null,
+        device_id: entry.deviceId ?? null,
+        client: entry.client ?? null,
+        tool: entry.tool,
+        args_hash: entry.argsHash ?? null,
+        ok: entry.ok ? 1 : 0,
+        ms: entry.ms ?? null,
+        error: entry.error ?? null,
+      });
+      return Promise.resolve();
+    },
+    recentAudit: (userId, limit) => store.recentAudit(userId, limit),
+    auditStats: (userId) => store.auditStats(userId),
+  };
+}
+
 export interface RelayHttpDependencies {
   app: Express;
   cfg: RelayConfig;
   store: RelayStorePort;
+  audit?: RelayAuditLog;
   verifyPassword: (password: string, hash: string) => boolean;
   hub: DeviceHub;
   sessions: Sessions;
@@ -31,7 +62,8 @@ export interface RelayHttpDependencies {
 }
 
 export function mountRelayRoutes(deps: RelayHttpDependencies): void {
-  const { app, cfg, store, hub, sessions, provider, limiter, log, verifyPassword } = deps;
+  const { app, cfg, store, audit: injectedAudit, hub, sessions, provider, limiter, log, verifyPassword } = deps;
+  const audit: RelayAuditFacade = injectedAudit ?? storeAuditFacade(store);
   const publicUrl = new URL(cfg.publicUrl);
   app.set('trust proxy', cfg.trustProxy);
   app.disable('x-powered-by');
@@ -51,7 +83,6 @@ export function mountRelayRoutes(deps: RelayHttpDependencies): void {
     return userId && store.getUser(userId) ? userId : null;
   };
 
-  // Publish OAuth metadata explicitly so ChatGPT sees the current MCP OAuth 2.1 contract.
   const oauthMetadata = {
     issuer: cfg.publicUrl,
     authorization_endpoint: `${cfg.publicUrl}/authorize`,
@@ -85,7 +116,6 @@ export function mountRelayRoutes(deps: RelayHttpDependencies): void {
     clientRegistrationOptions: { clientSecretExpirySeconds: undefined },
   }));
 
-  // Consent page re-entry after login (provider.authorize parked the request under `pending`).
   app.get('/auth/consent', (req, res) => {
     const pendingId = String(req.query.pending ?? '');
     const p = provider.getPending(pendingId);
@@ -198,7 +228,7 @@ export function mountRelayRoutes(deps: RelayHttpDependencies): void {
     const auth = (req as Request & { auth?: AuthInfo }).auth!;
     const userId = String(auth.extra?.userId ?? '');
     if (!userId) return res.status(401).json({ error: 'invalid_token' });
-    const server = createMcpServer(hub, store, { userId, clientId: auth.clientId }, cfg.relayVersion, log);
+    const server = createMcpServer(hub, store, audit, { userId, clientId: auth.clientId }, cfg.relayVersion, log);
     let transport: StreamableHTTPServerTransport | undefined;
     let cleanupPromise: Promise<void> | undefined;
     const cleanup = () => cleanupPromise ??= Promise.allSettled([
@@ -229,8 +259,8 @@ export function mountRelayRoutes(deps: RelayHttpDependencies): void {
     const online = new Set(hub.list(userId).map((d) => d.deviceId));
     const devices = store.listDevices(userId).map((d) => ({ ...d, online: online.has(d.device_id) }));
     const names = new Map(devices.map((d) => [d.device_id, d.name]));
-    const audit = store.recentAudit(userId, 100).map((a) => ({ ts: a.ts, device: names.get(a.device_id ?? '') ?? (a.device_id ?? '?').slice(0, 8), client: a.client, tool: a.tool, ok: a.ok, ms: a.ms, error: a.error }));
-    res.type('html').send(adminPages.adminPage(cfg.publicUrl, devices, audit, store.auditStats(userId)));
+    const rows = audit.recentAudit(userId, 100).map((a) => ({ ts: a.ts, device: names.get(a.device_id ?? '') ?? (a.device_id ?? '?').slice(0, 8), client: a.client, tool: a.tool, ok: a.ok, ms: a.ms, error: a.error }));
+    res.type('html').send(adminPages.adminPage(cfg.publicUrl, devices, rows, audit.auditStats(userId)));
   });
   app.post('/admin/device', requireLogin, (req, res) => {
     const userId = currentUser(req)!;

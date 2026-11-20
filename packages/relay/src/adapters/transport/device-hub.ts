@@ -76,7 +76,7 @@ export class DeviceHub {
         return;
       }
 
-      if (!deviceId) return; // ignore anything before hello
+      if (!deviceId) return;
       const dev = this.devices.get(deviceId);
       if (dev) dev.lastSeen = Date.now();
 
