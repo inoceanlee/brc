@@ -36,6 +36,7 @@ export interface CleanupDependencies {
   lockStore: Pick<LockStore, 'readOwner' | 'reclaimExpired'>;
   lifecycleLock: Pick<LifecycleLock, 'runExclusive'>;
   snapshotStore: Pick<DiagnosticSnapshotPort, 'read' | 'list'>;
+  diagnosticsStore?: { maintain(): unknown };
   createProcessManager: CleanupProcessManagerFactory;
 }
 
@@ -736,6 +737,7 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions, dep
   }
 
   const cutoff = Date.now() - settings.logs.retentionDays * 24 * 60 * 60 * 1000;
+  if (!dryRun) dependencies.diagnosticsStore?.maintain();
   await cleanTemporaryFiles(paths, report, dryRun, cutoff);
   try {
     await lstat(paths.runtime);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteToolHistoryStore, type CliResult } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, diagnosticsRetentionConfig, type CliResult } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -141,7 +141,6 @@ async function createAgentDiagnostics(services: AgentConnectionServices) {
   const { paths, env } = services;
   const resolved = resolveAgentSettings((await services.settingsStore.read()).settings, env);
   const settings = resolved.diagnostics;
-  const directory = env.BRC_DIAGNOSTICS_DIR || path.join(paths.root, 'diagnostics');
   const enabled = settings.enabled;
   const instanceId = env.BRC_MANAGED_ID ?? String(process.pid);
   const functions = enabled ? new FunctionTiming() : undefined;
@@ -158,24 +157,25 @@ async function createAgentDiagnostics(services: AgentConnectionServices) {
       } catch {}
     }
   }
+  const diagnosticsStore = new SqliteDiagnosticsStore({
+    databasePath: resolveDiagnosticsDbPath(path.join(paths.root, 'data'), env),
+    config: diagnosticsRetentionConfig(resolved),
+    staleAfterMs: Math.max(settings.functionSnapshotMs * 3, 60_000),
+  });
   const probe = functions ? installFunctionProbe(functions) : undefined;
   const resources = functions ? new NodeResourceSampler({ intervalMs: settings.resourceSampleMs }) : undefined;
-  const store = functions && directory ? new FileSnapshotStore({
-    directory, staleAfterMs: Math.max(settings.functionSnapshotMs * 3, 60_000),
+  const session = functions && resources ? new DiagnosticSession({
+    service: 'agent', instanceId, store: diagnosticsStore.snapshots, functions, resources,
+    snapshotIntervalMs: settings.functionSnapshotMs,
   }) : undefined;
-  const session = functions && resources && store ? new DiagnosticSession({
-    service: 'agent', instanceId, store, functions, resources, snapshotIntervalMs: settings.functionSnapshotMs,
-  }) : undefined;
-  const maxBytes = resolved.logs.rotateMiB * 1024 * 1024;
-  const log = functions ? new FileDiagnosticLog(path.join(paths.logsDirectory, 'agent-diagnostics.log'), {
-    maxRecordBytes: settings.maxRecordBytes, maxBytes,
-  }) : undefined;
-  const runtime = createDiagnosticsRuntime({ enabled, component: 'agent', instanceId, functions, resources, session, log });
+  const runtime = createDiagnosticsRuntime({
+    enabled, component: 'agent', instanceId, functions, resources, session, log: enabled ? diagnosticsStore.log : undefined,
+  });
   let stopped: Promise<void> | undefined;
   return {
     ...runtime,
     stop() {
-      stopped ??= runtime.stop().finally(() => probe?.uninstall());
+      stopped ??= runtime.stop().finally(() => { probe?.uninstall(); diagnosticsStore.close(); });
       return stopped;
     },
   };

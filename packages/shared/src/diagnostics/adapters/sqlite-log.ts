@@ -115,6 +115,16 @@ CREATE TABLE IF NOT EXISTS trace_stages (
 );
 CREATE INDEX IF NOT EXISTS idx_traces_epoch ON trace_stages(epoch_ms);
 CREATE INDEX IF NOT EXISTS idx_traces_run ON trace_stages(run_id);
+CREATE TABLE IF NOT EXISTS trace_runs (
+  run_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  epoch_ms INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trace_runs_epoch ON trace_runs(epoch_ms);
 CREATE TABLE IF NOT EXISTS snapshots (
   service TEXT NOT NULL,
   instance_id TEXT NOT NULL,
@@ -620,6 +630,11 @@ export interface DiagnosticsMaintenanceResult extends DiagnosticsStoreStats {
 
 export interface SqliteDiagnosticsStoreOptions extends SqliteSnapshotStoreOptions {}
 
+export interface TraceQueryFilter {
+  commands?: readonly string[];
+  limit?: number;
+}
+
 export class SqliteDiagnosticsStore {
   readonly database: DiagnosticDatabase;
   readonly log: SqliteDiagnosticLog;
@@ -661,6 +676,15 @@ export class SqliteDiagnosticsStore {
   recordTrace(summary: TraceSummary): number {
     const epoch = Date.parse(summary.startedAt);
     return this.database.transaction(() => {
+      this.database.connection.prepare(
+        'INSERT INTO trace_runs (run_id,command,started_at,epoch_ms,status,error_code,payload) VALUES (?,?,?,?,?,?,?) '
+        + 'ON CONFLICT(run_id) DO UPDATE SET command=excluded.command,started_at=excluded.started_at,'
+        + 'epoch_ms=excluded.epoch_ms,status=excluded.status,error_code=excluded.error_code,payload=excluded.payload',
+      ).run(
+        summary.runId, summary.command, summary.startedAt, Number.isFinite(epoch) ? epoch : 0,
+        summary.status, optional(summary.errorCode), JSON.stringify(summary),
+      );
+      this.database.connection.prepare('DELETE FROM trace_stages WHERE run_id = ?').run(summary.runId);
       const insert = this.database.connection.prepare(
         'INSERT INTO trace_stages (run_id,started_at,epoch_ms,stage,service,status,error_code,start_ms,duration_ms) VALUES (?,?,?,?,?,?,?,?,?)',
       );
@@ -672,6 +696,21 @@ export class SqliteDiagnosticsStore {
       }
       return summary.stages.length;
     });
+  }
+
+  queryTraces(filter: TraceQueryFilter = {}): TraceSummary[] {
+    const clauses: string[] = [];
+    const params: SqlParam[] = [];
+    if (filter.commands && filter.commands.length > 0) {
+      clauses.push(`command IN (${filter.commands.map(() => '?').join(', ')})`);
+      params.push(...filter.commands);
+    }
+    const limit = Number.isSafeInteger(filter.limit) && (filter.limit ?? 0) > 0 ? filter.limit as number : 10;
+    const where = clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
+    const rows = this.database.connection.prepare(
+      `SELECT payload FROM trace_runs${where} ORDER BY epoch_ms DESC, rowid DESC LIMIT ?`,
+    ).all(...params, limit) as Array<{ payload: string }>;
+    return rows.map((row) => JSON.parse(row.payload) as TraceSummary);
   }
 
   stats(): DiagnosticsStoreStats {
@@ -698,7 +737,8 @@ export class SqliteDiagnosticsStore {
     this.database.transaction(() => {
       result.events = removeBefore('diagnostic_events', 'epoch_ms', cutoff(config.eventsRetentionDays));
       result.functions = removeBefore('function_stats', 'epoch_ms', cutoff(config.functionsRetentionDays));
-      result.traces = removeBefore('trace_stages', 'epoch_ms', cutoff(config.tracesRetentionDays));
+      result.traces = removeBefore('trace_stages', 'epoch_ms', cutoff(config.tracesRetentionDays))
+        + removeBefore('trace_runs', 'epoch_ms', cutoff(config.tracesRetentionDays));
       result.snapshots = removeBefore('snapshots', 'epoch_ms', cutoff(config.snapshotsRetentionDays));
       result.history = removeBefore('tool_history', 'epoch_ms', cutoff(config.historyRetentionDays));
       result.audit = removeBefore('relay_audit', 'epoch_ms', cutoff(config.auditRetentionDays));
@@ -709,7 +749,7 @@ export class SqliteDiagnosticsStore {
     const capBytes = config.maxDatabaseMiB * 1024 * 1024;
     if (databaseSize(this.database.path) > capBytes) {
       result.rotated = true;
-      const tables = ['diagnostic_events', 'tool_history', 'relay_audit', 'trace_stages', 'function_stats', 'snapshots'];
+      const tables = ['diagnostic_events', 'tool_history', 'relay_audit', 'trace_stages', 'trace_runs', 'function_stats', 'snapshots'];
       this.database.transaction(() => {
         for (const table of tables) {
           let guard = 0;

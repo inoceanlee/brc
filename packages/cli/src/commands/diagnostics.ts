@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
 import { readManagedLog } from '../adapters/storage/logs.js';
 import {
@@ -11,6 +12,10 @@ import {
 interface SharedQueryModule {
   SqliteDiagnosticQuery: new (options: { databasePath: string }) => {
     query(filter: DiagnosticQueryFilter): Promise<DiagnosticEvent[]>;
+    close(): void;
+  };
+  SqliteDiagnosticsStore: new (options: { databasePath: string }) => {
+    queryTraces(filter: { commands?: readonly string[]; limit?: number }): Array<Record<string, unknown>>;
     close(): void;
   };
   resolveDiagnosticsDbPath(directory: string, env?: NodeJS.ProcessEnv): string;
@@ -77,7 +82,7 @@ export async function readDiagnosticLogs(paths: BrcPaths, filter: DiagnosticQuer
   }
 }
 
-async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
+async function readLatestTraceFile(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
   const source = await readManagedLog(paths, 'cli');
   if (!source) return { state: 'missing', summary: null };
   for (const line of source.trimEnd().split(/\r?\n/).reverse()) {
@@ -90,6 +95,22 @@ async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly strin
     return { state: 'recorded', summary: value };
   }
   return { state: 'missing', summary: null };
+}
+
+async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
+  const shared = await loadSharedQueryModule();
+  const dataDirectory = paths.data ?? path.join(paths.root, 'data');
+  const store = new shared.SqliteDiagnosticsStore({
+    databasePath: shared.resolveDiagnosticsDbPath(dataDirectory, process.env),
+  });
+  let summary: Record<string, unknown> | undefined;
+  try {
+    [summary] = store.queryTraces({ commands: acceptedCommands, limit: 1 });
+  } finally {
+    store.close();
+  }
+  if (summary && summary.traceSchema === 1) return { state: 'recorded', summary };
+  return readLatestTraceFile(paths, acceptedCommands);
 }
 
 export function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnosticResult> {
