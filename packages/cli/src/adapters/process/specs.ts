@@ -11,7 +11,7 @@ function childEnvironment(parent: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...parent };
   for (const name of [
     'BRC_DATA_ROOT', 'BRC_HOME', 'BRC_CONFIG_FILE', 'BRC_DB', 'BRC_RELAY', 'BRC_NAME', 'BRC_TOKEN', 'BRC_DEVICE_ID', 'BRC_LOG_FILE',
-    'BRC_TRAEFIK_ROOT', 'BRC_TRAEFIK_CONFIG_DIR', 'BRC_TRAEFIK_PORT', 'BRC_TRAEFIK_HEALTH_PORT', 'BRC_RELAY_PORT', 'BRC_LOG_ROTATE_MIB',
+    'BRC_LEGACY_RELAY_DB', 'BRC_TRAEFIK_ROOT', 'BRC_TRAEFIK_CONFIG_DIR', 'BRC_TRAEFIK_PORT', 'BRC_TRAEFIK_HEALTH_PORT', 'BRC_RELAY_PORT', 'BRC_LOG_ROTATE_MIB',
     'BRC_ADMIN_USER', 'BRC_ADMIN_PASSWORD', 'BRC_SESSION_SECRET', 'BRC_PRODUCT_VERSION', 'PORT', 'HOST', 'PUBLIC_URL', 'TRUST_PROXY',
     'BRC_DIAGNOSTICS_ENABLED', 'BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS', 'BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS',
     'BRC_DIAGNOSTICS_MAX_RECORD_BYTES', 'BRC_DIAGNOSTICS_RETENTION_DAYS', 'BRC_DIAGNOSTICS_DIR', 'BRC_INSTANCE_ID',
@@ -38,6 +38,7 @@ export function createDefaultServices(
   paths: BrcPaths,
   settings: Readonly<BrcSettings>,
   parentEnv: NodeJS.ProcessEnv = process.env,
+  legacyIdentityFile?: string,
 ): ManagedServiceSpec[] {
   const cliDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const packedRelayEntry = path.resolve(cliDist, 'services/relay/cli.js');
@@ -51,6 +52,7 @@ export function createDefaultServices(
   const { relayPort: relay, proxyPort: proxy, healthPort: health } = settings.services;
   const proxyUrl = `http://127.0.0.1:${proxy}`;
   const baseEnv = { ...childEnvironment(parentEnv), BRC_PRODUCT_VERSION: productVersion };
+  const newDatabaseExists = existsSync(path.join(paths.data, 'relay.sqlite'));
   const relayEnv: NodeJS.ProcessEnv = {
     ...baseEnv,
     ...diagnosticEnvironment(settings, paths),
@@ -64,6 +66,7 @@ export function createDefaultServices(
     TRUST_PROXY: 'loopback',
     BRC_DB: path.join(paths.data, 'relay.sqlite'),
     BRC_LOG_FILE: path.join(paths.logs, 'relay.log'),
+    ...(legacyIdentityFile && !newDatabaseExists ? { BRC_LEGACY_RELAY_DB: legacyIdentityFile } : {}),
   };
   const traefikEnv: NodeJS.ProcessEnv = {
     ...baseEnv,

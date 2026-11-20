@@ -46,25 +46,27 @@ test('entry migration refuses a silent new identity when legacy data is present'
   assert.doesNotThrow(() => assertNoLegacyIdentity([]));
 });
 
-test('setup refuses to create a new identity when the entry scan found legacy data', async (t) => {
+test('setup proceeds when the entry scan found legacy data and the new database is absent', async (t) => {
   const { runCli } = await import(new URL('../packages/cli/dist/cli.js', import.meta.url).href);
   const home = await makeHome(t);
   const legacy = path.join(home, 'old');
   await mkdir(path.join(legacy, 'data'), { recursive: true });
   await writeFile(path.join(legacy, 'data', 'relay.sqlite'), 'legacy identity');
   const errors = [];
+  let setupCalls = 0;
   const root = path.join(home, 'new-root');
   const exitCode = await runCli(['setup'], {
     paths: {
       root, traefik: path.join(root, 'traefik'), config: path.join(root, 'config'), data: path.join(root, 'data'),
       runtime: path.join(root, 'runtime'), logs: path.join(root, 'logs'), diagnostics: path.join(root, 'diagnostics'), tmp: path.join(root, 'tmp'),
     },
-    commands: { setup: async () => 0 },
+    commands: { setup: async () => { setupCalls += 1; return 0; } },
     legacyCandidates: [{ kind: 'identity-database', path: path.join(legacy, 'data', 'relay.sqlite') }],
     clean: async () => {},
     write: () => {},
     writeError: (message) => errors.push(message),
   });
-  assert.equal(exitCode, 5);
-  assert.match(errors.join('\n'), /legacy/i);
+  assert.equal(exitCode, 0);
+  assert.equal(setupCalls, 1);
+  assert.deepEqual(errors, []);
 });

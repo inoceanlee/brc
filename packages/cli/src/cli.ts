@@ -215,7 +215,9 @@ async function dispatch(
       }), parsed, deps);
     }
     case 'setup': {
-      assertNoLegacyIdentity(deps.legacyCandidates ?? []);
+      if (existsSync(path.join(deps.paths.data, 'relay.sqlite'))) {
+        assertNoLegacyIdentity(deps.legacyCandidates ?? []);
+      }
       return completeCommand(await deps.commands.setup(deps.signal), parsed, deps);
     }
     case 'start':
@@ -518,12 +520,13 @@ async function main(): Promise<void> {
     lifecycleLock.updateWaitSettings({ waitMs: current.runtime.lockWaitMs, pollMs: current.runtime.lockPollMs });
     return current;
   };
+  const legacyIdentityFile = legacyCandidates.find((candidate) => candidate.kind === 'identity-database')?.path;
   const refreshServices = async () => {
     const currentSettings = await loadSettings();
     processes.updateRuntimeSettings(currentSettings.runtime);
-    return createDefaultServices(paths, currentSettings, serviceParentEnv);
+    return createDefaultServices(paths, currentSettings, serviceParentEnv, legacyIdentityFile);
   };
-  const services = createDefaultServices(paths, settings, serviceParentEnv);
+  const services = createDefaultServices(paths, settings, serviceParentEnv, legacyIdentityFile);
   const relaySpec = services.find((service) => service.name === 'relay');
   if (!relaySpec) throw new Error('The Relay service is missing from the default service set.');
   const relayDatabase = new RelayDatabase(path.join(paths.data, 'relay.sqlite'), relaySpec);
