@@ -49,12 +49,14 @@ test('credential preview does not initialize or modify history', (t) => {
   mkdirSync(directory, { recursive: true });
   const history = path.join(directory, 'tool-history.json');
   writeFileSync(history, '{damaged private history');
+  const database = path.join(root, 'brc-diagnostics.sqlite');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
   const child = spawnSync(process.execPath, [
     fileURLToPath(new URL('../packages/agent/dist/cli.js', import.meta.url)), 'credentials', 'logout', '--preview',
   ], { env: { ...env, BRC_DATA_ROOT: root, DO_NOT_TRACK: '1' }, encoding: 'utf8', timeout: 8000 });
   assert.equal(child.status, 0, child.stderr);
   assert.equal(readFileSync(history, 'utf8'), '{damaged private history');
+  assert.equal(existsSync(database), false);
 });
 const start = { device_code: 'code', user_code: 'USER', verification_uri: 'https://relay.example/verify', verification_uri_complete: 'https://relay.example/verify?code=USER', expires_in: 30, interval: 2 };
 

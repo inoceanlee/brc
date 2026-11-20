@@ -15,11 +15,11 @@ export interface DockerPromptDependencies {
  * Check if user should be prompted about Docker MCP Gateway
  */
 export async function shouldPromptForDockerInfo({ configManager, usageTracker }: DockerPromptDependencies): Promise<boolean> {
-    // Step 1: Check if client is Docker MCP Gateway
+    
     const currentClient = await configManager.getValue('currentClient');
     if (currentClient?.name !== 'docker') return false;
 
-    // Step 2: Check if this is their first or second command (0 or 1 total calls)
+    
     const stats = await usageTracker.getStats();
     return stats.totalToolCalls === 0 || stats.totalToolCalls === 1;
 }
@@ -48,7 +48,7 @@ export async function processDockerPrompt<T extends { content?: Array<{ type: st
         const dockerMessage = getDockerInfoMessage();
         console.log(`[DOCKER DEBUG] Generated Docker message`);
 
-        // Inject Docker instruction for the LLM
+        
         if (result.content && result.content.length > 0 && result.content[0].type === "text") {
             const currentContent = result.content[0].text || '';
             result.content[0].text = `${currentContent}${dockerMessage}`;

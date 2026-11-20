@@ -73,20 +73,20 @@ function getErrorFromPath(path: string): string {
  */
 export async function handleReadFile(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     const { configManager } = dependencies;
-    // Backstop for the whole handler operation. The real control is the
-    // 3-minute cancellable read timeout inside readFileFromDisk; this sits just
-    // above it (so that one fires first, with cleanup + a useful error) but
-    // still below the MCP client's ~4-minute hard cap, so we never leave the
-    // client hanging on an opaque timeout.
-    const HANDLER_TIMEOUT = 3.5 * 60 * 1000; // 3m30s
-    // Add input validation
+    
+    
+    
+    
+    
+    const HANDLER_TIMEOUT = 3.5 * 60 * 1000; 
+    
     if (args === null || args === undefined) {
         return createErrorResponse('No arguments provided for read_file command', dependencies.capture);
     }
     const readFileOperation = async () => {
         const parsed = ReadFileArgsSchema.parse(args);
 
-        // Get the configuration for file read limits
+        
         const config = await configManager.getConfig();
         if (!config) {
             return createErrorResponse('Configuration not available', dependencies.capture);
@@ -94,7 +94,7 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
 
         const defaultLimit = config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
 
-        // Convert sheet parameter: numeric strings become numbers for Excel index access
+        
         let sheetParam: string | number | undefined = parsed.sheet;
         if (parsed.sheet !== undefined && /^\d+$/.test(parsed.sheet)) {
             sheetParam = parseInt(parsed.sheet, 10);
@@ -108,14 +108,14 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
             range: parsed.range
         };
 
-        // Resolve to absolute path for local files (not URLs) so "Open in folder" works
+        
         const resolvedFilePath = parsed.isUrl
             ? parsed.path
             : resolveAbsolutePath(parsed.path);
 
         const fileResult = await readFile(dependencies, parsed.path, options);
 
-        // Handle PDF files
+        
         if (fileResult.metadata?.isPdf) {
             const meta = fileResult.metadata;
             const author = meta?.author ? `, Author: ${meta?.author}` : "";
@@ -152,11 +152,11 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
             };
         }
 
-        // Handle image files
+        
         if (fileResult.metadata?.isImage) {
-            // Return the image bytes in the MCP content array so the host model can
-            // actually see the image. The preview widget gets its copy from its own
-            // origin:'ui' read — structuredContent stays metadata-only.
+            
+            
+            
             const imageData = typeof fileResult.content === 'string'
                 ? fileResult.content
                 : fileResult.content.toString('base64');
@@ -168,21 +168,21 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
                 ...await getDefaultEditorMetadata(resolvedFilePath),
                 mimeType: fileResult.mimeType,
             };
-            // Widget pull (origin: 'ui'): return the base64 in a TEXT block, never
-            // an image block. An image content block makes the host inline-vision-
-            // render the result, which preempts delivery of this RPC response to
-            // the widget — leaving the preview stuck on "Preparing preview…" for
-            // exactly the host-rendered types (png/jpeg/gif/webp). Text-only lets
-            // the RPC response through so the widget can draw the <img>.
+            
+            
+            
+            
+            
+            
             if (parsed.origin === 'ui') {
                 return {
                     content: [{ type: "text", text: imageData }],
                     structuredContent: imageStructuredContent,
                 };
             }
-            // Model-facing read: keep the image block so the host/model sees it.
-            // No structuredContent — the widget renders from its own origin:'ui'
-            // read, and nothing else consumes it.
+            
+            
+            
             return {
                 content: [
                     {
@@ -197,16 +197,16 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
                 ],
             };
         } else {
-            // For all other files, return as text.
-            // structuredContent carries only file metadata (no content duplication);
-            // the widget reads text from the MCP content array (over the RPC read).
+            
+            
+            
             let textContent = typeof fileResult.content === 'string'
                 ? fileResult.content
                 : fileResult.content.toString('utf8');
             const fileType = fileResult.metadata?.isDirectory ? 'directory' as const : resolvePreviewFileType(resolvedFilePath);
-            // The directory fallback prefixes a "use list_directory instead" hint
-            // for the LLM. The widget's own read (a list_directory preview pulls
-            // read_file on the dir path) would render that hint as a notice — strip it.
+            
+            
+            
             if (parsed.origin === 'ui' && fileType === 'directory') {
                 textContent = textContent.replace(/^This is a directory, not a file\.[^\n]*\n+/, '');
             }
@@ -224,7 +224,7 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
         }
     };
 
-    // Execute with timeout at the handler level
+    
     const result = await withTimeout(
         readFileOperation(),
         HANDLER_TIMEOUT,
@@ -232,7 +232,7 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
         null
     );
     if (result == null) {
-        // Handles the impossible case where withTimeout resolves to null instead of throwing
+        
         throw new Error('Failed to read the file');
     }
     return result;
@@ -245,7 +245,7 @@ export async function handleReadMultipleFiles(args: unknown, dependencies: Files
     const parsed = ReadMultipleFilesArgsSchema.parse(args);
     const fileResults = await readMultipleFiles(dependencies, parsed.paths);
 
-    // Create a text summary of all files
+    
     const textSummary = fileResults.map(result => {
         if (result.error) {
             return `${result.path}: Error - ${result.error}`;
@@ -258,13 +258,13 @@ export async function handleReadMultipleFiles(args: unknown, dependencies: Files
         }
     }).join("\n");
 
-    // Create content items for each file
+    
     const contentItems: Array<{ type: string, text?: string, data?: string, mimeType?: string }> = [];
 
-    // Add the text summary
+    
     contentItems.push({ type: "text", text: textSummary });
 
-    // Add each file content
+    
     for (const result of fileResults) {
         if (!result.error && result.content !== undefined) {
             if (result.isPdf) {
@@ -282,14 +282,14 @@ export async function handleReadMultipleFiles(args: unknown, dependencies: Files
                     });
                 });
             } else if (result.isImage && result.mimeType) {
-                // For image files, add an image content item
+                
                 contentItems.push({
                     type: "image",
                     data: result.content,
                     mimeType: result.mimeType
                 });
             } else {
-                // For text files, add a text summary
+                
                 contentItems.push({
                     type: "text",
                     text: `\n--- ${result.path} contents: ---\n${result.content}`
@@ -310,11 +310,11 @@ export async function handleWriteFile(args: unknown, dependencies: FilesystemDep
         const modeProvided = !!(args && typeof args === 'object' && 'mode' in args);
         const parsed = WriteFileArgsSchema.parse(args);
 
-        // An omitted `mode` falls back to 'rewrite', which silently destroys
-        // the target's existing content. The common failure is an LLM caller
-        // intending to append but dropping the optional param (issue #541), so
-        // require explicit intent when the target already has content;
-        // new/empty files keep the zero-friction default.
+        
+        
+        
+        
+        
         if (!modeProvided) {
             let existing: Record<string, any> | null = null;
             try {
@@ -334,11 +334,11 @@ export async function handleWriteFile(args: unknown, dependencies: FilesystemDep
             }
         }
 
-        // Get the line limit from configuration
+        
         const config = await configManager.getConfig();
         const MAX_LINES = config.fileWriteLineLimit ?? AGENT_DEFAULTS.fileWriteLineLimit;
 
-        // Strictly enforce line count limit
+        
         const lines = parsed.content.split('\n');
         const lineCount = lines.length;
         let errorMessage = "";
@@ -348,14 +348,14 @@ export async function handleWriteFile(args: unknown, dependencies: FilesystemDep
 💡 Performance tip: For optimal speed, consider chunking files into ≤30 line pieces in future operations.`;
         }
 
-        // Pass the mode parameter to writeFile
+        
         await writeFile(dependencies, parsed.path, parsed.content, parsed.mode);
 
-        // Provide more informative message based on mode
+        
         const modeMessage = parsed.mode === 'append' ? 'appended to' : 'wrote to';
 
-        // No structuredContent: nothing in the UI calls write_file (the widget
-        // previews the write via its own read_file pull at tool-result time).
+        
+        
         return {
             content: [{
                 type: "text",
@@ -438,7 +438,7 @@ function formatValue(value: unknown, indent: string = ''): string {
     }
     if (Array.isArray(value)) {
         if (value.length === 0) return '[]';
-        // For arrays of objects (like sheets), format each item
+        
         const items = value.map((item, i) => {
             if (typeof item === 'object' && item !== null) {
                 const props = Object.entries(item)
@@ -464,7 +464,7 @@ export async function handleGetFileInfo(args: unknown, dependencies: FilesystemD
         const parsed = GetFileInfoArgsSchema.parse(args);
         const info = await getFileInfo(dependencies, parsed.path);
 
-        // Generic formatting for any file type
+        
         const formattedText = Object.entries(info)
             .map(([key, value]) => `${key}: ${formatValue(value)}`)
             .join('\n');
@@ -481,7 +481,7 @@ export async function handleGetFileInfo(args: unknown, dependencies: FilesystemD
     }
 }
 
-// Use get_config to retrieve the allowedDirectories configuration
+
 
 /**
  * Handle write_pdf command

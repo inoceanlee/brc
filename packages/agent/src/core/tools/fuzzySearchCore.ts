@@ -30,9 +30,9 @@ export interface FuzzySearchMetrics {
     } | null;
 }
 
-// Set by iterativeReduction during a search (exactly one terminal call per
-// search) and collected by runFuzzySearch. Single-threaded per context, so a
-// module-level slot is safe.
+
+
+
 let lastIterativeMetrics: FuzzySearchMetrics['iterative'] = null;
 
 /**
@@ -69,26 +69,26 @@ export function runFuzzySearch(text: string, query: string): { result: FuzzyMatc
 export function recursiveFuzzyIndexOf(text: string, query: string, start: number = 0, end: number | null = null, parentDistance: number = Infinity): FuzzyMatch {
     if (end === null) end = text.length;
 
-    // For small text segments, use iterative approach
+    
     if (end - start <= 2 * query.length) {
         return iterativeReduction(text, query, start, end, parentDistance);
     }
 
     let midPoint = start + Math.floor((end - start) / 2);
-    let leftEnd = Math.min(end, midPoint + query.length); // Include query length to cover overlaps
-    let rightStart = Math.max(start, midPoint - query.length); // Include query length to cover overlaps
+    let leftEnd = Math.min(end, midPoint + query.length); 
+    let rightStart = Math.max(start, midPoint - query.length); 
 
-    // Calculate distance for current segments
+    
     let leftDistance = distance(text.substring(start, leftEnd), query);
     let rightDistance = distance(text.substring(rightStart, end), query);
     let bestDistance = Math.min(leftDistance, parentDistance, rightDistance);
 
-    // If parent distance is already the best, use iterative approach
+    
     if (parentDistance === bestDistance) {
         return iterativeReduction(text, query, start, end, parentDistance);
     }
 
-    // Recursively search the better half
+    
     if (leftDistance < rightDistance) {
         return recursiveFuzzyIndexOf(text, query, start, leftEnd, bestDistance);
     } else {
@@ -109,15 +109,15 @@ function iterativeReduction(text: string, query: string, start: number, end: num
     const startTime = performance.now();
     let iterations = 0;
 
-    // Seed with the measured distance of this slice. For recursive callers
-    // this equals parentDistance (the parent measured exactly this slice), but
-    // a top-level call on text <= 2x query length arrives with Infinity, which
-    // made the first shrink unconditional and a position-0 match unreachable.
+    
+    
+    
+    
     let bestDistance = distance(text.substring(start, end), query);
     let bestStart = start;
     let bestEnd = end;
 
-    // Improve start position
+    
     let nextDistance = distance(text.substring(bestStart + 1, bestEnd), query);
 
     while (nextDistance < bestDistance) {
@@ -128,7 +128,7 @@ function iterativeReduction(text: string, query: string, start: number, end: num
         iterations++;
     }
 
-    // Improve end position
+    
     nextDistance = distance(text.substring(bestStart, bestEnd - 1), query);
 
     while (nextDistance < bestDistance) {
@@ -163,7 +163,7 @@ function iterativeReduction(text: string, query: string, start: number, end: num
  */
 export function getSimilarityRatio(a: string, b: string): number {
     const maxLength = Math.max(a.length, b.length);
-    if (maxLength === 0) return 1; // Both strings are empty
+    if (maxLength === 0) return 1; 
 
     const levenshteinDistance = distance(a, b);
     return 1 - (levenshteinDistance / maxLength);

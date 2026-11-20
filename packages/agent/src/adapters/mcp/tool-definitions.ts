@@ -35,7 +35,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
   const osGuidance = getOSSpecificGuidance(systemInfo);
   const pathGuidance = `IMPORTANT: ${getPathGuidance(systemInfo)} Relative paths may fail as they depend on the current working directory. Tilde paths (~/...) might not work in all contexts. Unless the user explicitly asks for relative paths, use absolute paths.`;
   const allTools: ToolDefinition[] = [
-    // Configuration tools
+    
     {
         name: "get_config",
         description: `
@@ -86,7 +86,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
         },
     },
 
-    // Filesystem tools
+    
     {
         name: "read_file",
         description: `
@@ -599,9 +599,9 @@ export function buildToolDefinitions(): ToolDefinition[] {
             readOnlyHint: true,
         },
     },
-    // Note: list_allowed_directories removed - use get_config to check allowedDirectories
+    
 
-    // Editing tools
+    
     {
         name: "edit_block",
         description: `
@@ -666,7 +666,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
         },
     },
 
-    // Terminal tools
+    
     {
         name: "start_process",
         description: `
@@ -932,11 +932,11 @@ export function buildToolDefinitions(): ToolDefinition[] {
         name: "get_recent_tool_calls",
         description: `
                 Get recent local tool call history with tool names, timestamps, outcomes, and durations.
-                Returns a chronological list of recent calls loaded from the local history file.
+                Returns a chronological list of recent calls loaded from the unified SQLite store.
 
                 Arguments and output contents are not retained.
                 This tool does not track its own calls or track_ui_event.
-                History is persisted locally in data/agent/tool-history.json and keeps
+                History is persisted in brc-diagnostics.sqlite and keeps
                 up to the last 1000 calls in memory.
                 
                 ${CMD_PREFIX_DESCRIPTION}`,

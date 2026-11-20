@@ -20,7 +20,7 @@ export function detectLineEnding(content: string): LineEndingStyle {
         }
     }
 
-    // Default to system line ending if no line endings found
+    
     return process.platform === 'win32' ? '\r\n' : '\n';
 }
 
@@ -28,10 +28,10 @@ export function detectLineEnding(content: string): LineEndingStyle {
  * Normalize line endings to match the target style
  */
 export function normalizeLineEndings(text: string, targetLineEnding: LineEndingStyle): string {
-    // First normalize to LF
+    
     let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-    // Then convert to target
+    
     if (targetLineEnding === '\r\n') {
         return normalized.replace(/\n/g, '\r\n');
     } else if (targetLineEnding === '\r') {
@@ -53,12 +53,12 @@ export function analyzeLineEndings(content: string): {
     let lfCount = 0;
     let crCount = 0;
 
-    // Count line endings
+    
     for (let i = 0; i < content.length; i++) {
         if (content[i] === '\r') {
             if (i + 1 < content.length && content[i + 1] === '\n') {
                 crlfCount++;
-                i++; // Skip the LF
+                i++; 
             } else {
                 crCount++;
             }
@@ -67,7 +67,7 @@ export function analyzeLineEndings(content: string): {
         }
     }
 
-    // Determine predominant style
+    
     const total = crlfCount + lfCount + crCount;
     let style: LineEndingStyle;
 
@@ -79,7 +79,7 @@ export function analyzeLineEndings(content: string): {
         style = '\r';
     }
 
-    // Check for mixed line endings
+    
     const usedStyles = [crlfCount > 0, lfCount > 0, crCount > 0].filter(Boolean).length;
     const hasMixed = usedStyles > 1;
 

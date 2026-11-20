@@ -30,8 +30,14 @@ test('tool history suppresses arguments and returned data even when short', asyn
   assert.equal(record.toolName, 'read_file');
   assert.doesNotMatch(JSON.stringify(record), /private-secret/);
   await toolHistory.cleanup();
-  const file = path.join(root, 'data', 'agent', 'tool-history.json');
-  assert.doesNotMatch(readFileSync(file, 'utf8'), /private-secret/);
+  const { SqliteToolHistoryStore } = await import('../packages/shared/dist/index.js');
+  const store = new SqliteToolHistoryStore({ databasePath: toolHistory.target });
+  try {
+    const entries = await store.query({ maxResults: 10 });
+    assert.doesNotMatch(JSON.stringify(entries), /private-secret/);
+  } finally {
+    store.close();
+  }
 });
 
 test('fuzzy-search diagnostics retain measurements but not source text', async () => {
@@ -89,7 +95,10 @@ test('usage statistics and onboarding diagnostics do not write to stdout', () =>
   assert.equal(child.stdout, '');
 });
 
-test.after(() => rmSync(root, { recursive: true, force: true }));
+test.after(() => {
+  toolHistory.close();
+  rmSync(root, { recursive: true, force: true });
+});
 
 test('Agent logger forwards redacted events into the injected Shared diagnostic sink', async () => {
   const { createAgentLogger } = await import('../packages/agent/dist/adapters/telemetry/logger.js');

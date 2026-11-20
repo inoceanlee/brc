@@ -15,25 +15,25 @@ export function withTimeout<T>(
     operationName: string,
     defaultValue: T
 ): Promise<T> {
-    // Don't sanitize operation name for logs - only telemetry will sanitize if needed
+    
     return new Promise((resolve, reject) => {
         let isCompleted = false;
 
-        // Set up timeout
+        
         const timeoutId = setTimeout(() => {
             if (!isCompleted) {
                 isCompleted = true;
                 if (defaultValue !== null) {
                     resolve(defaultValue);
                 } else {
-                    // Keep the original operation name in the error message
-                    // Telemetry sanitization happens at the capture level
+                    
+                    
                     reject(`__ERROR__: ${operationName} timed out after ${timeoutMs / 1000} seconds`);
                 }
             }
         }, timeoutMs);
 
-        // Execute the operation
+        
         operation
             .then(result => {
                 if (!isCompleted) {
@@ -49,7 +49,7 @@ export function withTimeout<T>(
                     if (defaultValue !== null) {
                         resolve(defaultValue);
                     } else {
-                        // Pass the original error unchanged - sanitization for telemetry happens in capture
+                        
                         reject(error);
                     }
                 }
@@ -91,8 +91,8 @@ export function runWithAbortableTimeout<T>(
     });
 
     const op = operation(controller.signal);
-    // Swallow the late abort rejection so it can't surface as an unhandled
-    // rejection after the timeout has already settled the race.
+    
+    
     op.catch(() => {});
 
     return Promise.race([op, timeout]).finally(() => clearTimeout(timeoutId));

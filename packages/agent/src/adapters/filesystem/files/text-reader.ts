@@ -74,8 +74,8 @@ export class TextReader {
         const encoding = await this.detectTextEncoding(filePath);
         const totalLines = await this.getFileLineCount(filePath, signal, encoding);
 
-        // UTF-16LE needs character-aware streaming. Skip the two-byte BOM and keep
-        // the same line pagination/status semantics as ordinary text reads.
+        
+        
         if (encoding === 'utf16le') {
             if (offset < 0) {
                 return await this.readFromEndWithReadline(
@@ -89,7 +89,7 @@ export class TextReader {
             );
         }
 
-        // For negative offsets (tail behavior), use reverse reading
+        
         if (offset < 0) {
             const requestedLines = Math.abs(offset);
 
@@ -271,7 +271,7 @@ export class TextReader {
         fileTotalLines?: number,
         signal?: AbortSignal
     ): Promise<FileResult> {
-        // First, do a quick scan to estimate lines per byte
+        
         const rl = createInterface({
             input: createReadStream(filePath, { signal }),
             crlfDelay: Infinity
@@ -292,7 +292,7 @@ export class TextReader {
             return await this.readFromStartWithReadline(filePath, offset, length, mimeType, includeStatusMessage, fileTotalLines, signal);
         }
 
-        // Estimate position
+        
         const avgLineLength = bytesRead / sampleLines;
         const estimatedBytePosition = Math.floor(offset * avgLineLength);
 

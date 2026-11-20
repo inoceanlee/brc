@@ -40,15 +40,15 @@ export class FuzzySearchLogger {
         if (this.initialized) return;
         
         try {
-            // Create log directory if it doesn't exist
+            
             const logDir = path.dirname(this.logPath);
             await fs.mkdir(logDir, { recursive: true });
             
-            // Check if log file exists, create with headers if not
+            
             try {
                 await fs.access(this.logPath);
             } catch {
-                // File doesn't exist, create with headers
+                
                 const headers = FUZZY_LOG_HEADERS;
                 await fs.writeFile(this.logPath, headers + '\n');
             }
@@ -65,7 +65,7 @@ export class FuzzySearchLogger {
             const maxBytes = typeof this.maxBytes === 'number' ? this.maxBytes : await this.maxBytes();
             await this.ensureLogFile();
             
-            // Convert entry to tab-separated string
+            
             const logLine = [
                 entry.timestamp.toISOString(),
                 entry.similarity.toString(),
@@ -107,7 +107,7 @@ export class FuzzySearchLogger {
 
     async clearLog(): Promise<void> {
         try {
-            // Recreate with just headers
+            
             const headers = FUZZY_LOG_HEADERS;
             
             await fs.rm(`${this.logPath}.1`, { force: true });

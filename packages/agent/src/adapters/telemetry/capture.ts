@@ -18,12 +18,12 @@ export interface CaptureDependencies {
     getSystemInfo: typeof getSystemInfo;
 }
 
-// Execution context for tool calls fired programmatically by the widget UIs
-// (file preview, config editor), marked by args.origin === 'ui'. While code
-// runs inside this context, capture() drops every event, so UI refresh churn
-// (pull-by-path reads, in-preview saves, folder expansion, link search, ...)
-// produces zero telemetry. AsyncLocalStorage (rather than a module-level flag)
-// keeps attribution correct when a widget call interleaves with an agent call.
+
+
+
+
+
+
 const uiOriginCallContext = new AsyncLocalStorage<boolean>();
 
 export function runInUiOriginCallContext<T>(fn: () => T): T {
@@ -43,12 +43,12 @@ try {
 }
 
 
-// --- Telemetry Proxy (direct BigQuery ingestion) ---
-// TODO: Move proxy endpoints, auth header setup, request retry/fallback, and
-// transport code into a dedicated telemetry utility once this migration lands.
-// TODO(security): bearer token was removed, so this endpoint is now unauthenticated.
-// Confirm the proxy enforces rate limiting / payload validation server-side,
-// otherwise anyone can POST arbitrary events straight into BigQuery ingestion.
+
+
+
+
+
+
 const TELEMETRY_PROXY_URL = 'https://telemetry.desktopcommander.app/mp/collect';
 const TELEMETRY_PROXY_FALLBACK_URL = 'https://dc-telemetry-proxy-83847352264.europe-west1.run.app/mp/collect';
 
@@ -60,7 +60,7 @@ const TELEMETRY_PROXY_FALLBACK_URL = 'https://dc-telemetry-proxy-83847352264.eur
  * Set DESKTOP_COMMANDER_DISABLE_TELEMETRY to 1/true/yes/on to disable.
  */
 export function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv): boolean {
-    // Better Remote Commander (BRC): upstream telemetry is OFF unless explicitly opted in with BRC_UPSTREAM_TELEMETRY=1
+    
     if (!['1', 'true'].includes((env.BRC_UPSTREAM_TELEMETRY ?? '').toLowerCase())) return true;
     const raw = env.DESKTOP_COMMANDER_DISABLE_TELEMETRY;
     if (!raw) return false;
@@ -78,10 +78,10 @@ export function sanitizeError(error: any): { message: string, code?: string } {
     let errorCode = undefined;
 
     if (error instanceof Error) {
-        // Extract just the error name and message without stack trace
+        
         errorMessage = error.name + ': ' + error.message;
 
-        // Extract error code if available (common in Node.js errors)
+        
         if ('code' in error) {
             errorCode = (error as any).code;
         }
@@ -91,8 +91,8 @@ export function sanitizeError(error: any): { message: string, code?: string } {
         errorMessage = 'Unknown error';
     }
 
-    // Remove any file paths using regex
-    // This pattern matches common path formats including Windows and Unix-style paths
+    
+    
     errorMessage = errorMessage.replace(/(?:\/|\\)[\w\d_.-\/\\]+/g, '[PATH]');
     errorMessage = errorMessage.replace(/[A-Za-z]:\\[\w\d_.-\/\\]+/g, '[PATH]');
 
@@ -116,8 +116,8 @@ const buildEventProperties = async (properties?: any) => {
         uniqueUserId = await configManager.getOrCreateClientId();
     }
 
-    // For remote calls, attribute to the originating remote client (carried on
-    // the tool call) instead of the device's local currentClient.
+    
+    
     const effectiveClient =
         currentCallIsRemote && currentRemoteClient ? currentRemoteClient : currentClient;
     let clientContext: any = {};
@@ -210,9 +210,9 @@ const buildEventProperties = async (properties?: any) => {
         app_version: VERSION,
         engagement_time_msec: "100",
         ...clientContext,
-        // Attribute events to the remote path when the in-flight tool call
-        // came from a remote device. Placed before sanitizedProperties so an
-        // explicit `remote` passed by the caller (e.g. captureRemote) wins.
+        
+        
+        
         ...(currentCallIsRemote ? { remote: String(true) } : {}),
         ...sanitizedProperties,
     };
@@ -274,15 +274,15 @@ const postTelemetryPayload = async (endpoint: string, payload: string): Promise<
     });
 };
 
-// TODO(behavior): capture() is now fire-and-forget — every `await capture(...)`
-// call site resolves before the network send completes. Fine for the long-running
-// MCP server, but events fired right before process exit (e.g. opt-out, feedback)
-// can be silently dropped. If we need delivery guarantees on short-lived paths,
-// expose an awaitable variant or flush-before-exit hook.
+
+
+
+
+
 const capture = async (event: string, properties?: unknown) => {
     if (isTelemetryDisabledByEnv(env)) return;
-    // Tool calls fired programmatically by the widget UIs must produce zero
-    // telemetry — drop every event raised while serving one.
+    
+    
     if (isInsideUiOriginCall()) {
         return;
     }
@@ -306,10 +306,10 @@ const capture_ui_event = capture;
  * @param properties Optional event properties
  */
 const captureRemote = async (event: string, properties?: Record<string, unknown>) => {
-    // Create a copy of properties to avoid mutating the original
+    
     const sanitizedProps = properties ? { ...properties } : {};
 
-    // Remove sensitive identity keys specific to remote devices
+    
     const sensitiveIdentityKeys = ['deviceId', 'userId', 'email', 'user_id', 'device_id', 'user_email'];
     for (const key of sensitiveIdentityKeys) {
         if (key in sanitizedProps) {

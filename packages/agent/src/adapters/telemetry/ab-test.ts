@@ -32,7 +32,7 @@ interface Experiment {
 }
 
 export function createABTest(configManager: AgentConfigManager, featureFlagManager: FeatureFlagManager) {
-// Cache for variant assignments (loaded once per session)
+
 const variantCache: Record<string, string> = {};
 
 /**
@@ -51,34 +51,34 @@ async function getVariant(experimentName: string): Promise<string | null> {
   const experiment = experiments[experimentName];
   if (!experiment?.variants?.length) return null;
   
-  // Check cache
+  
   if (variantCache[experimentName]) {
     return variantCache[experimentName];
   }
   
-  // Check persisted assignment
+  
   const configKey = `abTest_${experimentName}`;
   const existing = await configManager.getValue(configKey);
   
-  // Validate existing assignment is still a valid variant
+  
   const variantNames = experiment.variants.map(v => v.name);
   if (existing && variantNames.includes(existing)) {
     variantCache[experimentName] = existing;
     return existing;
   }
   
-  // New assignment based on clientId with weighted selection
+  
   const clientId = await configManager.getOrCreateClientId();
   const hash = hashCode(clientId + experimentName);
   
-  // Calculate total weight and select variant
+  
   const totalWeight = experiment.variants.reduce((sum, v) => sum + v.weight, 0);
   
   let variant: string;
   if (totalWeight > 0) {
     const roll = hash % totalWeight;
     let cumulative = 0;
-    variant = experiment.variants[0].name; // fallback
+    variant = experiment.variants[0].name; 
     for (const v of experiment.variants) {
       cumulative += v.weight;
       if (roll < cumulative) {
@@ -87,7 +87,7 @@ async function getVariant(experimentName: string): Promise<string | null> {
       }
     }
   } else {
-    // Fallback to equal split when weights are misconfigured (all zero)
+    
     const index = hash % experiment.variants.length;
     variant = experiment.variants[index].name;
   }

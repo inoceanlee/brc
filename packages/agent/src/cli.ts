@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, type CliResult } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteToolHistoryStore, type CliResult } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -17,7 +17,6 @@ import { CredentialStore } from './adapters/storage/credential-store.js';
 import { migrateCredentialFile } from './adapters/storage/credential-migration.js';
 import type { WsClientOptions } from './adapters/transport/ws-client.js';
 import { VERSION } from './core/version.js';
-import { ToolHistoryStorage } from './adapters/telemetry/toolHistoryStorage.js';
 import { AgentConfigManager, resolveAgentSettings } from './adapters/storage/config-manager.js';
 import { FeatureFlagManager } from './adapters/network/feature-flags.js';
 import { SearchManager } from './adapters/system/search-manager.js';
@@ -107,7 +106,9 @@ export async function configureAgentServices(): Promise<AgentServices> {
     historyFailureReporter = report;
     return () => { historyFailureReporter = (message) => process.stderr.write(message + '\n'); };
   };
-  const toolHistory = new ToolHistory(new ToolHistoryStorage(paths.historyDirectory), reportHistoryFailure);
+  const historyDatabasePath = resolveDiagnosticsDbPath(paths.root, env);
+  const toolHistory = new ToolHistory(new SqliteToolHistoryStore({ databasePath: historyDatabasePath }), reportHistoryFailure, historyDatabasePath);
+  await toolHistory.load();
   const usageTracker = new UsageTracker({
     configManager, featureFlagManager, getCurrentClient: () => currentClient,
     isOnboardingDisabled: () => 'disableOnboarding' in globalThis && Boolean(globalThis.disableOnboarding),

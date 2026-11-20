@@ -20,9 +20,9 @@ import fs from 'fs/promises';
 import PizZip from 'pizzip';
 import { FileHandler, FileResult, FileInfo, ReadOptions, EditResult } from './base.js';
 
-// ════════════════════════════════════════════════════════════════
-// XML Pretty-Print / Compact
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 /**
  * Pretty-print XML: split tags onto separate lines with indentation.
@@ -60,9 +60,9 @@ function compactXml(prettyXml: string): string {
     return prettyXml.split('\n').map(l => l.trimStart()).join('');
 }
 
-// ════════════════════════════════════════════════════════════════
-// DOCX ZIP helpers
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 interface DocxZipContents {
     zip: PizZip;
@@ -77,7 +77,7 @@ function loadDocxZip(buf: Buffer): DocxZipContents {
     if (!docFile) throw new Error('Invalid DOCX: missing word/document.xml');
 
     const xmlParts = new Map<string, string>();
-    // Collect all XML parts for potential editing
+    
     const zipFiles = zip.files;
     for (const relativePath of Object.keys(zipFiles)) {
         if (relativePath.endsWith('.xml') || relativePath.endsWith('.rels')) {
@@ -94,9 +94,9 @@ function loadDocxZip(buf: Buffer): DocxZipContents {
     };
 }
 
-// ════════════════════════════════════════════════════════════════
-// Outline extraction — the key feature
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 interface OutlineItem {
     index: number;
@@ -125,15 +125,15 @@ interface OutlineItem {
 function extractOutline(xml: string): string {
     const lines: string[] = [];
 
-    // Parse body children using regex — faster and more reliable than DOM for outline
-    // Find <w:body>...</w:body>
+    
+    
     const bodyMatch = xml.match(/<w:body[^>]*>([\s\S]*)<\/w:body>/);
     if (!bodyMatch) return '[No w:body found in document.xml]';
 
     const bodyContent = bodyMatch[1];
 
-    // Split into top-level children of w:body
-    // We need to find top-level elements, respecting nesting
+    
+    
     const children = splitTopLevelElements(bodyContent);
 
     let paragraphCount = 0;
@@ -186,7 +186,7 @@ function extractOutline(xml: string): string {
             let line = `[${i}] w:tbl (${rows.length} rows)`;
             const style = extractTableStyle(child);
             if (style) line += ` style="${style}"`;
-            // Show all rows (tables usually contain the real content)
+            
             for (let r = 0; r < rows.length; r++) {
                 const cells = rows[r].map(c => {
                     if (!c || c.trim() === '') return '';
@@ -197,7 +197,7 @@ function extractOutline(xml: string): string {
             lines.push(line);
             tableCount++;
         } else if (tag === 'w:sdt') {
-            // Structured document tag — look inside for content
+            
             const sdtFragments = extractTextFragments(child);
             const innerTables = (child.match(/<w:tbl[\s>]/g) || []).length;
             let line = `[${i}] w:sdt`;
@@ -224,7 +224,7 @@ function extractOutline(xml: string): string {
         }
     }
 
-    // Summary header
+    
     const header = `DOCX Outline: ${children.length} body children, ${paragraphCount} paragraphs, ${tableCount} tables, ${imageCount} images\n` +
         `Edit with: edit_block(file, old_string="<w:t>old text</w:t>", new_string="<w:t>new text</w:t>")\n` +
         `Raw XML: use read_file with offset=1 to see pretty-printed XML for advanced edits.\n` +
@@ -233,14 +233,14 @@ function extractOutline(xml: string): string {
     return header + '\n' + lines.join('\n');
 }
 
-// ════════════════════════════════════════════════════════════════
-// XML text extraction helpers (regex-based, no DOM needed)
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 /** Extract all <w:t>...</w:t> text content from an XML fragment */
 function extractAllText(xml: string): string {
     const texts: string[] = [];
-    // Match <w:t> or <w:t xml:space="preserve"> but NOT <w:tbl>, <w:tc>, <w:tr>, etc.
+    
     const re = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
     let m;
     while ((m = re.exec(xml)) !== null) {
@@ -275,7 +275,7 @@ function extractTableStyle(xml: string): string | null {
 /** Extract table rows as arrays of cell text */
 function extractTableRows(tableXml: string): string[][] {
     const rows: string[][] = [];
-    // Find each <w:tr>...</w:tr> using nesting-aware extraction
+    
     const rowElements = extractNestedElements(tableXml, 'w:tr');
     for (const rowXml of rowElements) {
         const cells: string[] = [];
@@ -302,14 +302,14 @@ function extractNestedElements(xml: string, tagName: string): string[] {
         const openPos = xml.indexOf(openTag, searchFrom);
         if (openPos === -1) break;
 
-        // Check it's actually a tag start (followed by space, >, or /)
+        
         const charAfter = xml[openPos + openTag.length];
         if (charAfter !== ' ' && charAfter !== '>' && charAfter !== '/') {
             searchFrom = openPos + 1;
             continue;
         }
 
-        // Check for self-closing
+        
         const nextClose = xml.indexOf('>', openPos);
         if (nextClose !== -1 && xml[nextClose - 1] === '/') {
             results.push(xml.substring(openPos, nextClose + 1));
@@ -317,17 +317,17 @@ function extractNestedElements(xml: string, tagName: string): string[] {
             continue;
         }
 
-        // Find matching close tag respecting nesting
+        
         let depth = 1;
         let pos = nextClose + 1;
         while (depth > 0 && pos < xml.length) {
             const nextOpen = xml.indexOf(openTag, pos);
             const nextCloseTag = xml.indexOf(closeTag, pos);
 
-            if (nextCloseTag === -1) break; // malformed XML
+            if (nextCloseTag === -1) break; 
 
             if (nextOpen !== -1 && nextOpen < nextCloseTag) {
-                // Check it's actually an open tag
+                
                 const ca = xml[nextOpen + openTag.length];
                 if (ca === ' ' || ca === '>' || ca === '/') {
                     depth++;
@@ -355,18 +355,18 @@ function splitTopLevelElements(xml: string): string[] {
     let depth = 0;
     let currentStart = -1;
 
-    // Simple state machine: track < > and nesting
+    
     let i = 0;
     while (i < xml.length) {
         if (xml[i] === '<') {
-            // Check what kind of tag
+            
             if (xml[i + 1] === '/') {
-                // Closing tag
+                
                 depth--;
                 if (depth === 0) {
-                    // Find end of this closing tag
+                    
                     const closeEnd = xml.indexOf('>', i);
-                    if (closeEnd === -1) break; // malformed XML — bail out
+                    if (closeEnd === -1) break; 
                     if (currentStart !== -1) {
                         elements.push(xml.substring(currentStart, closeEnd + 1).trim());
                         currentStart = -1;
@@ -375,19 +375,19 @@ function splitTopLevelElements(xml: string): string[] {
                     continue;
                 }
             } else if (xml[i + 1] === '?' || xml[i + 1] === '!') {
-                // Processing instruction or comment — skip
+                
                 const end = xml.indexOf('>', i);
-                if (end === -1) break; // malformed XML — bail out
+                if (end === -1) break; 
                 i = end + 1;
                 continue;
             } else {
-                // Opening tag
+                
                 if (depth === 0) currentStart = i;
-                // Check for self-closing
+                
                 const tagEnd = xml.indexOf('>', i);
-                if (tagEnd === -1) break; // malformed XML — bail out
+                if (tagEnd === -1) break; 
                 if (xml[tagEnd - 1] === '/') {
-                    // Self-closing
+                    
                     if (depth === 0) {
                         elements.push(xml.substring(currentStart, tagEnd + 1).trim());
                         currentStart = -1;
@@ -433,9 +433,9 @@ function extractHeaderFooterOutline(zip: PizZip): string {
     return parts.length > 0 ? '\n\nHeaders/Footers:\n' + parts.join('\n') : '';
 }
 
-// ════════════════════════════════════════════════════════════════
-// DOCX creation helpers
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 function escapeXml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -484,9 +484,9 @@ function createMinimalDocxZip(documentXml: string): PizZip {
     return zip;
 }
 
-// ════════════════════════════════════════════════════════════════
-// Count occurrences helper
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 function countOccurrences(haystack: string, needle: string): number {
     let count = 0;
@@ -498,9 +498,9 @@ function countOccurrences(haystack: string, needle: string): number {
     return count;
 }
 
-// ════════════════════════════════════════════════════════════════
-// DocxFileHandler — implements FileHandler
-// ════════════════════════════════════════════════════════════════
+
+
+
 
 export class DocxFileHandler implements FileHandler {
     private readonly extensions = ['.docx'];
@@ -524,7 +524,7 @@ export class DocxFileHandler implements FileHandler {
         const offset = options?.offset ?? 0;
         const length = options?.length;
 
-        // If user explicitly requests non-zero offset, give raw XML with pagination
+        
         const wantsRaw = offset !== 0;
 
         if (wantsRaw) {
@@ -550,7 +550,7 @@ export class DocxFileHandler implements FileHandler {
             };
         }
 
-        // Default: return outline
+        
         const outline = extractOutline(documentXml);
         const headerFooterInfo = extractHeaderFooterOutline(zip);
         const rawSizeKB = (documentXml.length / 1024).toFixed(1);
@@ -577,7 +577,7 @@ export class DocxFileHandler implements FileHandler {
         const text = typeof content === 'string' ? content : String(content);
         const lines = text.split('\n');
 
-        // Build paragraph XML from lines
+        
         const paragraphs: string[] = [];
         for (const line of lines) {
             const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
@@ -644,7 +644,7 @@ export class DocxFileHandler implements FileHandler {
                 };
             }
 
-            // Load and pretty-print
+            
             const buf = await fs.readFile(path);
             const zip = new PizZip(buf);
             const docFile = zip.file('word/document.xml');
@@ -653,12 +653,12 @@ export class DocxFileHandler implements FileHandler {
             const rawXml = docFile.asText();
             const pretty = prettyPrintXml(rawXml);
 
-            // Also check headers/footers for the search string
+            
             let targetPretty = pretty;
             let targetFile = 'word/document.xml';
             let matchCount = countOccurrences(pretty, oldStr);
 
-            // If not found in document.xml, search through headers/footers
+            
             if (matchCount === 0) {
                 const xmlFiles = ['word/header1.xml', 'word/header2.xml', 'word/header3.xml',
                     'word/footer1.xml', 'word/footer2.xml', 'word/footer3.xml'];
@@ -695,7 +695,7 @@ export class DocxFileHandler implements FileHandler {
                 };
             }
 
-            // Apply replacement
+            
             let edited = targetPretty;
             if (expectedReplacements === 1) {
                 const idx = edited.indexOf(oldStr);
@@ -704,7 +704,7 @@ export class DocxFileHandler implements FileHandler {
                 edited = edited.split(oldStr).join(newStr);
             }
 
-            // Compact and repack
+            
             const compacted = compactXml(edited);
             zip.file(targetFile, compacted);
 

@@ -36,6 +36,7 @@ if (process.platform === 'win32') {
   const { toolHistory } = services;
   test.after(() => {
     toolHistory.cleanup();
+    toolHistory.close();
     if (previousRoot === undefined) delete process.env.BRC_DATA_ROOT;
     else process.env.BRC_DATA_ROOT = previousRoot;
     if (previousConfig === undefined) delete process.env.BRC_CONFIG_FILE;

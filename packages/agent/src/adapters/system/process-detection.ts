@@ -11,7 +11,7 @@ export interface ProcessState {
   lastOutput: string;
 }
 
-// Common REPL prompt patterns
+
 const REPL_PROMPTS = {
   python: ['>>> ', '... '],
   node: ['> ', '... '],
@@ -24,7 +24,7 @@ const REPL_PROMPTS = {
   mongo: ['> ', '... ']
 };
 
-// Error patterns that indicate completion (even with errors)
+
 const ERROR_COMPLETION_PATTERNS = [
   /Error:/i,
   /Exception:/i,
@@ -36,10 +36,10 @@ const ERROR_COMPLETION_PATTERNS = [
   /ReferenceError/i,
   /Uncaught/i,
   /at Object\./i, // Node.js stack traces
-  /^\s*\^/m       // Syntax error indicators
+  /^\s*\^/m       
 ];
 
-// Process completion indicators
+
 const COMPLETION_INDICATORS = [
   /Process finished/i,
   /Command completed/i,
@@ -65,7 +65,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
   const lastLine = lines[lines.length - 1] || '';
   const lastFewLines = lines.slice(-3).join('\n');
 
-  // Check for REPL prompts (waiting for input)
+  
   const allPrompts = Object.values(REPL_PROMPTS).flat();
   const detectedPrompt = allPrompts.find(prompt => 
     lastLine.endsWith(prompt) || lastLine.includes(prompt)
@@ -81,7 +81,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
     };
   }
 
-  // Check for completion indicators
+  
   const hasCompletionIndicator = COMPLETION_INDICATORS.some(pattern => 
     pattern.test(output)
   );
@@ -95,13 +95,13 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
     };
   }
 
-  // Check for error completion (errors usually end with prompts, but let's be thorough)
+  
   const hasErrorCompletion = ERROR_COMPLETION_PATTERNS.some(pattern => 
     pattern.test(lastFewLines)
   );
 
   if (hasErrorCompletion) {
-    // Errors can indicate completion, but check if followed by prompt
+    
     if (detectedPrompt) {
       return {
         isWaitingForInput: true,
@@ -120,7 +120,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
     }
   }
 
-  // Default: process is running, not clearly waiting or finished
+  
   return {
     isWaitingForInput: false,
     isFinished: false,
@@ -135,7 +135,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
 export function cleanProcessOutput(output: string, inputSent?: string): string {
   let cleaned = output;
 
-  // Remove input echo if provided
+  
   if (inputSent) {
     const inputLines = inputSent.split('\n');
     inputLines.forEach(line => {
@@ -145,13 +145,13 @@ export function cleanProcessOutput(output: string, inputSent?: string): string {
     });
   }
 
-  // Remove common prompt patterns from output
-  cleaned = cleaned.replace(/^>>>\s*/gm, '');  // Python >>>
-  cleaned = cleaned.replace(/^>\s*/gm, '');    // Node.js/Shell >
-  cleaned = cleaned.replace(/^\.{3}\s*/gm, ''); // Python ...
-  cleaned = cleaned.replace(/^\+\s*/gm, '');   // R +
+  
+  cleaned = cleaned.replace(/^>>>\s*/gm, '');  
+  cleaned = cleaned.replace(/^>\s*/gm, '');    
+  cleaned = cleaned.replace(/^\.{3}\s*/gm, ''); 
+  cleaned = cleaned.replace(/^\+\s*/gm, '');   
 
-  // Remove trailing prompts
+  
   cleaned = cleaned.replace(/\n>>>\s*$/, '');
   cleaned = cleaned.replace(/\n>\s*$/, '');
   cleaned = cleaned.replace(/\n\+\s*$/, '');

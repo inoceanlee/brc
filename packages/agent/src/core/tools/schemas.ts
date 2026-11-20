@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-// Config tools schemas
+
 export const GetConfigArgsSchema = z.object({
-  // 'ui' marks calls the config-editor widget fires programmatically; they are
-  // excluded from tool-call telemetry (see isUiOriginCall in server.ts).
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -16,21 +16,21 @@ export const SetConfigValueArgsSchema = z.object({
     z.array(z.string()),
     z.null(),
   ]),
-  // 'ui' marks widget-fired calls; excluded from tool-call telemetry.
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
-// Empty schemas
+
 export const ListProcessesArgsSchema = z.object({});
 
-// Terminal tools schemas
+
 export const StartProcessArgsSchema = z.object({
   command: z.string(),
   timeout_ms: z.number(),
   shell: z.string().optional(),
   verbose_timing: z.boolean().optional(),
-  // 'ui' marks widget-fired calls (e.g. open-in-folder/editor buttons);
-  // excluded from tool-call telemetry (see isUiOriginCall in server.ts).
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -52,7 +52,7 @@ export const KillProcessArgsSchema = z.object({
   pid: z.number(),
 });
 
-// Filesystem tools schemas
+
 export const ReadFileArgsSchema = z.object({
   path: z.string(),
   isUrl: z.boolean().optional().default(false),
@@ -61,9 +61,9 @@ export const ReadFileArgsSchema = z.object({
   sheet: z.string().optional(),  // String only for MCP client compatibility (Cursor doesn't support union types in JSON Schema)
   range: z.string().optional(),
   options: z.record(z.any()).optional(),
-  // Whether the call came from the file-preview UI (refresh/navigation) or the
-  // LLM. 'ui' calls are excluded from tool-call telemetry; see isUiOriginCall
-  // in server.ts.
+  
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -75,12 +75,12 @@ export const WriteFileArgsSchema = z.object({
   path: z.string(),
   content: z.string(),
   mode: z.enum(['rewrite', 'append']).default('rewrite'),
-  // 'ui' when fired by the file-preview UI, else 'llm'. 'ui' calls are
-  // excluded from tool-call telemetry; see isUiOriginCall in server.ts.
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
-// PDF modification schemas - exported for reuse
+
 export const PdfInsertOperationSchema = z.object({
   type: z.literal('insert'),
   pageIndex: z.number(),
@@ -98,19 +98,19 @@ export const PdfOperationSchema = z.union([PdfInsertOperationSchema, PdfDeleteOp
 
 export const WritePdfArgsSchema = z.object({
   path: z.string(),
-  // Preprocess content to handle JSON strings that should be parsed as arrays
+  
   content: z.preprocess(
     (val) => {
-      // If it's a string that looks like JSON array, parse it
+      
       if (typeof val === 'string' && val.trim().startsWith('[')) {
         try {
           return JSON.parse(val);
         } catch {
-          // If parsing fails, return as-is (might be markdown content)
+          
           return val;
         }
       }
-      // Otherwise return as-is
+      
       return val;
     },
     z.union([z.string(), z.array(PdfOperationSchema)])
@@ -126,8 +126,8 @@ export const CreateDirectoryArgsSchema = z.object({
 export const ListDirectoryArgsSchema = z.object({
   path: z.string(),
   depth: z.number().optional().default(2),
-  // 'ui' when fired by the file-preview UI, else 'llm'. 'ui' calls are
-  // excluded from tool-call telemetry; see isUiOriginCall in server.ts.
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -157,27 +157,27 @@ export const GetFileInfoArgsSchema = z.object({
   path: z.string(),
 });
 
-// Edit tools schema - SIMPLIFIED from three modes to two
-// Previously supported: text replacement, location-based edits (edits array), and range rewrites
-// Now supports only: text replacement and range rewrites
-// Removed 'edits' array parameter - location-based surgical edits were complex and unnecessary
-// Range rewrites are more powerful and cover all structured file editing needs
+
+
+
+
+
 export const EditBlockArgsSchema = z.object({
   file_path: z.string(),
-  // Text file string replacement
+  
   old_string: z.string().optional(),
   new_string: z.string().optional(),
   expected_replacements: z.number().optional().default(1),
-  // Structured file range rewrite (Excel, etc.)
+  
   range: z.string().optional(),
   content: z.any().optional(),
   options: z.record(z.any()).optional(),
-  // 'ui' when fired by the file-preview UI, else 'llm'. 'ui' calls are
-  // excluded from tool-call telemetry; see isUiOriginCall in server.ts.
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 }).refine(
   data => {
-    // Helper to check if value is actually provided (not undefined, not empty string)
+    
     const hasValue = (v: unknown) => v !== undefined && v !== '';
     return (hasValue(data.old_string) && data.new_string !== undefined) ||
            (hasValue(data.range) && hasValue(data.content));
@@ -185,7 +185,7 @@ export const EditBlockArgsSchema = z.object({
   { message: "Must provide either (old_string + new_string) or (range + content)" }
 );
 
-// Send input to process schema
+
 export const InteractWithProcessArgsSchema = z.object({
   pid: z.number(),
   input: z.string(),
@@ -194,10 +194,10 @@ export const InteractWithProcessArgsSchema = z.object({
   verbose_timing: z.boolean().optional(),
 });
 
-// Usage stats schema
+
 export const GetUsageStatsArgsSchema = z.object({});
 
-// Feedback tool schema - no pre-filled parameters, all user input
+
 export const GiveFeedbackArgsSchema = z.object({
   // No parameters needed - form will be filled manually by user
   // Only auto-filled hidden fields remain:
@@ -207,7 +207,7 @@ export const GiveFeedbackArgsSchema = z.object({
   // - client_id (auto)
 });
 
-// Search schemas (renamed for natural language)
+
 export const StartSearchArgsSchema = z.object({
   path: z.string(),
   pattern: z.string(),
@@ -220,8 +220,8 @@ export const StartSearchArgsSchema = z.object({
   timeout_ms: z.number().optional(), // Match process naming convention
   earlyTermination: z.boolean().optional(), // Stop search early when exact filename match is found (default: true for files, false for content)
   literalSearch: z.boolean().optional().default(false), // Force literal string matching (-F flag) instead of regex
-  // 'ui' marks widget-fired calls (e.g. markdown link-target search);
-  // excluded from tool-call telemetry (see isUiOriginCall in server.ts).
+  
+  
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -237,7 +237,7 @@ export const StopSearchArgsSchema = z.object({
 
 export const ListSearchesArgsSchema = z.object({});
 
-// Prompts tool schema - SIMPLIFIED (only get_prompt action)
+
 export const GetPromptsArgsSchema = z.object({
   action: z.enum(['get_prompt']),
   promptId: z.string(),
@@ -245,7 +245,7 @@ export const GetPromptsArgsSchema = z.object({
   // anonymous_user_use_case: z.string().optional(),
 });
 
-// Tool history schema
+
 export const GetRecentToolCallsArgsSchema = z.object({
   maxResults: z.number().min(1).max(1000).optional().default(50),
   toolName: z.string().optional(),

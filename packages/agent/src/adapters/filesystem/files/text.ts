@@ -23,9 +23,9 @@ import {
 import { AGENT_DEFAULTS } from '../../../core/config.js';
 import { TextReader } from './text-reader.js';
 
-// TODO: Centralize these constants with filesystem.ts to avoid silent drift
-// These duplicate concepts from filesystem.ts and should be moved to a shared
-// constants module (e.g., src/utils/files/constants.ts) during reorganization
+
+
+
 const FILE_SIZE_LIMITS = {
     LINE_COUNT_LIMIT: 10 * 1024 * 1024,      // 10MB for line counting
 } as const;
@@ -39,8 +39,8 @@ export class TextFileHandler implements FileHandler {
     private readonly reader = new TextReader(TextFileHandler.countLines, this.generateEnhancedStatusMessage);
 
     canHandle(_path: string): boolean {
-        // Text handler accepts all files that pass the factory's binary check
-        // The factory routes binary files to BinaryFileHandler before reaching here
+        
+        
         return true;
     }
 
@@ -50,7 +50,7 @@ export class TextFileHandler implements FileHandler {
         const length = options?.length ?? AGENT_DEFAULTS.fileReadLineLimit;
         const includeStatusMessage = options?.includeStatusMessage ?? true;
 
-        // Binary detection is done at factory level - just read as text
+        
         return this.reader.readFileWithSmartPositioning(filePath, offset, length, 'text/plain', includeStatusMessage, options?.signal);
     }
 
@@ -77,7 +77,7 @@ export class TextFileHandler implements FileHandler {
             metadata: {}
         };
 
-        // For text files that aren't too large, count lines
+        
         if (stats.isFile() && stats.size < FILE_SIZE_LIMITS.LINE_COUNT_LIMIT) {
             try {
                 const encoding = await this.reader.detectTextEncoding(path);
@@ -95,9 +95,9 @@ export class TextFileHandler implements FileHandler {
         return info;
     }
 
-    // ========================================================================
-    // Private Helper Methods (extracted from filesystem.ts)
-    // ========================================================================
+    
+    
+    
 
     /**
      * Count lines in text content
@@ -105,8 +105,8 @@ export class TextFileHandler implements FileHandler {
      */
     static countLines(content: string): number {
         if (content === '') return 0;
-        // A file with N lines has N-1 newline characters.
-        // If the file ends with a trailing newline, don't count the empty string after it.
+        
+        
         const lines = content.split('\n');
         if (lines[lines.length - 1] === '') {
             return lines.length - 1;

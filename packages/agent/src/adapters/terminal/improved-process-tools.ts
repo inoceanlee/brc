@@ -18,7 +18,7 @@ export interface TerminalDependencies {
   capture: (event: string, properties?: unknown) => Promise<void>;
 }
 
-// Get the directory where the MCP is installed (for ES module imports)
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const mcpRoot = path.resolve(__dirname, '..', '..');
@@ -38,7 +38,7 @@ async function executeNodeCode(code: string, timeout_ms: number = 30000): Promis
       const proc = spawn(process.execPath, [tempFile], {
         cwd: mcpRoot,
         timeout: timeout_ms,
-        windowsHide: true  // Prevent visible console windows on Windows
+        windowsHide: true  
       });
 
       let stdout = '';
@@ -61,7 +61,7 @@ async function executeNodeCode(code: string, timeout_ms: number = 30000): Promis
       });
     });
 
-    // Clean up temp file
+    
     await fs.unlink(tempFile).catch(() => {});
 
     if (result.exitCode !== 0) {
@@ -82,7 +82,7 @@ async function executeNodeCode(code: string, timeout_ms: number = 30000): Promis
     };
 
   } catch (error) {
-    // Clean up temp file on error
+    
     await fs.unlink(tempFile).catch(() => {});
 
     return {
@@ -131,7 +131,7 @@ export async function startProcess(args: unknown, { configManager, commandManage
 
   const commandToRun = parsed.data.command;
 
-  // Handle node:local - runs Node.js code directly on MCP server
+  
   if (commandToRun.trim() === 'node:local') {
     const virtualPid = terminalManager.createVirtualNodeSession(parsed.data.timeout_ms || 30000);
 
@@ -185,7 +185,7 @@ export async function startProcess(args: unknown, { configManager, commandManage
     };
   }
 
-  // Analyze the process state to detect if it's waiting for input
+  
   const processState = analyzeProcessState(result.output, result.pid);
 
   let statusMessage = '';
@@ -197,7 +197,7 @@ export async function startProcess(args: unknown, { configManager, commandManage
     statusMessage = '\n⏳ Process is running. Use read_process_output to get more output.';
   }
 
-  // Add timing information if requested
+  
   let timingMessage = '';
   if (result.timingInfo) {
     timingMessage = formatTimingInfo(result.timingInfo);
@@ -251,7 +251,7 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
     };
   }
 
-  // Get default line limit from config
+  
   const config = await configManager.getConfig();
   const defaultLength = config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
 
@@ -263,16 +263,16 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
     verbose_timing = false 
   } = parsed.data;
 
-  // Timing telemetry
+  
   const startTime = Date.now();
 
-  // For active sessions with no new output yet, optionally wait for output
+  
   const session = terminalManager.getSession(pid);
   if (session && offset === 0) {
-    // Wait for new output to arrive (only for "new output" reads, not absolute/tail)
+    
     const waitForOutput = (): Promise<void> => {
       return new Promise((resolve) => {
-        // Check if there's already new output
+        
         const currentLines = terminalManager.getOutputLineCount(pid) || 0;
         if (currentLines > session.lastReadIndex) {
           resolve();
@@ -295,7 +295,7 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
           resolve();
         };
 
-        // Poll for new output
+        
         interval = setInterval(() => {
           const newLineCount = terminalManager.getOutputLineCount(pid) || 0;
           if (newLineCount > session.lastReadIndex) {
@@ -303,7 +303,7 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
           }
         }, 50);
 
-        // Timeout
+        
         timeout = setTimeout(() => {
           resolveOnce();
         }, timeout_ms);
@@ -313,7 +313,7 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
     await waitForOutput();
   }
 
-  // Read output with pagination
+  
   const result = terminalManager.readOutputPaginated(pid, offset, length);
   
   if (!result) {
@@ -323,35 +323,35 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
     };
   }
 
-  // Join lines back into string
+  
   const output = result.lines.join('\n');
 
-  // Generate status message similar to file reading
+  
   let statusMessage = '';
   if (offset < 0) {
-    // Tail read - match file reading format for consistency
+    
     statusMessage = `[Reading last ${result.readCount} lines (total: ${result.totalLines} lines)]`;
   } else if (offset === 0) {
-    // "New output" read
+    
     if (result.remaining > 0) {
       statusMessage = `[Reading ${result.readCount} new lines from line ${result.readFrom} (total: ${result.totalLines} lines, ${result.remaining} remaining)]`;
     } else {
       statusMessage = `[Reading ${result.readCount} new lines (total: ${result.totalLines} lines)]`;
     }
   } else {
-    // Absolute position read
+    
     statusMessage = `[Reading ${result.readCount} lines from line ${result.readFrom} (total: ${result.totalLines} lines, ${result.remaining} remaining)]`;
   }
 
-  // Surface buffer-cap eviction so the model knows the retained output is not
-  // the full output and that line numbers shifted (matches the truncation
-  // markers used by other tools).
+  
+  
+  
   if (result.evictedLines && result.evictedLines > 0) {
     const capMB = Math.round(MAX_BUFFERED_OUTPUT_CHARS / 1024 / 1024);
     statusMessage += `\n[WARNING: output exceeded the ${capMB}MB buffer cap; the ${result.evictedLines} earliest lines were evicted and cannot be read. Line numbers and totals refer to the retained buffer only]`;
   }
 
-  // Add process state info
+  
   let processStateMessage = '';
   if (result.isComplete) {
     const runtimeStr = result.runtimeMs !== undefined 
@@ -359,7 +359,7 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
       : '';
     processStateMessage = `\n✅ Process completed with exit code ${result.exitCode}${runtimeStr}`;
   } else if (session) {
-    // Analyze state for running processes
+    
     const fullOutput = session.outputLines.join('\n');
     const processState = analyzeProcessState(fullOutput, pid);
     if (processState.isWaitingForInput) {
@@ -367,7 +367,7 @@ export async function readProcessOutput(args: unknown, { configManager, terminal
     }
   }
 
-  // Add timing information if requested
+  
   let timingMessage = '';
   if (verbose_timing) {
     const endTime = Date.now();
@@ -408,11 +408,11 @@ export async function interactWithProcess(args: unknown, { configManager, termin
     verbose_timing = false
   } = parsed.data;
 
-  // Get config for output line limit
+  
   const config = await configManager.getConfig();
   const maxOutputLines = config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
 
-  // Check if this is a virtual Node session (node:local)
+  
   const session = terminalManager.getVirtualNodeSession(pid);
   if (session) {
     capture('server_interact_with_process_node_fallback', {
@@ -420,13 +420,13 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       inputLength: input.length
     });
 
-    // Execute code via temp file approach
-    // Respect per-call timeout if provided, otherwise use session default
+    
+    
     const effectiveTimeout = timeout_ms ?? session.timeout_ms;
     return executeNodeCode(input, effectiveTimeout);
   }
 
-  // Timing telemetry
+  
   const startTime = Date.now();
   let firstOutputTime: number | undefined;
   let lastOutputTime: number | undefined;
@@ -439,8 +439,8 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       inputLength: input.length
     });
 
-    // Capture output snapshot BEFORE sending input
-    // This handles REPLs where output is appended to the prompt line
+    
+    
     const outputSnapshot = terminalManager.captureOutputSnapshot(pid);
 
     const success = terminalManager.sendInputToProcess(pid, input);
@@ -452,7 +452,7 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       };
     }
 
-    // If not waiting for response, return immediately
+    
     if (!wait_for_prompt) {
       exitReason = 'no_wait';
       let timingMessage = '';
@@ -478,22 +478,22 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       };
     }
 
-    // Smart waiting with immediate and periodic detection
+    
     let output = "";
     let processState: ProcessState | undefined;
     let earlyExit = false;
 
-    // Quick prompt patterns for immediate detection
+    
     const quickPromptPatterns = />>>\s*$|>\s*$|\$\s*$|#\s*$/;
     
     const waitForResponse = (): Promise<void> => {
       return new Promise((resolve) => {
         let resolved = false;
         let attempts = 0;
-        const pollIntervalMs = 50; // Poll every 50ms for faster response
+        const pollIntervalMs = 50; 
         const maxAttempts = Math.ceil(timeout_ms / pollIntervalMs);
         let interval: NodeJS.Timeout | null = null;
-        let lastOutputLength = 0; // Track output length to detect new output
+        let lastOutputLength = 0; 
 
         let resolveOnce = () => {
           if (resolved) return;
@@ -502,11 +502,11 @@ export async function interactWithProcess(args: unknown, { configManager, termin
           resolve();
         };
 
-        // Fast-polling check - check every 50ms for quick responses
+        
         interval = setInterval(() => {
           if (resolved) return;
 
-          // Use snapshot-based reading to handle REPL prompt line appending
+          
           const newOutput = outputSnapshot 
             ? terminalManager.getOutputSinceSnapshot(pid, outputSnapshot)
             : terminalManager.getNewOutput(pid);
@@ -526,13 +526,13 @@ export async function interactWithProcess(args: unknown, { configManager, termin
               });
             }
 
-            output = newOutput; // Replace with full output since snapshot
+            output = newOutput; 
             lastOutputLength = newOutput.length;
 
-            // Analyze current state
+            
             processState = analyzeProcessState(output, pid);
 
-            // Exit early if we detect the process is waiting for input
+            
             if (processState.isWaitingForInput) {
               earlyExit = true;
               exitReason = 'early_exit_periodic_check';
@@ -545,7 +545,7 @@ export async function interactWithProcess(args: unknown, { configManager, termin
               return;
             }
 
-            // Also exit if process finished
+            
             if (processState.isFinished) {
               exitReason = 'process_finished';
               resolveOnce();
@@ -564,11 +564,11 @@ export async function interactWithProcess(args: unknown, { configManager, termin
     
     await waitForResponse();
 
-    // Clean and format output
+    
     let cleanOutput = cleanProcessOutput(output, input);
     const timeoutReached = !earlyExit && !processState?.isFinished && !processState?.isWaitingForInput;
     
-    // Apply output line limit to prevent context overflow
+    
     let truncationMessage = '';
     const outputLines = cleanOutput.split('\n');
     if (outputLines.length > maxOutputLines) {
@@ -578,7 +578,7 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       truncationMessage = `\n\n⚠️ Output truncated: showing ${maxOutputLines} of ${outputLines.length} lines (${remainingLines} hidden). Use read_process_output with offset/length for full output.`;
     }
     
-    // Determine final state
+    
     if (!processState) {
       processState = analyzeProcessState(output, pid);
     }
@@ -592,7 +592,7 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       statusMessage = '\n⏱️ Response may be incomplete (timeout reached)';
     }
 
-    // Add timing information if requested
+    
     let timingMessage = '';
     if (verbose_timing) {
       const endTime = Date.now();
@@ -618,7 +618,7 @@ export async function interactWithProcess(args: unknown, { configManager, termin
       };
     }
 
-    // Format response with better structure and consistent emojis
+    
     let responseText = `✅ Input executed in process ${pid}`;
 
     if (cleanOutput && cleanOutput.trim().length > 0) {
@@ -672,7 +672,7 @@ export async function forceTerminate(args: unknown, { terminalManager }: Termina
 
   const pid = parsed.data.pid;
 
-  // Handle virtual Node.js sessions (node:local)
+  
   if (terminalManager.removeVirtualNodeSession(pid)) {
     return {
       content: [{
@@ -699,7 +699,7 @@ export async function forceTerminate(args: unknown, { terminalManager }: Termina
 export async function listSessions({ terminalManager }: TerminalDependencies): Promise<ServerResult> {
   const sessions = terminalManager.listActiveSessions();
 
-  // Include virtual Node.js sessions
+  
   const virtualSessions = Array.from(terminalManager.listVirtualNodeSessions()).map(([pid, session]) => ({
     pid,
     type: 'node:local',

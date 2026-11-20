@@ -32,43 +32,43 @@ export class FileHandlerFactory {
  * BinaryFileHandler uses async isBinaryFile for content-based detection.
  *
  * Priority order:
- * 1. DOCX files (extension based)
- * 2. PDF files (extension based)
- * 3. Excel files (xlsx, xls, xlsm) - extension based
- * 4. Image files (png, jpg, gif, webp) - extension based
- * 5. Binary files - content-based detection via isBinaryFile
- * 6. Text files (default)
+ * DOCX files (extension based)
+ * PDF files (extension based)
+ * Excel files (xlsx, xls, xlsm) - extension based
+ * Image files (png, jpg, gif, webp) - extension based
+ * Binary files - content-based detection via isBinaryFile
+ * Text files (default)
  *
  * @param filePath File path to get handler for
  * @returns FileHandler instance that can handle this file
  */
 async getFileHandler(filePath: string): Promise<FileHandler> {
-    // Check DOCX first (extension-based, sync)
+    
     if (this.docx.canHandle(filePath)) {
         return this.docx;
     }
 
-    // Check PDF (extension-based, sync)
+    
     if (this.pdf.canHandle(filePath)) {
         return this.pdf;
     }
 
-    // Check Excel (extension-based, sync)
+    
     if (this.excel.canHandle(filePath)) {
         return this.excel;
     }
 
-    // Check Image (extension-based, sync - images are binary but handled specially)
+    
     if (this.image.canHandle(filePath)) {
         return this.image;
     }
 
-    // Check Binary (content-based, async via isBinaryFile)
+    
     if (await this.binary.canHandle(filePath)) {
         return this.binary;
     }
 
-    // Default to text handler
+    
     return this.text;
 }
 

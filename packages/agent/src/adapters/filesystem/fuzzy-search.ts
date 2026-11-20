@@ -2,7 +2,7 @@ import type { FilesystemDependencies } from './filesystem.js';
 import { Worker } from 'worker_threads';
 import type { FuzzyMatch, FuzzySearchMetrics } from '../../core/tools/fuzzySearchCore.js';
 
-// Re-export so existing callers keep importing from this module.
+
 export { recursiveFuzzyIndexOf, getSimilarityRatio } from '../../core/tools/fuzzySearchCore.js';
 
 /** Abort fuzzy search in the worker after this many ms to avoid unbounded CPU burn. */
@@ -43,7 +43,7 @@ export function runFuzzySearchInWorker(
 ): Promise<FuzzyMatch> {
     return new Promise((resolve, reject) => {
         const worker = new Worker(WORKER_CODE, { eval: true, workerData: { moduleUrl: CORE_MODULE_URL, text, query } });
-        // Never let a scan keep the server process alive during shutdown.
+        
         worker.unref();
 
         const timer = setTimeout(() => {
@@ -60,9 +60,9 @@ export function runFuzzySearchInWorker(
             } else {
                 reject(new Error(`Fuzzy search worker failed: ${msg.error}`));
             }
-            // Don't let the worker wind down on its own; the answer is already
-            // here, and a lingering worker holds its copy of the file text.
-            // The promise is settled, so the exit-code rejection below is a no-op.
+            
+            
+            
             worker.terminate();
         });
 

@@ -98,8 +98,8 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       parsed.data.length
     );
     
-    // Only return error if we have no results AND there's an actual error
-    // Permission errors should not block returning found results
+    
+    
     if (results.isError && results.totalResults === 0 && results.error?.trim()) {
       return {
         content: [{
@@ -110,7 +110,7 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       };
     }
 
-    // Format results for display
+    
     let output = `Search session: ${parsed.data.sessionId}\n`;
     output += `Status: ${results.isComplete ? 'COMPLETED' : 'IN PROGRESS'}\n`;
     output += `Runtime: ${Math.round(results.runtime / 1000)}s\n`;
@@ -119,10 +119,10 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
     const offset = parsed.data.offset;
     
     if (offset < 0) {
-      // Negative offset - tail behavior
+      
       output += `Showing last ${results.returnedCount} results\n\n`;
     } else {
-      // Positive offset - range behavior
+      
       const startPos = offset;
       const endPos = startPos + results.returnedCount - 1;
       output += `Showing results ${startPos}-${endPos}\n\n`;
@@ -146,7 +146,7 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       }
     }
 
-    // Add pagination hints
+    
     if (offset >= 0 && results.hasMoreResults) {
       const nextOffset = offset + results.returnedCount;
       output += `\n📖 More results available. Use get_more_search_results with offset: ${nextOffset}`;
@@ -155,7 +155,7 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
     if (results.isComplete) {
       output += `\n✅ Search completed.`;
       
-      // Warn users if search was incomplete due to permission issues
+      
       if (results.wasIncomplete) {
         output += `\n⚠️  Warning: Some files were inaccessible due to permissions. Results may be incomplete.`;
       }

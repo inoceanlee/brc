@@ -6,11 +6,11 @@ import { parseMarkdownToPdf } from './markdown.js';
 import type { PdfInsertOperationSchema, PdfDeleteOperationSchema, PdfOperationSchema } from '../../../core/tools/schemas.js';
 import { z } from 'zod';
 
-// Use createRequire to load pdf-lib as CJS (works around Node 25 ESM resolution issues)
+
 const require = createRequire(import.meta.url);
 const { PDFDocument } = require('pdf-lib') as { PDFDocument: typeof PDFDocumentType };
 
-// Infer TypeScript types from Zod schemas for consistency
+
 type PdfInsertOperation = z.infer<typeof PdfInsertOperationSchema>;
 type PdfDeleteOperation = z.infer<typeof PdfDeleteOperationSchema>;
 type PdfOperations = z.infer<typeof PdfOperationSchema>;
@@ -31,7 +31,7 @@ async function loadPdfDocumentFromBuffer(filePathOrBuffer: string | Buffer | Uin
 function deletePages(pdfDoc: PDFDocumentType, pageIndexes: number[]): PDFDocumentType {
     const pageCount = pdfDoc.getPageCount();
 
-    // Transform negative indices to absolute and filter valid ones
+    
     const normalizedIndexes = normalizePageIndexes(pageIndexes, pageCount).sort((a, b) => b - a);
 
     for (const pageIndex of normalizedIndexes) {
@@ -44,10 +44,10 @@ function deletePages(pdfDoc: PDFDocumentType, pageIndexes: number[]): PDFDocumen
 function getPageLayout(page: PDFPage) {
     const { width, height } = page.getSize();
 
-    const mediaBox = page.getMediaBox(); // Full page area
-    const cropBox = page.getCropBox();   // Visible area (may indicate margins)
+    const mediaBox = page.getMediaBox(); 
+    const cropBox = page.getCropBox();   
 
-    // Calculate margins (if CropBox differs from MediaBox)
+    
     let marginLeft = cropBox.x - mediaBox.x;
     let marginBottom = cropBox.y - mediaBox.y;
     let marginRight = (mediaBox.x + mediaBox.width) - (cropBox.x + cropBox.width);
@@ -59,8 +59,8 @@ function getPageLayout(page: PDFPage) {
         marginRight = 72;
         marginTop = 72;
     }
-    // Convert points to inches (1 inch = 72 points)
-    // Puppeteer requires standard units and doesn't accept decimal points
+    
+    
     const pointsToInches = (pts: number) => (pts / 72).toFixed(4);
 
     return {
@@ -104,7 +104,7 @@ export async function editPdf(
 ): Promise<Uint8Array> {
     const pdfDoc = await loadPdfDocumentFromBuffer(pdfPath);
 
-    // Get page layout from the ORIGINAL first page
+    
     const pageLayout = pdfDoc.getPageCount() > 0 ? getPageLayout(pdfDoc.getPage(0)) : undefined;
 
     for (const op of operations) {

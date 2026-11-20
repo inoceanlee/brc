@@ -16,8 +16,8 @@ export interface ShellProbeResult {
 
 export const SHELL_PROBE_TIMEOUT_MS = 5000;
 export const SHELL_PROBE_OUTPUT_LIMIT_BYTES = 64 * 1024;
-// CMD can silently truncate expanded Unicode commands near its 8191-byte limit.
-// Leave room for the nested /c invocation and environment expansion.
+
+
 export const CMD_COMMAND_MAX_UTF8_BYTES = 7 * 1024;
 
 export function validateCmdCommand(command: string): void {
