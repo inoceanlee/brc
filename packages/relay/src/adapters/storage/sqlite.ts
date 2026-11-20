@@ -1,12 +1,14 @@
 /**
- * BRC relay store on node:sqlite (Node >= 22.13, no native build).
- * Tables: users, oauth_clients, auth_codes, tokens, devices, device_codes, audit.
+ * BRC relay identity store on node:sqlite (Node >= 22.13, no native build).
+ * Tables: users, oauth_clients, auth_codes, tokens, devices, device_codes, brc_meta.
  */
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RelayStorePort } from '../../core/auth/ports.js';
+import { importLegacyIdentityDatabase, type LegacyIdentityImportResult } from './legacy-import.js';
+import { RelayAuditLog } from './relay-audit.js';
 
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');
@@ -30,11 +32,13 @@ export interface DeviceRow { device_id: string; user_id: string; name: string; t
 export interface DeviceCodeRow { device_code: string; user_code: string; client_name: string; user_id: string | null; approved: number; denied: number; device_id: string | null; expires_at: number; created_at: number }
 export interface AuditRow { id: number; ts: number; user_id: string | null; device_id: string | null; client: string | null; tool: string; args_hash: string | null; ok: number; ms: number | null; error: string | null }
 export interface AuditRetentionPolicy {
- retentionDays: number;
- maxEntries: number;
+  retentionDays: number;
+  maxEntries: number;
 }
 
-const AUDIT_CLEANUP_BATCH_SIZE = 1_000;
+export const IDENTITY_SCHEMA_VERSION = 1;
+const SUPPORTED_IDENTITY_VERSIONS = new Set([IDENTITY_SCHEMA_VERSION]);
+const SCHEMA_VERSION_KEY = 'schema_version';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at INTEGER NOT NULL);
@@ -43,12 +47,10 @@ CREATE TABLE IF NOT EXISTS auth_codes (code TEXT PRIMARY KEY, client_id TEXT NOT
 CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT, scopes TEXT NOT NULL, resource TEXT, expires_at INTEGER, created_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, platform TEXT, created_at INTEGER NOT NULL, last_seen INTEGER, paused INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS device_codes (device_code TEXT PRIMARY KEY, user_code TEXT UNIQUE NOT NULL, client_name TEXT NOT NULL, user_id TEXT REFERENCES users(id) ON DELETE RESTRICT, approved INTEGER NOT NULL DEFAULT 0, denied INTEGER NOT NULL DEFAULT 0, device_id TEXT, expires_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, user_id TEXT, device_id TEXT, client TEXT, tool TEXT NOT NULL, args_hash TEXT, ok INTEGER NOT NULL, ms INTEGER, error TEXT);
 CREATE TABLE IF NOT EXISTS brc_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
 `;
 
-const REQUIRED_TABLES = ['users', 'oauth_clients', 'auth_codes', 'tokens', 'devices', 'device_codes', 'audit'];
+const REQUIRED_TABLES = ['users', 'oauth_clients', 'auth_codes', 'tokens', 'devices', 'device_codes'];
 
 const USER_REFERENCE_TABLES = [
   {
@@ -80,6 +82,8 @@ const USER_REFERENCE_TABLES = [
 
 export class SqliteStore implements RelayStorePort {
   readonly #db: DatabaseSync;
+  private readonly file: string;
+  private auditLog?: RelayAuditLog;
 
   static open(file: string): SqliteStore {
     const isMemory = file === ':memory:';
@@ -95,7 +99,7 @@ export class SqliteStore implements RelayStorePort {
     }
   }
 
-  static initialize(file: string): void {
+  static initialize(file: string, legacyFile?: string): void {
     if (file === ':memory:') throw new Error('Cannot initialize a persistent Relay database at :memory:.');
     if (existsSync(file)) {
       const store = SqliteStore.open(file);
@@ -103,6 +107,12 @@ export class SqliteStore implements RelayStorePort {
       return;
     }
     const resolved = path.resolve(file);
+    if (legacyFile !== undefined) {
+      const imported: LegacyIdentityImportResult = importLegacyIdentityDatabase(legacyFile, resolved);
+      const store = SqliteStore.open(imported.targetFile);
+      store.close();
+      return;
+    }
     mkdirSync(path.dirname(resolved), { recursive: true });
     try {
       writeFileSync(resolved, '', { flag: 'wx' });
@@ -130,14 +140,34 @@ export class SqliteStore implements RelayStorePort {
 
   private constructor(file: string, db: DatabaseSync, isNew: boolean) {
     this.#db = db;
+    this.file = file;
     this.#db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     if (isNew) this.initializeNewDatabase();
     else this.migrateExistingDatabase(file);
+    this.ensureSchemaVersion();
   }
 
   private initializeNewDatabase(): void {
     this.#db.exec(SCHEMA);
     this.#db.prepare('INSERT INTO brc_meta (key, value) VALUES (?, ?)').run('admin_bootstrap', 'pending');
+    this.#db.prepare('INSERT INTO brc_meta (key, value) VALUES (?, ?)').run(SCHEMA_VERSION_KEY, String(IDENTITY_SCHEMA_VERSION));
+  }
+
+  private ensureSchemaVersion(): void {
+    const row = this.#db.prepare('SELECT value FROM brc_meta WHERE key = ?').get(SCHEMA_VERSION_KEY) as { value: string } | undefined;
+    if (!row) {
+      this.#db.prepare('INSERT INTO brc_meta (key, value) VALUES (?, ?)').run(SCHEMA_VERSION_KEY, String(IDENTITY_SCHEMA_VERSION));
+      return;
+    }
+    const version = Number(row.value);
+    if (!Number.isSafeInteger(version) || !SUPPORTED_IDENTITY_VERSIONS.has(version)) {
+      throw new Error(`Unsupported Relay identity schema version ${row.value}; supported versions: ${[...SUPPORTED_IDENTITY_VERSIONS].join(', ')}.`);
+    }
+  }
+
+  private getAuditLog(): RelayAuditLog {
+    this.auditLog ??= RelayAuditLog.open({ dbFile: this.file, env: process.env });
+    return this.auditLog;
   }
 
   private migrateExistingDatabase(file: string): void {
@@ -446,30 +476,34 @@ export class SqliteStore implements RelayStorePort {
     return `${s.slice(0, 4)}-${s.slice(4)}`;
   }
 
-  /* ---------- audit ---------- */
   audit(row: Omit<AuditRow, 'id'>): void {
-    this.#db.prepare('INSERT INTO audit (ts,user_id,device_id,client,tool,args_hash,ok,ms,error) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(row.ts, row.user_id, row.device_id, row.client, row.tool, row.args_hash, row.ok, row.ms, row.error);
-  }
-  recentAudit(userId: string, limit = 100): AuditRow[] {
-    return this.#db.prepare('SELECT * FROM audit WHERE user_id = ? ORDER BY id DESC LIMIT ?').all(userId, limit) as unknown as AuditRow[];
+    void this.getAuditLog().append({
+      ts: row.ts,
+      userId: row.user_id ?? undefined,
+      deviceId: row.device_id ?? undefined,
+      client: row.client ?? undefined,
+      tool: row.tool,
+      argsHash: row.args_hash ?? undefined,
+      ok: row.ok !== 0,
+      ms: row.ms ?? undefined,
+      error: row.error ?? undefined,
+    });
   }
 
- /** Housekeeping: drop expired codes, tokens, and bounded audit batches. */
- vacuumExpired(audit: AuditRetentionPolicy): void {
+  recentAudit(userId: string, limit = 100): AuditRow[] {
+    return this.getAuditLog().recentAudit(userId, limit);
+  }
+
+  auditStats(userId: string): { total: number; failed: number; last24h: number } {
+    return this.getAuditLog().auditStats(userId);
+  }
+
+  vacuumExpired(audit: AuditRetentionPolicy): void {
     const now = Date.now();
     this.#db.prepare('DELETE FROM auth_codes WHERE expires_at < ?').run(now);
     this.#db.prepare('DELETE FROM device_codes WHERE expires_at < ?').run(now);
     this.#db.prepare('DELETE FROM tokens WHERE expires_at IS NOT NULL AND expires_at < ?').run(now - 7 * 86_400_000);
-
-  const retentionCutoff = Math.max(Number.MIN_SAFE_INTEGER, now - audit.retentionDays * 86_400_000);
-  this.#db.prepare(
-   'DELETE FROM audit WHERE id IN (SELECT id FROM audit INDEXED BY audit_ts WHERE ts < ? ORDER BY ts, id LIMIT ?)',
-  ).run(retentionCutoff, AUDIT_CLEANUP_BATCH_SIZE);
-
-  this.#db.prepare(
-   'DELETE FROM audit WHERE id < (SELECT id FROM audit ORDER BY id DESC LIMIT 1 OFFSET ?)',
-  ).run(audit.maxEntries - 1);
+    this.getAuditLog().prune(audit);
   }
 
   /* ---------- OAuth clients (management) ---------- */
@@ -483,10 +517,6 @@ export class SqliteStore implements RelayStorePort {
 
   renameDevice(deviceId: string, name: string): void {
     this.#db.prepare('UPDATE devices SET name = ? WHERE device_id = ?').run(name, deviceId);
-  }
-  auditStats(userId: string): { total: number; failed: number; last24h: number } {
-    const row = this.#db.prepare('SELECT COUNT(*) AS total, SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed, SUM(CASE WHEN ts > ? THEN 1 ELSE 0 END) AS last24h FROM audit WHERE user_id = ?').get(Date.now() - 86_400_000, userId) as { total: number; failed: number | null; last24h: number | null };
-    return { total: row.total, failed: row.failed ?? 0, last24h: row.last24h ?? 0 };
   }
 
   /* ---------- API keys (static bearer tokens) ---------- */
@@ -515,5 +545,7 @@ export class SqliteStore implements RelayStorePort {
     this.#db.prepare('UPDATE api_keys SET revoked = 1 WHERE user_id = ? AND prefix = ?').run(userId, prefix);
   }
 
-  close(): void { this.#db.close(); }
+  close(): void {
+    try { this.auditLog?.close(); } finally { this.#db.close(); }
+  }
 }

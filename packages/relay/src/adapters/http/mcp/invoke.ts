@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import type { DeviceHub } from '../../transport/device-hub.js';
 import type { RelayStorePort } from '../../../core/auth/ports.js';
-import type { ToolResult } from 'brc-shared';
+import type { RelayAuditPort, ToolResult } from 'brc-shared';
 
 export interface InvokeContext { userId: string; clientId: string }
 export type InvokeOutcome =
@@ -21,7 +21,7 @@ export function listUserDevices(hub: DeviceHub, store: RelayStorePort, userId: s
 }
 
 export async function invokeTool(
-  hub: DeviceHub, store: RelayStorePort, ctx: InvokeContext,
+  hub: DeviceHub, store: RelayStorePort, audit: RelayAuditPort, ctx: InvokeContext,
   tool: string, rawArgs: Record<string, unknown> | undefined, opts: { timeoutMs?: number } = {},
 ): Promise<InvokeOutcome> {
   const args = { ...(rawArgs ?? {}) };
@@ -40,12 +40,12 @@ export async function invokeTool(
   try {
     const result = await hub.call(deviceId, tool, args, { client: { name: ctx.clientId }, timeoutMs: opts.timeoutMs });
     const ms = Date.now() - started;
-    store.audit({ ts: started, user_id: ctx.userId, device_id: deviceId, client: ctx.clientId, tool, args_hash: argsHash(args), ok: result.isError ? 0 : 1, ms, error: null });
+    await audit.append({ ts: started, userId: ctx.userId, deviceId, client: ctx.clientId, tool, argsHash: argsHash(args), ok: !result.isError, ms });
     store.touchDevice(deviceId);
     return { ok: true, deviceId, deviceName: dev.info.name, result, ms };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    store.audit({ ts: started, user_id: ctx.userId, device_id: deviceId, client: ctx.clientId, tool, args_hash: argsHash(args), ok: 0, ms: Date.now() - started, error: message });
+    await audit.append({ ts: started, userId: ctx.userId, deviceId, client: ctx.clientId, tool, argsHash: argsHash(args), ok: false, ms: Date.now() - started, error: message });
     const status = message.startsWith('UNKNOWN_TOOL') ? 404 : message.startsWith('CALL_TIMEOUT') ? 504 : 502;
     return { ok: false, status, message: `Relay error: ${message}` };
   }

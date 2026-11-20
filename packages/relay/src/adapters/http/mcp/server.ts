@@ -5,6 +5,7 @@
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { RelayAuditPort } from 'brc-shared';
 import type { DeviceHub } from '../../transport/device-hub.js';
 import type { RelayStorePort } from '../../../core/auth/ports.js';
 import { invokeTool, listUserDevices, type InvokeContext } from './invoke.js';
@@ -41,6 +42,7 @@ export function liveTools(hub: DeviceHub, store: RelayStorePort, userId: string)
 export function createMcpServer(
   hub: DeviceHub,
   store: RelayStorePort,
+  audit: RelayAuditPort,
   ctx: McpContext,
   relayVersion: string,
   log: (level: string, message: string) => void,
@@ -57,7 +59,7 @@ export function createMcpServer(
       if (name === 'list_devices') {
         return { content: [{ type: 'text', text: JSON.stringify({ devices: listUserDevices(hub, store, ctx.userId) }, null, 2) }] };
       }
-      const out = await invokeTool(hub, store, ctx, name, args as Record<string, unknown> | undefined);
+      const out = await invokeTool(hub, store, audit, ctx, name, args as Record<string, unknown> | undefined);
       if (!out.ok) return { content: [{ type: 'text', text: out.message }], isError: true };
       return { content: out.result.content, isError: out.result.isError ?? false, _meta: { deviceId: out.deviceId, deviceName: out.deviceName } } as never;
     });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { createServer, type Server as HttpServer } from 'node:http';
@@ -16,6 +16,7 @@ import { DeviceHub } from './adapters/transport/device-hub.js';
 import { registerDeviceSocket } from './adapters/transport/websocket.js';
 import { consentPage } from './adapters/http/pages/html.js';
 import { SqliteStore, randomToken, sha256, verifyPassword } from './adapters/storage/sqlite.js';
+import { RelayAuditLog } from './adapters/storage/relay-audit.js';
 
 const cfg = loadConfig();
 const settings = resolveSettings({ version: 1 }, process.env).settings;
@@ -93,8 +94,16 @@ if (process.argv.includes('--initialize')) {
       }
       administrator = { username: candidate.username, password: candidate.password };
     }
-    SqliteStore.initialize(cfg.dbFile);
-    if (administrator) {
+    const legacyFile = process.env.BRC_LEGACY_RELAY_DB;
+    SqliteStore.initialize(cfg.dbFile, legacyFile || undefined);
+    let importedLegacy = false;
+    if (legacyFile && existsSync(legacyFile)) {
+      const audit = RelayAuditLog.open({ dbFile: cfg.dbFile, env: process.env, settings });
+      try { await audit.importLegacyAudit(legacyFile); }
+      finally { audit.close(); }
+      importedLegacy = true;
+    }
+    if (administrator && !importedLegacy) {
       const store = SqliteStore.open(cfg.dbFile);
       try { store.bootstrapAdministrator(administrator.username, administrator.password); }
       finally { store.close(); }
@@ -124,6 +133,7 @@ let relayStore: SqliteStore | undefined;
 try {
   const store = SqliteStore.open(cfg.dbFile);
   relayStore = store;
+  const audit = RelayAuditLog.open({ dbFile: cfg.dbFile, env: process.env, settings });
   const admin = cfg.adminPassword ? store.upsertUser(cfg.adminUser, cfg.adminPassword) : store.getAdministrator();
   const sessionSecret = cfg.sessionSecret || store.getSessionSecret();
   const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner(sessionSecret)), cfg.publicUrl.startsWith('https://'));
@@ -145,7 +155,7 @@ try {
   }, clientsStore);
   const limiter = new LoginLimiter();
   const app = express();
-  mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log, verifyPassword });
+  mountRelayRoutes({ app, cfg, store, audit, hub, sessions, provider, limiter, log, verifyPassword });
   const http = createServer(app);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   registerDeviceSocket(http, wss, hub, store, cfg.publicUrl, log);
@@ -166,6 +176,7 @@ try {
         await new Promise<void>((resolve, reject) => http.close((error) => error ? reject(error) : resolve()));
       } catch (error) { errors.push(error); }
       try { store.close(); } catch (error) { errors.push(error); }
+      try { audit.close(); } catch (error) { errors.push(error); }
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, 'Relay resource shutdown failed.');
     },

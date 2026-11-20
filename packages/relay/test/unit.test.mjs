@@ -1,4 +1,3 @@
-// Unit tests for relay internals. Run after build: node --test packages/relay/test/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -7,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { SqliteStore, randomToken, sha256, verifyPassword, hashPassword } from '../dist/adapters/storage/sqlite.js';
+import { RelayAuditLog } from '../dist/adapters/storage/relay-audit.js';
 import { RelayOAuthProvider, RelayClientsStore } from '../dist/adapters/http/oauth-provider.js';
 import { LoginLimiter } from '../dist/core/auth/rate-limit.js';
 import { DeviceHub } from '../dist/adapters/transport/device-hub.js';
@@ -19,6 +19,13 @@ import { SessionPolicy } from '../dist/core/auth/sessions.js';
 import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { createMcpServer } from '../dist/adapters/http/mcp/server.js';
+
+const stubAudit = () => ({
+  append: async () => {},
+  recentAudit: () => [],
+  auditStats: () => ({ total: 0, failed: 0, last24h: 0 }),
+  close: () => {},
+});
 
 test('MCP factory closes the server after handler registration fails', async (t) => {
   for (const target of [ListToolsRequestSchema, CallToolRequestSchema]) {
@@ -38,7 +45,7 @@ test('MCP factory closes the server after handler registration fails', async (t)
           if (failure === 'async') return Promise.reject(new Error('close failed asynchronously'));
           return Promise.resolve();
         });
-        assert.throws(() => createMcpServer({}, {}, { userId: 'user', clientId: 'client' }, 'test',
+        assert.throws(() => createMcpServer({}, {}, stubAudit(), { userId: 'user', clientId: 'client' }, 'test',
           (level, message) => errors.push({ level, message })), (error) => error === original);
         await new Promise((resolve) => setImmediate(resolve));
         assert.equal(closes, 1);
@@ -100,7 +107,7 @@ test('MCP request cleanup covers response close and request failures', async (t)
         },
       };
       mountRelayRoutes({
-        app, cfg, store, hub, sessions, provider, limiter: new LoginLimiter(), verifyPassword: () => false,
+        app, cfg, store, audit: stubAudit(), hub, sessions, provider, limiter: new LoginLimiter(), verifyPassword: () => false,
         log: (level, message) => { if (level === 'error') errors.push(message); },
         createMcpTransport: () => {
           if (mode === 'create') throw new Error('transport creation failure');
@@ -152,7 +159,7 @@ test('HTTP login uses injected password verifier and preserves pairing approval'
     store, tokens, currentUserId: () => null, renderLogin: () => {}, renderConsent: () => {}, issuer: cfg.publicUrl,
   }, new RelayClientsStore(store, tokens));
   mountRelayRoutes({
-    app, cfg, store, hub, sessions, provider, limiter: new LoginLimiter(), log: () => {},
+    app, cfg, store, audit: stubAudit(), hub, sessions, provider, limiter: new LoginLimiter(), log: () => {},
     verifyPassword: (password, hash) => password === 'injected-password' && hash === user.password_hash,
   });
   const server = createServer(app);
@@ -201,8 +208,10 @@ test('password hashing round-trips and rejects wrong password', () => {
   assert.ok(!verifyPassword('s3cret', 'garbage'));
 });
 
-test('store: device token issue / lookup / revoke, pairing codes, audit', () => {
+test('store: device token issue / lookup / revoke, pairing codes, and unified audit', async () => {
   const s = SqliteStore.open(':memory:');
+  const auditDirectory = mkdtempSync(path.join(os.tmpdir(), 'brc-relay-unit-audit-'));
+  const audit = RelayAuditLog.open({ dbFile: path.join(auditDirectory, 'relay.sqlite'), env: {} });
   const u = s.upsertUser('admin', 'pw');
   const raw = s.issueDeviceToken('dev1', u.id, 'PC', 'win32');
   assert.equal(s.getDeviceByToken(raw)?.device_id, 'dev1');
@@ -219,10 +228,13 @@ test('store: device token issue / lookup / revoke, pairing codes, audit', () => 
   s.approveDeviceCode(dc.device_code, u.id, '');
   assert.equal(s.getDeviceCode(dc.device_code)?.approved, 1);
 
-  s.audit({ ts: Date.now(), user_id: u.id, device_id: 'dev1', client: 'c', tool: 'read_file', args_hash: 'ab', ok: 1, ms: 5, error: null });
-  s.audit({ ts: Date.now(), user_id: u.id, device_id: 'dev1', client: 'c', tool: 'read_file', args_hash: 'ab', ok: 0, ms: 5, error: 'x' });
-  assert.deepEqual(s.auditStats(u.id), { total: 2, failed: 1, last24h: 2 });
+  await audit.append({ ts: Date.now(), userId: u.id, deviceId: 'dev1', client: 'c', tool: 'read_file', argsHash: 'ab', ok: true, ms: 5 });
+  await audit.append({ ts: Date.now(), userId: u.id, deviceId: 'dev1', client: 'c', tool: 'read_file', argsHash: 'ab', ok: false, ms: 5, error: 'x' });
+  assert.deepEqual(audit.auditStats(u.id), { total: 2, failed: 1, last24h: 2 });
+  assert.equal(audit.recentAudit(u.id).length, 2);
+  audit.close();
   s.close();
+  rmSync(auditDirectory, { recursive: true, force: true });
 });
 
 test('store: tokens expire and revoke', () => {
@@ -318,7 +330,6 @@ test('login limiter locks after N failures and clears on success', () => {
   assert.equal(l.locked('k'), 0);
 });
 
-// Fake ws socket: EventEmitter with send/close/terminate and OPEN state
 import { EventEmitter } from 'node:events';
 class FakeSocket extends EventEmitter {
   constructor() { super(); this.OPEN = 1; this.readyState = 1; this.sent = []; this.closed = null; }
