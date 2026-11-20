@@ -19,10 +19,13 @@ class MemoryStore {
   constructor() {
     this.entries = [];
     this.fail = false;
+    this.failAt = undefined;
+    this.appendCount = 0;
   }
 
   async append(entry) {
-    if (this.fail) throw new Error('write failed');
+    this.appendCount += 1;
+    if (this.fail || this.appendCount === this.failAt) throw new Error('write failed');
     this.entries.push(entry);
   }
 
@@ -100,6 +103,24 @@ test('history retains failed writes and retries them in order without duplicates
   history.addCall('second', {}, output);
   await history.cleanup();
   assert.deepEqual(store.entries.map((entry) => entry.toolName), ['first', 'second']);
+  assert.equal(history.getStats().queuedWrites, 0);
+});
+
+test('history retries only the unwritten suffix after a partial batch failure', async () => {
+  const store = new MemoryStore();
+  const failures = [];
+  const history = new ToolHistory(store, () => failures.push('failed'));
+  store.failAt = 2;
+  history.addCall('first', {}, output);
+  history.addCall('second', {}, output);
+  history.addCall('third', {}, output);
+  await history.cleanup();
+  assert.equal(failures.length, 1);
+  assert.deepEqual(store.entries.map((entry) => entry.toolName), ['first']);
+  assert.equal(history.getStats().queuedWrites, 2);
+  store.failAt = undefined;
+  await history.cleanup();
+  assert.deepEqual(store.entries.map((entry) => entry.toolName), ['first', 'second', 'third']);
   assert.equal(history.getStats().queuedWrites, 0);
 });
 

@@ -12,11 +12,11 @@ export interface DockerMount {
 }
 
 export interface ContainerInfo {
-    
+
     isContainer: boolean;
     containerType: 'docker' | 'podman' | 'kubernetes' | 'lxc' | 'systemd-nspawn' | 'other' | null;
     orchestrator: 'kubernetes' | 'docker-compose' | 'docker-swarm' | 'podman-compose' | null;
-    
+
     isDocker: boolean;
     mountPoints: DockerMount[];
     containerEnvironment?: {
@@ -67,113 +67,110 @@ export interface SystemInfo {
  * Detect container environment and type
  */
 function detectContainerEnvironment(): { isContainer: boolean; containerType: ContainerInfo['containerType']; orchestrator: ContainerInfo['orchestrator'] } {
-    
-    
-    
+
+
+
     if (process.env.MCP_CLIENT_DOCKER === 'true') {
         return { isContainer: true, containerType: 'docker', orchestrator: null };
     }
-    
-    
+
+
     if (process.env.KUBERNETES_SERVICE_HOST || process.env.KUBERNETES_PORT) {
         return { isContainer: true, containerType: 'kubernetes', orchestrator: 'kubernetes' };
     }
-    
-    
+
+
     if (process.env.PODMAN_CONTAINER || process.env.CONTAINER_HOST?.includes('podman')) {
         return { isContainer: true, containerType: 'podman', orchestrator: null };
     }
 
-    
+
     if (fs.existsSync('/.dockerenv')) {
         return { isContainer: true, containerType: 'docker', orchestrator: null };
     }
 
-    
+
     if (os.platform() === 'linux') {
         try {
             const cgroup = fs.readFileSync('/proc/1/cgroup', 'utf8');
-            
-            
+
+
             if (cgroup.includes('docker')) {
                 return { isContainer: true, containerType: 'docker', orchestrator: null };
             }
-            
-            
+
+
             if (cgroup.includes('kubepods') || cgroup.includes('pod')) {
                 return { isContainer: true, containerType: 'kubernetes', orchestrator: 'kubernetes' };
             }
-            
-            
+
+
             if (cgroup.includes('podman') || cgroup.includes('libpod')) {
                 return { isContainer: true, containerType: 'podman', orchestrator: null };
             }
-            
-            
+
+
             if (cgroup.includes('lxc')) {
                 return { isContainer: true, containerType: 'lxc', orchestrator: null };
             }
-            
-            
+
+
             if (cgroup.includes('machine.slice')) {
                 return { isContainer: true, containerType: 'systemd-nspawn', orchestrator: null };
             }
-            
-            
+
+
             if (cgroup.includes('containerd')) {
                 return { isContainer: true, containerType: 'other', orchestrator: null };
             }
         } catch (error) {
-            // /proc/1/cgroup might not exist
         }
     }
 
-    
+
     if (os.platform() === 'linux') {
         try {
             const environ = fs.readFileSync('/proc/1/environ', 'utf8');
-            
+
             if (environ.includes('container=')) {
-                
+
                 if (environ.includes('container=systemd-nspawn')) {
                     return { isContainer: true, containerType: 'systemd-nspawn', orchestrator: null };
                 }
-                
-                
+
+
                 if (environ.includes('container=lxc')) {
                     return { isContainer: true, containerType: 'lxc', orchestrator: null };
                 }
-                
-                
+
+
                 return { isContainer: true, containerType: 'other', orchestrator: null };
             }
         } catch (error) {
-            // /proc/1/environ might not exist or be accessible
         }
     }
 
-    
+
     try {
         const hostname = os.hostname();
-        
+
         if (hostname && (hostname.includes('-') && hostname.split('-').length >= 3)) {
-            
+
             if (fs.existsSync('/var/run/secrets/kubernetes.io')) {
                 return { isContainer: true, containerType: 'kubernetes', orchestrator: 'kubernetes' };
             }
         }
     } catch (error) {
-        // Hostname check failed
     }
 
-    
-    
-    
+
+
+
     if (process.env.COMPOSE_PROJECT_NAME || process.env.COMPOSE_SERVICE) {
         return { isContainer: true, containerType: 'docker', orchestrator: 'docker-compose' };
     }
-    
-    
+
+
     if (process.env.DOCKER_SWARM_MODE || process.env.DOCKER_NODE_ID) {
         return { isContainer: true, containerType: 'docker', orchestrator: 'docker-swarm' };
     }
@@ -186,25 +183,25 @@ function detectContainerEnvironment(): { isContainer: boolean; containerType: Co
  */
 function discoverContainerMounts(isContainer: boolean): DockerMount[] {
     const mounts: DockerMount[] = [];
-    
+
     if (!isContainer) {
         return mounts;
     }
 
-    
+
     if (os.platform() === 'linux') {
         try {
             const mountsContent = fs.readFileSync('/proc/mounts', 'utf8');
             const mountLines = mountsContent.split('\n');
-            
-            
+
+
             const systemFsTypes = new Set([
                 'overlay', 'tmpfs', 'proc', 'sysfs', 'devpts', 'cgroup', 'cgroup2',
                 'mqueue', 'debugfs', 'securityfs', 'pstore', 'configfs', 'fusectl',
                 'hugetlbfs', 'autofs', 'devtmpfs', 'bpf', 'tracefs', 'shm'
             ]);
 
-            
+
             const hostMountFsTypes = new Set(['fakeowner', '9p', 'virtiofs', 'fuse.sshfs']);
 
             for (const line of mountLines) {
@@ -215,7 +212,7 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
                     const fsType = parts[2];
                     const options = parts[3].split(',');
 
-                    
+
                     const isSystemMountPoint = 
                         mountPoint === '/' ||
                         mountPoint.startsWith('/dev') ||
@@ -231,10 +228,10 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
                         continue;
                     }
 
-                    
-                    
-                    
-                    
+
+
+
+
                     const isHostMountFs = hostMountFsTypes.has(fsType);
                     const isHostMarkDevice = device.startsWith('/run/host_mark/');
                     const isNonSystemFs = !systemFsTypes.has(fsType);
@@ -250,7 +247,7 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
 
                     if (isHostMountFs || isHostMarkDevice || (isNonSystemFs && isUserLikePath)) {
                         const isReadOnly = options.includes('ro');
-                        
+
                         mounts.push({
                             hostPath: device,
                             containerPath: mountPoint,
@@ -262,11 +259,11 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
                 }
             }
         } catch (error) {
-            // /proc/mounts might not be available
+
         }
     }
 
-    
+
     try {
         if (fs.existsSync('/mnt')) {
             const contents = fs.readdirSync('/mnt');
@@ -275,7 +272,7 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
                 try {
                     const stats = fs.statSync(itemPath);
                     if (stats.isDirectory()) {
-                        
+
                         const exists = mounts.some(m => m.containerPath === itemPath);
                         if (!exists) {
                             mounts.push({
@@ -288,31 +285,31 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
                         }
                     }
                 } catch (itemError) {
-                    // Skip items we can't stat
+
                 }
             }
         }
     } catch (error) {
-        // /mnt directory doesn't exist or not accessible
+
     }
 
-    
+
     try {
         if (fs.existsSync('/home')) {
             const contents = fs.readdirSync('/home');
             for (const item of contents) {
-                
+
                 if (item === 'root' || item === 'node' || item === 'bin' || item === 'sbin' || 
                     item === 'usr' || item === 'lib' || item === 'lib64' || item === 'var' ||
                     item === 'tmp' || item === 'opt' || item === 'sys' || item === 'proc') {
                     continue;
                 }
-                
+
                 const itemPath = `/home/${item}`;
                 try {
                     const stats = fs.statSync(itemPath);
                     if (stats.isDirectory()) {
-                        
+
                         const exists = mounts.some(m => m.containerPath === itemPath);
                         if (!exists) {
                             mounts.push({
@@ -325,12 +322,12 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
                         }
                     }
                 } catch (itemError) {
-                    // Skip items we can't stat
+
                 }
             }
         }
     } catch (error) {
-        // /home directory doesn't exist or not accessible
+
     }
 
     return mounts;
@@ -341,20 +338,20 @@ function discoverContainerMounts(isContainer: boolean): DockerMount[] {
  */
 function getContainerEnvironment(containerType: ContainerInfo['containerType']): ContainerInfo['containerEnvironment'] {
     const env: ContainerInfo['containerEnvironment'] = {};
-    
-    
+
+
     try {
         const hostname = os.hostname();
         if (hostname && hostname !== 'localhost') {
             env.containerName = hostname;
         }
     } catch (error) {
-        // Hostname not available
+
     }
-    
-    
+
+
     if (containerType === 'docker') {
-        
+
         if (process.env.DOCKER_IMAGE) {
             env.dockerImage = process.env.DOCKER_IMAGE;
         } else if (process.env.IMAGE_NAME) {
@@ -362,45 +359,45 @@ function getContainerEnvironment(containerType: ContainerInfo['containerType']):
         } else if (process.env.CONTAINER_IMAGE) {
             env.dockerImage = process.env.CONTAINER_IMAGE;
         }
-        
-        
+
+
         try {
             if (fs.existsSync('/proc/self/cgroup')) {
                 const cgroup = fs.readFileSync('/proc/self/cgroup', 'utf8');
-                
+
                 const containerIdMatch = cgroup.match(/docker\/([a-f0-9]{64})/);
                 if (containerIdMatch && !env.containerName) {
-                    
+
                     env.containerName = containerIdMatch[1].substring(0, 12);
                 }
             }
         } catch (error) {
-            // Ignore errors reading cgroup
+
         }
     }
-    
-    
+
+
     if (containerType === 'kubernetes') {
         if (process.env.KUBERNETES_NAMESPACE || process.env.POD_NAMESPACE) {
             env.kubernetesNamespace = process.env.KUBERNETES_NAMESPACE || process.env.POD_NAMESPACE;
         }
-        
+
         if (process.env.POD_NAME || process.env.HOSTNAME) {
             env.kubernetesPod = process.env.POD_NAME || process.env.HOSTNAME;
         }
-        
+
         if (process.env.NODE_NAME || process.env.KUBERNETES_NODE_NAME) {
             env.kubernetesNode = process.env.NODE_NAME || process.env.KUBERNETES_NODE_NAME;
         }
-        
-        
+
+
         if (process.env.CONTAINER_IMAGE) {
             env.dockerImage = process.env.CONTAINER_IMAGE;
         } else if (process.env.IMAGE_NAME) {
             env.dockerImage = process.env.IMAGE_NAME;
         }
-        
-        
+
+
         try {
             if (fs.existsSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace')) {
                 const namespace = fs.readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace', 'utf8').trim();
@@ -409,31 +406,31 @@ function getContainerEnvironment(containerType: ContainerInfo['containerType']):
                 }
             }
         } catch (error) {
-            // Service account info not available
+
         }
     }
-    
-    
+
+
     if (containerType === 'podman') {
-        
+
         if (process.env.CONTAINER_IMAGE || process.env.PODMAN_IMAGE) {
             env.dockerImage = process.env.CONTAINER_IMAGE || process.env.PODMAN_IMAGE;
         }
     }
-    
-    
+
+
     if (containerType === 'lxc') {
-        
+
         if (process.env.LXC_NAME) {
             env.containerName = process.env.LXC_NAME;
         }
     }
-    
-    
+
+
     if (process.env.HOST_PLATFORM) {
         env.hostPlatform = process.env.HOST_PLATFORM;
     }
-    
+
     return Object.keys(env).length > 0 ? env : undefined;
 }
 
@@ -442,13 +439,13 @@ function getContainerEnvironment(containerType: ContainerInfo['containerType']):
  */
 function detectNodeInfo(): SystemInfo['nodeInfo'] {
     try {
-        
+
         const version = process.version.replace('v', ''); 
 
-        
+
         const path = process.execPath;
 
-        
+
         const npmVersion = process.env.npm_version;
 
         return {
@@ -465,7 +462,7 @@ function detectNodeInfo(): SystemInfo['nodeInfo'] {
  * Detect Python installation and version and put on systeminfo.pythonInfo
  */
 function detectPythonInfo(): SystemInfo['pythonInfo'] {
-    
+
     const pythonCommands = process.platform === 'win32'
         ? ['python', 'python3', 'py']  
         : ['python3', 'python'];        
@@ -479,7 +476,7 @@ function detectPythonInfo(): SystemInfo['pythonInfo'] {
                 stdio: ['pipe', 'pipe', 'pipe']
             }).trim();
 
-            
+
             if (version.includes('Python 3')) {
                 return {
                     available: true,
@@ -488,7 +485,7 @@ function detectPythonInfo(): SystemInfo['pythonInfo'] {
                 };
             }
         } catch {
-            // Command not found or failed, try next
+
         }
     }
 
@@ -503,16 +500,16 @@ function computeSystemInfo(): SystemInfo {
     const isWindows = platform === 'win32';
     const isMacOS = platform === 'darwin';
     const isLinux = platform === 'linux';
-    
-    
+
+
     const containerDetection = detectContainerEnvironment();
     const mountPoints = containerDetection.isContainer ? discoverContainerMounts(containerDetection.isContainer) : [];
-    
+
     let platformName: string;
     let defaultShell: string;
     let pathSeparator: string;
     let examplePaths: SystemInfo['examplePaths'];
-    
+
     if (isWindows) {
         platformName = 'Windows';
         defaultShell = 'powershell.exe';
@@ -541,7 +538,7 @@ function computeSystemInfo(): SystemInfo {
             absolute: '/path/to/file.txt'
         };
     } else {
-        
+
         platformName = 'Unix';
         defaultShell = 'bash';
         pathSeparator = '/';
@@ -551,11 +548,11 @@ function computeSystemInfo(): SystemInfo {
             absolute: '/path/to/file.txt'
         };
     }
-    
-    
+
+
     if (containerDetection.isContainer) {
         let containerLabel = '';
-        
+
         if (containerDetection.containerType === 'kubernetes') {
             containerLabel = 'Kubernetes';
             if (containerDetection.orchestrator === 'kubernetes') {
@@ -577,29 +574,29 @@ function computeSystemInfo(): SystemInfo {
         } else {
             containerLabel = 'Container';
         }
-        
+
         platformName = `${platformName} (${containerLabel})`;
-        
-        
+
+
         if (mountPoints.length > 0) {
             examplePaths.accessible = mountPoints.map(mount => mount.containerPath);
         }
     }
-    
-    
+
+
     const nodeInfo = detectNodeInfo();
 
-    
+
     const pythonInfo = detectPythonInfo();
 
-    
+
     const processInfo = {
         pid: process.pid,
         arch: process.arch,
         platform: process.platform,
         versions: process.versions
     };
-    
+
     return {
         platform,
         platformName,
@@ -609,11 +606,11 @@ function computeSystemInfo(): SystemInfo {
         isMacOS,
         isLinux,
         docker: {
-            
+
             isContainer: containerDetection.isContainer,
             containerType: containerDetection.containerType,
             orchestrator: containerDetection.orchestrator,
-            
+
             isDocker: containerDetection.isContainer && containerDetection.containerType === 'docker',
             mountPoints,
             containerEnvironment: getContainerEnvironment(containerDetection.containerType)
@@ -644,10 +641,10 @@ export function clearSystemInfoCache(): void {
  */
 export function getOSSpecificGuidance(systemInfo: SystemInfo): string {
     const { platformName, defaultShell, isWindows, docker } = systemInfo;
-    
+
     let guidance = `Running on ${platformName}. Default shell: ${defaultShell}.`;
-    
-    
+
+
     if (docker.isContainer) {
         const containerTypeLabel = docker.containerType === 'kubernetes' ? 'KUBERNETES POD' :
                                    docker.containerType === 'docker' ? 'DOCKER CONTAINER' :
@@ -655,7 +652,7 @@ export function getOSSpecificGuidance(systemInfo: SystemInfo): string {
                                    docker.containerType === 'lxc' ? 'LXC CONTAINER' :
                                    docker.containerType === 'systemd-nspawn' ? 'SYSTEMD-NSPAWN CONTAINER' :
                                    'CONTAINER';
-        
+
         guidance += `
 
 🐳 ${containerTypeLabel} ENVIRONMENT DETECTED:`;
@@ -663,8 +660,8 @@ export function getOSSpecificGuidance(systemInfo: SystemInfo): string {
         if (docker.containerType === 'kubernetes') {
             guidance += `
 This Desktop Commander instance is running inside a Kubernetes pod.`;
-            
-            
+
+
             if (docker.containerEnvironment?.kubernetesNamespace) {
                 guidance += `
 Namespace: ${docker.containerEnvironment.kubernetesNamespace}`;
@@ -680,7 +677,7 @@ Node: ${docker.containerEnvironment.kubernetesNode}`;
         } else if (docker.containerType === 'docker') {
             guidance += `
 This Desktop Commander instance is running inside a Docker container.`;
-            
+
             if (docker.orchestrator === 'docker-compose') {
                 guidance += ` (Docker Compose)`;
             } else if (docker.orchestrator === 'docker-swarm') {
@@ -700,7 +697,7 @@ AVAILABLE MOUNTED DIRECTORIES:`;
                 guidance += `
 - ${mount.containerPath} ${access} - ${mount.description}`;
             }
-            
+
             guidance += `
 
 IMPORTANT: When users ask about files, FIRST check mounted directories above.
@@ -730,7 +727,7 @@ Desktop Commander Docker installer typically mounts folders to /home/[folder-nam
 Container: ${docker.containerEnvironment.containerName}`;
         }
     }
-    
+
     if (isWindows) {
         guidance += `
         
@@ -764,7 +761,7 @@ LINUX-SPECIFIC NOTES:
 - File permissions and ownership important for many operations
 - Systemd services common on modern distributions`;
     }
-    
+
     return guidance;
 }
 
@@ -773,13 +770,13 @@ LINUX-SPECIFIC NOTES:
  */
 export function getDevelopmentToolGuidance(systemInfo: SystemInfo): string {
     const { isWindows, isMacOS, isLinux, platformName, nodeInfo, processInfo } = systemInfo;
-    
-    
+
+
     const nodeGuidance = nodeInfo 
         ? `Node.js: v${nodeInfo.version} (${nodeInfo.path})${nodeInfo.npmVersion ? ` | npm: v${nodeInfo.npmVersion}` : ''}`
         : 'Node.js: Not detected';
-    
-    
+
+
     const envInfo = `
 Current Process Environment:
 - Node: v${processInfo.versions.node}
@@ -787,7 +784,7 @@ Current Process Environment:
 - Architecture: ${processInfo.arch}
 - Platform: ${processInfo.platform}
 - Process ID: ${processInfo.pid}`;
-    
+
     if (isWindows) {
         return `
 COMMON WINDOWS DEVELOPMENT TOOLS:
@@ -826,18 +823,18 @@ ${envInfo}`;
  */
 export function getPathGuidance(systemInfo: SystemInfo): string {
     let guidance = `Always use absolute paths for reliability. Paths are automatically normalized regardless of slash direction.`;
-    
+
     if (systemInfo.docker.isContainer && systemInfo.docker.mountPoints.length > 0) {
         const containerLabel = systemInfo.docker.containerType === 'kubernetes' ? 'KUBERNETES' :
                               systemInfo.docker.containerType === 'docker' ? 'DOCKER' :
                               systemInfo.docker.containerType === 'podman' ? 'PODMAN' :
                               'CONTAINER';
-        
+
         guidance += ` 
 
 🐳 ${containerLabel}: Prefer paths within mounted directories: ${systemInfo.docker.mountPoints.map(m => m.containerPath).join(', ')}.
 When users ask about file locations, check these mounted paths first.`;
     }
-    
+
     return guidance;
 }

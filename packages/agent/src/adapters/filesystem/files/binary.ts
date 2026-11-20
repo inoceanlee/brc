@@ -21,11 +21,11 @@ import {
  */
 export class BinaryFileHandler implements FileHandler {
     async canHandle(filePath: string): Promise<boolean> {
-        
+
         try {
             return await isBinaryFile(filePath);
         } catch (error) {
-            
+
             return false;
         }
     }

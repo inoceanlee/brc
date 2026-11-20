@@ -35,7 +35,7 @@ export async function handleStartSearch(args: unknown, searchManager: SearchMana
     });
 
     const searchTypeText = parsed.data.searchType === 'content' ? 'content search' : 'file search';
-    
+
     let output = `Started ${searchTypeText} session: ${result.sessionId}\n`;
     output += `Pattern: "${parsed.data.pattern}"\n`;
     output += `Path: ${parsed.data.path}\n`;
@@ -45,7 +45,7 @@ export async function handleStartSearch(args: unknown, searchManager: SearchMana
 
     if (result.results.length > 0) {
       output += "Initial results:\n";
-      
+
       for (const searchResult of result.results.slice(0, 10)) {
         if (searchResult.type === 'content') {
           output += `📄 ${searchResult.file}:${searchResult.line} - ${searchResult.match?.substring(0, 100)}${searchResult.match && searchResult.match.length > 100 ? '...' : ''}\n`;
@@ -53,7 +53,7 @@ export async function handleStartSearch(args: unknown, searchManager: SearchMana
           output += `📁 ${searchResult.file}\n`;
         }
       }
-      
+
       if (result.results.length > 10) {
         output += `... and ${result.results.length - 10} more results\n`;
       }
@@ -71,7 +71,7 @@ export async function handleStartSearch(args: unknown, searchManager: SearchMana
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     capture('search_session_start_error', { error: errorMessage });
-    
+
     return {
       content: [{ type: "text", text: `Error starting search session: ${errorMessage}` }],
       isError: true,
@@ -97,9 +97,9 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       parsed.data.offset,
       parsed.data.length
     );
-    
-    
-    
+
+
+
     if (results.isError && results.totalResults === 0 && results.error?.trim()) {
       return {
         content: [{
@@ -110,19 +110,19 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       };
     }
 
-    
+
     let output = `Search session: ${parsed.data.sessionId}\n`;
     output += `Status: ${results.isComplete ? 'COMPLETED' : 'IN PROGRESS'}\n`;
     output += `Runtime: ${Math.round(results.runtime / 1000)}s\n`;
     output += `Total results found: ${results.totalResults} (${results.totalMatches} matches)\n`;
-    
+
     const offset = parsed.data.offset;
-    
+
     if (offset < 0) {
-      
+
       output += `Showing last ${results.returnedCount} results\n\n`;
     } else {
-      
+
       const startPos = offset;
       const endPos = startPos + results.returnedCount - 1;
       output += `Showing results ${startPos}-${endPos}\n\n`;
@@ -136,7 +136,7 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       }
     } else {
       output += "Results:\n";
-      
+
       for (const result of results.results) {
         if (result.type === 'content') {
           output += `📄 ${result.file}:${result.line} - ${result.match?.substring(0, 100)}${result.match && result.match.length > 100 ? '...' : ''}\n`;
@@ -146,7 +146,7 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
       }
     }
 
-    
+
     if (offset >= 0 && results.hasMoreResults) {
       const nextOffset = offset + results.returnedCount;
       output += `\n📖 More results available. Use get_more_search_results with offset: ${nextOffset}`;
@@ -154,8 +154,8 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
 
     if (results.isComplete) {
       output += `\n✅ Search completed.`;
-      
-      
+
+
       if (results.wasIncomplete) {
         output += `\n⚠️  Warning: Some files were inaccessible due to permissions. Results may be incomplete.`;
       }
@@ -166,7 +166,7 @@ export async function handleGetMoreSearchResults(args: unknown, searchManager: S
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
     return {
       content: [{ type: "text", text: `Error reading search results: ${errorMessage}` }],
       isError: true,
@@ -188,7 +188,7 @@ export async function handleStopSearch(args: unknown, searchManager: SearchManag
 
   try {
     const success = searchManager.terminateSearch(parsed.data.sessionId);
-    
+
     if (success) {
       return {
         content: [{
@@ -206,7 +206,7 @@ export async function handleStopSearch(args: unknown, searchManager: SearchManag
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
     return {
       content: [{ type: "text", text: `Error terminating search session: ${errorMessage}` }],
       isError: true,
@@ -220,7 +220,7 @@ export async function handleStopSearch(args: unknown, searchManager: SearchManag
 export async function handleListSearches(searchManager: SearchManager): Promise<ServerResult> {
   try {
     const sessions = searchManager.listSearchSessions();
-    
+
     if (sessions.length === 0) {
       return {
         content: [{ type: "text", text: "No active searches." }],
@@ -228,12 +228,12 @@ export async function handleListSearches(searchManager: SearchManager): Promise<
     }
 
     let output = `Active Searches (${sessions.length}):\n\n`;
-    
+
     for (const session of sessions) {
       const status = session.isComplete 
         ? (session.isError ? '❌ ERROR' : '✅ COMPLETED')
         : '🔄 RUNNING';
-      
+
       output += `Session: ${session.id}\n`;
       output += `  Type: ${session.searchType}\n`;
       output += `  Pattern: "${session.pattern}"\n`;
@@ -247,7 +247,7 @@ export async function handleListSearches(searchManager: SearchManager): Promise<
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
     return {
       content: [{ type: "text", text: `Error listing search sessions: ${errorMessage}` }],
       isError: true,

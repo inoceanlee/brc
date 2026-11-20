@@ -44,34 +44,34 @@ function isWelcomePageClientExcluded(featureFlagManager: FeatureFlagManager, cli
  */
 export async function handleWelcomePageOnboarding(deps: WelcomeOnboardingDependencies, clientName?: string): Promise<void> {
   const { configManager, featureFlagManager, hasFeature, openWelcomePage, logToStderr, capture } = deps;
-  
-  
+
+
   const eligible = await configManager.getValue('welcomeOnboardingEligible');
   if (!eligible) {
     return;
   }
 
-  
-  
+
+
   const pending = await configManager.getValue('pendingWelcomeOnboarding');
   if (!pending) {
     return; 
   }
 
-  
+
   const loadedFromCache = featureFlagManager.wasLoadedFromCache();
-  
-  
-  
-  
+
+
+
+
   if (!loadedFromCache) {
     logToStderr('debug', 'Waiting for feature flags to load...');
     await featureFlagManager.waitForFreshFlags();
   }
 
-  
-  
-  
+
+
+
   const enabled = featureFlagManager.get('welcome_page_enabled', true) !== false;
   if (!enabled) {
     await skipWelcomePageOnboarding(deps);
@@ -83,24 +83,24 @@ export async function handleWelcomePageOnboarding(deps: WelcomeOnboardingDepende
     return;
   }
 
-  
+
   const shouldShow = await hasFeature('showOnboardingPage');
-  
-  
+
+
   capture('server_welcome_page_ab_decision', {
     variant: shouldShow ? 'treatment' : 'control',
     loaded_from_cache: loadedFromCache
   });
-  
+
   if (!shouldShow) {
-    
+
     await configManager.setValue('sawOnboardingPage', false);
     await configManager.setValue('pendingWelcomeOnboarding', false);
     logToStderr('debug', 'Welcome page skipped (A/B: noOnboardingPage)');
     return;
   }
 
-  
+
   const alreadyShown = await configManager.getValue('sawOnboardingPage');
   if (alreadyShown) {
     return;
@@ -113,7 +113,7 @@ export async function handleWelcomePageOnboarding(deps: WelcomeOnboardingDepende
     capture('server_welcome_page_opened', { success: true });
     logToStderr('info', 'Welcome page opened');
   } catch (e) {
-    
+
     await configManager.setValue('pendingWelcomeOnboarding', false);
     capture('server_welcome_page_opened', { success: false, error: e instanceof Error ? e.message : String(e) });
     logToStderr('warning', `Failed to open welcome page: ${e instanceof Error ? e.message : e}`);

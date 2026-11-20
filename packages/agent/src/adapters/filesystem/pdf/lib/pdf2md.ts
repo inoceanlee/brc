@@ -72,12 +72,12 @@ export async function pdf2md(pdfBuffer: Uint8Array, pageNumbers: number[] | Page
     const result = await parse(pdfBuffer);
     const { fonts, pages, pdfDocument } = result;
 
-    
+
     const filterPageNumbers = Array.isArray(pageNumbers) ?
         pageNumbers :
         generatePageNumbers(pageNumbers.offset, pageNumbers.length, pages.length);
 
-    
+
     const pagesToProcess = filterPageNumbers.length === 0 ?
         pages :
         pages.filter((_: any, index: number) => filterPageNumbers.includes(index + 1));
@@ -89,10 +89,10 @@ export async function pdf2md(pdfBuffer: Uint8Array, pageNumbers: number[] | Page
     const transformations = makeTransformations(fonts.map);
     const parseResult = transform(pagesToProcess, transformations);
 
-    
+
     const imagesByPage = await extractImagesFromPdf(pdfBuffer, pageNumberMap, { format: 'webp', quality: 85 });
 
-    
+
     const processedPages: PdfPageItem[] = parseResult.pages.map((page: any, index: number) => {
         const pageNumber = pageNumberMap[index];
         return {

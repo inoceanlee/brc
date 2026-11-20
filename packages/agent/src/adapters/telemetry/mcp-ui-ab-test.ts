@@ -52,7 +52,6 @@ export async function resolveMcpUiPreviewDecision(deps: McpUiPreviewDecisionDeps
         mcp_ui_enabled: decision,
       });
     } catch {
-      // Telemetry must not change the assigned product experience.
     }
 
     return decision;

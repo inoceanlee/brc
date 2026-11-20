@@ -27,7 +27,7 @@ import { TextReader } from './text-reader.js';
 
 
 const FILE_SIZE_LIMITS = {
-    LINE_COUNT_LIMIT: 10 * 1024 * 1024,      // 10MB for line counting
+    LINE_COUNT_LIMIT: 10 * 1024 * 1024,
 } as const;
 
 
@@ -39,8 +39,8 @@ export class TextFileHandler implements FileHandler {
     private readonly reader = new TextReader(TextFileHandler.countLines, this.generateEnhancedStatusMessage);
 
     canHandle(_path: string): boolean {
-        
-        
+
+
         return true;
     }
 
@@ -50,7 +50,7 @@ export class TextFileHandler implements FileHandler {
         const length = options?.length ?? AGENT_DEFAULTS.fileReadLineLimit;
         const includeStatusMessage = options?.includeStatusMessage ?? true;
 
-        
+
         return this.reader.readFileWithSmartPositioning(filePath, offset, length, 'text/plain', includeStatusMessage, options?.signal);
     }
 
@@ -77,7 +77,7 @@ export class TextFileHandler implements FileHandler {
             metadata: {}
         };
 
-        
+
         if (stats.isFile() && stats.size < FILE_SIZE_LIMITS.LINE_COUNT_LIMIT) {
             try {
                 const encoding = await this.reader.detectTextEncoding(path);
@@ -88,16 +88,15 @@ export class TextFileHandler implements FileHandler {
                 const lineCount = TextFileHandler.countLines(content);
                 info.metadata!.lineCount = lineCount;
             } catch (error) {
-                // If reading fails, skip line count
             }
         }
 
         return info;
     }
 
-    
-    
-    
+
+
+
 
     /**
      * Count lines in text content
@@ -105,8 +104,8 @@ export class TextFileHandler implements FileHandler {
      */
     static countLines(content: string): number {
         if (content === '') return 0;
-        
-        
+
+
         const lines = content.split('\n');
         if (lines[lines.length - 1] === '') {
             return lines.length - 1;

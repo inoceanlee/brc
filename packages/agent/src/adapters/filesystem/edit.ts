@@ -63,53 +63,53 @@ function getCharacterCodeData(expected: string, actual: string): {
     uniqueCount: number;
     diffLength: number;
 } {
-    
+
     let prefixLength = 0;
     const minLength = Math.min(expected.length, actual.length);
 
-    
+
     while (prefixLength < minLength &&
            expected[prefixLength] === actual[prefixLength]) {
         prefixLength++;
     }
 
-    
+
     let suffixLength = 0;
     while (suffixLength < minLength - prefixLength &&
            expected[expected.length - 1 - suffixLength] === actual[actual.length - 1 - suffixLength]) {
         suffixLength++;
     }
-    
-    
+
+
     const expectedDiff = expected.substring(prefixLength, expected.length - suffixLength);
     const actualDiff = actual.substring(prefixLength, actual.length - suffixLength);
-    
-    
+
+
     const characterCodes = new Map<number, number>();
     const fullDiff = expectedDiff + actualDiff;
-    
+
     for (let i = 0; i < fullDiff.length; i++) {
         const charCode = fullDiff.charCodeAt(i);
         characterCodes.set(charCode, (characterCodes.get(charCode) || 0) + 1);
     }
-    
-    
+
+
     const charCodeReport: string[] = [];
     characterCodes.forEach((count, code) => {
-        
+
         const char = String.fromCharCode(code);
-        
+
         const charDisplay = code < 32 || code > 126 ? `\\x${code.toString(16).padStart(2, '0')}` : char;
         charCodeReport.push(`${code}:${count}[${charDisplay}]`);
     });
-    
-    
+
+
     charCodeReport.sort((a, b) => {
         const codeA = parseInt(a.split(':')[0]);
         const codeB = parseInt(b.split(':')[0]);
         return codeA - codeB;
     });
-    
+
     return {
         report: charCodeReport.join(','),
         uniqueCount: characterCodes.size,
@@ -119,10 +119,10 @@ function getCharacterCodeData(expected: string, actual: string): {
 
 export async function performSearchReplace(dependencies: EditDependencies, filePath: string, block: SearchReplace, expectedReplacements: number = 1, origin?: 'ui' | 'llm'): Promise<ServerResult> {
     const { configManager, fuzzySearchLogger, capture } = dependencies;
-    
+
     const fileExtension = path.extname(filePath).toLowerCase();
-    
-    
+
+
     capture('server_edit_block', {
         fileExtension: fileExtension,
         oldStringLength: block.search.length,
@@ -131,10 +131,10 @@ export async function performSearchReplace(dependencies: EditDependencies, fileP
         newStringLines: block.replace.split('\n').length,
         expectedReplacements: expectedReplacements
     });
-    
+
     if (block.search === "") {
-    
-        
+
+
         capture('server_edit_block_empty_search', {fileExtension: fileExtension, expectedReplacements});
         return {
             content: [{ 
@@ -143,44 +143,44 @@ export async function performSearchReplace(dependencies: EditDependencies, fileP
             }],
         };
     }
-    
 
-    
+
+
     const validPath = await validatePath(dependencies, filePath);
     const content = await readFileInternal(dependencies, validPath, 0, Number.MAX_SAFE_INTEGER);
-    
-    
+
+
     if (typeof content !== 'string') {
         capture('server_edit_block_content_not_string', {fileExtension: fileExtension, expectedReplacements});
         throw new Error('Wrong content for file ' + filePath);
     }
-    
-    
+
+
     const config = await configManager.getConfig();
     const MAX_LINES = config.fileWriteLineLimit ?? AGENT_DEFAULTS.fileWriteLineLimit;
-    
-    
+
+
     const fileLineEnding = detectLineEnding(content);
-    
-    
+
+
     const normalizedSearch = normalizeLineEndings(block.search, fileLineEnding);
-    
-    
+
+
     let tempContent = content;
     let count = 0;
     let pos = tempContent.indexOf(normalizedSearch);
-    
+
     while (pos !== -1) {
         count++;
         pos = tempContent.indexOf(normalizedSearch, pos + 1);
     }
-    
-    
+
+
     if (count > 0 && count === expectedReplacements) {
-        
+
         let newContent = content;
-        
-        
+
+
         if (expectedReplacements === 1) {
             const searchIndex = newContent.indexOf(normalizedSearch);
             newContent = 
@@ -188,28 +188,28 @@ export async function performSearchReplace(dependencies: EditDependencies, fileP
                 normalizeLineEndings(block.replace, fileLineEnding) + 
                 newContent.substring(searchIndex + normalizedSearch.length);
         } else {
-            
+
             newContent = newContent.split(normalizedSearch).join(normalizeLineEndings(block.replace, fileLineEnding));
         }
-        
-        
+
+
         const searchLines = block.search.split('\n').length;
         const replaceLines = block.replace.split('\n').length;
         const maxLines = Math.max(searchLines, replaceLines);
         let warningMessage = "";
-        
+
         if (maxLines > MAX_LINES) {
             const problemText = searchLines > replaceLines ? 'search text' : 'replacement text';
             warningMessage = `\n\nWARNING: The ${problemText} has ${maxLines} lines (maximum: ${MAX_LINES}).
             
 RECOMMENDATION: For large search/replace operations, consider breaking them into smaller chunks with fewer lines.`;
         }
-        
+
         await writeFile(dependencies, filePath, newContent);
         capture('server_edit_block_exact_success', {fileExtension: fileExtension, expectedReplacements, hasWarning: warningMessage !== ""});
         const resolvedEditPath = resolveAbsolutePath(filePath);
 
-        
+
         const newLines = newContent.split('\n');
         const totalLines = newLines.length;
         const changePos = content.indexOf(normalizedSearch);
@@ -228,10 +228,10 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
                 type: "text",
                 text: `${statusLine}${previewContent}`
             }],
-            
-            
-            
-            
+
+
+
+
             ...(origin === 'ui' ? {
                 structuredContent: {
                     fileName: path.basename(resolvedEditPath),
@@ -242,8 +242,8 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
             } : {}),
         };
     }
-    
-    
+
+
     if (count > 0 && count !== expectedReplacements) {
         capture('server_edit_block_unexpected_count', {fileExtension: fileExtension, expectedReplacements, expectedReplacementsCount: count});
         return {
@@ -256,27 +256,27 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
             }],
         };
     }
-    
-    
+
+
     if (count === 0) {
-        
+
         const startTime = performance.now();
 
-        
-        
+
+
         const fuzzyResult = await runFuzzySearchInWorker(capture, content, block.search);
         const similarity = getSimilarityRatio(block.search, fuzzyResult.value);
-        
-        
+
+
         const executionTime = performance.now() - startTime;
-        
-        
+
+
         const diff = highlightDifferences(block.search, fuzzyResult.value);
-        
-        
+
+
         const characterCodeData = getCharacterCodeData(block.search, fuzzyResult.value);
-        
-        
+
+
         const logEntry: FuzzySearchLogEntry = {
             timestamp: new Date(),
             searchText: block.search,
@@ -295,24 +295,24 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
             uniqueCharacterCount: characterCodeData.uniqueCount,
             diffLength: characterCodeData.diffLength
         };
-        
-        
+
+
         await fuzzySearchLogger.log(logEntry);
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         const fuzzySearchData = {
             similarity: similarity,
             execution_time_ms: executionTime,
@@ -323,14 +323,14 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
             unique_character_count: characterCodeData.uniqueCount,
             total_diff_length: characterCodeData.diffLength
         };
-        
-        
+
+
         if (similarity >= FUZZY_THRESHOLD) {
-            
+
             capture('server_fuzzy_search_performed', fuzzySearchData);
-            
-            
-            
+
+
+
             return {
                 content: [{ 
                     type: "text", 
@@ -339,16 +339,16 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
                           `To replace this text, use the exact text found in the file.\n\n` +
                           `Log entry saved for analysis. Use the following command to check the log:\n` +
                           `Check log: ${await fuzzySearchLogger.getLogPath()}`
-                }],// TODO
+                }],
             };
         } else {
-            
-            
+
+
             capture('server_fuzzy_search_performed', {
                 ...fuzzySearchData,
                 below_threshold: true
             });
-            
+
             return {
                 content: [{ 
                     type: "text", 
@@ -361,7 +361,7 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
             };
         }
     }
-    
+
     throw new Error("Unexpected error during search and replace operation.");
 }
 
@@ -372,33 +372,33 @@ RECOMMENDATION: For large search/replace operations, consider breaking them into
  * @returns A formatted string showing character-level differences
  */
 function highlightDifferences(expected: string, actual: string): string {
-    
-    
-    
+
+
+
     let prefixLength = 0;
     const minLength = Math.min(expected.length, actual.length);
 
-    
+
     while (prefixLength < minLength &&
            expected[prefixLength] === actual[prefixLength]) {
         prefixLength++;
     }
 
-    
+
     let suffixLength = 0;
     while (suffixLength < minLength - prefixLength &&
            expected[expected.length - 1 - suffixLength] === actual[actual.length - 1 - suffixLength]) {
         suffixLength++;
     }
-    
-    
+
+
     const commonPrefix = expected.substring(0, prefixLength);
     const commonSuffix = expected.substring(expected.length - suffixLength);
 
     const expectedDiff = expected.substring(prefixLength, expected.length - suffixLength);
     const actualDiff = actual.substring(prefixLength, actual.length - suffixLength);
 
-    
+
     return `${commonPrefix}{-${expectedDiff}-}{+${actualDiff}+}${commonSuffix}`;
 }
 
@@ -419,11 +419,11 @@ function highlightDifferences(expected: string, actual: string): string {
 export async function handleEditBlock(args: unknown, dependencies: EditDependencies): Promise<ServerResult> {
     const parsed = EditBlockArgsSchema.parse(args);
 
-    
+
     const hasRange = parsed.range !== undefined && parsed.range !== '';
     const hasContent = parsed.content !== undefined && parsed.content !== '';
 
-    
+
     let validatedPath: string;
     let handler: FileHandler;
     try {
@@ -436,21 +436,21 @@ export async function handleEditBlock(args: unknown, dependencies: EditDependenc
 
     const hasEditRange = 'editRange' in handler && typeof handler.editRange === 'function';
 
-    
+
     if (hasRange && hasContent) {
-        
+
         let content = parsed.content;
         if (typeof content === 'string') {
             try {
                 content = JSON.parse(content);
             } catch {
-                // Leave as-is if not valid JSON - let handler decide
+
             }
         }
 
         if (hasEditRange) {
             try {
-                
+
                 await handler.editRange!(validatedPath!, parsed.range!, content, parsed.options);
                 const resolvedRangePath = resolveAbsolutePath(parsed.file_path);
                 return {
@@ -476,14 +476,14 @@ export async function handleEditBlock(args: unknown, dependencies: EditDependenc
         return createErrorResponse(`Range-based editing not supported for ${parsed.file_path}. For text files, use old_string and new_string parameters instead. If your client requires range/content parameters, set them to empty strings ("").`, dependencies.capture);
     }
 
-    
+
     if (parsed.old_string === undefined || parsed.new_string === undefined) {
         return createErrorResponse(`Text replacement requires both old_string and new_string parameters`, dependencies.capture);
     }
 
-    
-    
-    
+
+
+
     if (hasEditRange) {
         try {
             const result = await handler.editRange!(validatedPath!, '', {

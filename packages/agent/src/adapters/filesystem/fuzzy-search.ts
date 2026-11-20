@@ -43,7 +43,7 @@ export function runFuzzySearchInWorker(
 ): Promise<FuzzyMatch> {
     return new Promise((resolve, reject) => {
         const worker = new Worker(WORKER_CODE, { eval: true, workerData: { moduleUrl: CORE_MODULE_URL, text, query } });
-        
+
         worker.unref();
 
         const timer = setTimeout(() => {
@@ -60,9 +60,9 @@ export function runFuzzySearchInWorker(
             } else {
                 reject(new Error(`Fuzzy search worker failed: ${msg.error}`));
             }
-            
-            
-            
+
+
+
             worker.terminate();
         });
 

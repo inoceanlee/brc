@@ -45,7 +45,7 @@ function getChromeExecutablePath(chromeDir: string, version: string): string | u
         return chromePath;
     }
 
-    
+
     if (process.platform === 'darwin') {
         const armPath = join(chromeDir, version, 'chrome-mac-arm64', 'Google Chrome for Testing.app', 'Contents', 'MacOS', 'Google Chrome for Testing');
         if (existsSync(armPath)) {
@@ -81,12 +81,12 @@ export function findPuppeteerChrome(cacheDir = getPuppeteerCacheDir()): CachedPu
     }
 
     try {
-        
+
         const versions = readdirSync(chromeDir, { withFileTypes: true })
             .filter(entry => entry.isDirectory())
             .map(entry => entry.name)
             .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
-        
+
         for (const version of versions) {
             const executablePath = getChromeExecutablePath(chromeDir, version);
             if (executablePath) {
@@ -94,7 +94,7 @@ export function findPuppeteerChrome(cacheDir = getPuppeteerCacheDir()): CachedPu
             }
         }
     } catch {
-        // Ignore errors reading cache directory
+
     }
 
     return undefined;
@@ -153,14 +153,14 @@ function findSystemChrome(): string | undefined {
             '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
         ]
         : [
-            
+
             '/usr/bin/google-chrome',
             '/usr/bin/google-chrome-stable',
             '/usr/bin/chromium',
             '/usr/bin/chromium-browser',
             '/snap/bin/chromium',
         ];
-    
+
     return paths.find(p => existsSync(p));
 }
 
@@ -169,13 +169,13 @@ function findSystemChrome(): string | undefined {
  * Returns the executable path after installation
  */
 async function installChrome(): Promise<CachedPuppeteerChrome> {
-    
+
     const { install, Browser, detectBrowserPlatform, resolveBuildId } = await import('@puppeteer/browsers' as string);
-    
+
     const cacheDir = getPuppeteerCacheDir();
     const platform = detectBrowserPlatform()!;
     const buildId = await resolveBuildId(Browser.CHROME, platform, 'stable');
-    
+
     console.error('Downloading Chrome for PDF generation (this may take a few minutes)...');
     await fs.mkdir(cacheDir, { recursive: true });
 
@@ -188,9 +188,9 @@ async function installChrome(): Promise<CachedPuppeteerChrome> {
             process.stderr.write(`\rDownloading Chrome: ${percent}%`);
         },
     });
-    
+
     console.error('\nChrome download complete.');
-    
+
     return {
         executablePath: installedBrowser.executablePath,
     };
@@ -202,34 +202,34 @@ async function installChrome(): Promise<CachedPuppeteerChrome> {
  * Results are cached to avoid repeated lookups
  */
 async function getChromePath(): Promise<string | undefined> {
-    
+
     if (cachedChromePath !== null) {
         return cachedChromePath;
     }
-    
-    
+
+
     if (chromeCheckPromise) {
         return chromeCheckPromise;
     }
-    
-    
+
+
     chromeCheckPromise = (async () => {
-        
+
         const cachedChrome = findPuppeteerChrome();
         if (cachedChrome) {
             await pruneOldPuppeteerChromeBuilds(cachedChrome.executablePath);
             cachedChromePath = cachedChrome.executablePath;
             return cachedChrome.executablePath;
         }
-        
-        
+
+
         const systemChrome = findSystemChrome();
         if (systemChrome) {
             cachedChromePath = systemChrome;
             return systemChrome;
         }
-        
-        
+
+
         try {
             const installedChrome = await installChrome();
             await pruneOldPuppeteerChromeBuilds(installedChrome.executablePath);
@@ -241,7 +241,7 @@ async function getChromePath(): Promise<string | undefined> {
             return undefined;
         }
     })();
-    
+
     const result = await chromeCheckPromise;
     chromeCheckPromise = null;
     return result;
@@ -253,7 +253,7 @@ async function getChromePath(): Promise<string | undefined> {
  * Returns immediately, download happens in background.
  */
 export function ensureChromeAvailable(): void {
-    
+
     getChromePath().catch((error) => {
         console.error('Background Chrome check failed:', error);
     });
@@ -275,7 +275,7 @@ export async function parsePdfToMarkdown(source: string, pageNumbers: number[] |
     try {
         const data = await loadPdfToBuffer(source);
 
-        
+
         return await pdf2md(new Uint8Array(data), pageNumbers);
 
     } catch (error) {
@@ -286,9 +286,9 @@ export async function parsePdfToMarkdown(source: string, pageNumbers: number[] |
 
 export async function parseMarkdownToPdf(markdown: string, options: any = {}): Promise<Buffer> {
     try {
-        
+
         const chromePath = await getChromePath();
-        
+
         if (chromePath) {
             options = {
                 ...options,
@@ -298,12 +298,12 @@ export async function parseMarkdownToPdf(markdown: string, options: any = {}): P
                 }
             };
         }
-        
+
         const pdf = await mdToPdf({ content: markdown }, options);
 
         return pdf.content;
     } catch (error) {
-        
+
         const errorMessage = error instanceof Error ? error.message : String(error);
         if (errorMessage.includes('Could not find Chrome')) {
             throw new Error(

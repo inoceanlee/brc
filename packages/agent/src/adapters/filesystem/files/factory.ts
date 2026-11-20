@@ -43,32 +43,32 @@ export class FileHandlerFactory {
  * @returns FileHandler instance that can handle this file
  */
 async getFileHandler(filePath: string): Promise<FileHandler> {
-    
+
     if (this.docx.canHandle(filePath)) {
         return this.docx;
     }
 
-    
+
     if (this.pdf.canHandle(filePath)) {
         return this.pdf;
     }
 
-    
+
     if (this.excel.canHandle(filePath)) {
         return this.excel;
     }
 
-    
+
     if (this.image.canHandle(filePath)) {
         return this.image;
     }
 
-    
+
     if (await this.binary.canHandle(filePath)) {
         return this.binary;
     }
 
-    
+
     return this.text;
 }
 

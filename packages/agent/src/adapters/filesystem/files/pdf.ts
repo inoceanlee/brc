@@ -29,22 +29,22 @@ export class PdfFileHandler implements FileHandler {
         const { offset = 0, length } = options ?? {};
 
         try {
-            
-            
-            
-            
-            
-            
-            
+
+
+
+
+
+
+
             let range: any;
             if (length !== undefined) {
                 range = { offset, length };
             } else if (offset > 0) {
-                 
-                 
-                 
-                 
-                 
+
+
+
+
+
                  range = { offset, length: 0 }; 
             } else {
                 range = [];
@@ -53,7 +53,7 @@ export class PdfFileHandler implements FileHandler {
             const pdfResult = await parsePdfToMarkdown(path, range);
 
             return {
-                content: '', // Main content is in metadata.pages
+                content: '',
                 mimeType: 'application/pdf',
                 metadata: {
                     isPdf: true,
@@ -80,11 +80,11 @@ export class PdfFileHandler implements FileHandler {
      * Write PDF - creates from markdown or operations
      */
     async write(path: string, content: any, mode?: 'rewrite' | 'append'): Promise<void> {
-        
+
         if (typeof content === 'string') {
             await parseMarkdownToPdf(content, path);
         } else if (Array.isArray(content)) {
-            
+
             const resultBuffer = await editPdf(path, content);
             await fs.writeFile(path, resultBuffer);
         } else {
@@ -97,8 +97,8 @@ export class PdfFileHandler implements FileHandler {
      */
     async editRange(path: string, range: string, content: any, options?: Record<string, any>): Promise<EditResult> {
         try {
-            
-            
+
+
             const resultBuffer = await editPdf(path, content);
             await fs.writeFile(options?.outputPath || path, resultBuffer);
             return { success: true, editsApplied: 1 };
@@ -118,7 +118,7 @@ export class PdfFileHandler implements FileHandler {
     async getInfo(path: string): Promise<FileInfo> {
         const stats = await fs.stat(path);
 
-        
+
         let metadata: any = { isPdf: true };
         try {
             const pdfResult = await parsePdfToMarkdown(path, { offset: 0, length: 0 }); 
@@ -129,7 +129,7 @@ export class PdfFileHandler implements FileHandler {
                 totalPages: pdfResult.metadata.totalPages
             };
         } catch {
-            // If we can't parse, just return basic info
+
         }
 
         return {

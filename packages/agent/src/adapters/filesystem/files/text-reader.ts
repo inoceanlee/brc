@@ -4,15 +4,15 @@ import { createInterface } from 'readline';
 import type { FileResult } from './base.js';
 
 const FILE_SIZE_LIMITS = {
-    LARGE_FILE_THRESHOLD: 10 * 1024 * 1024,  // 10MB
-    LINE_COUNT_LIMIT: 10 * 1024 * 1024,      // 10MB for line counting
+    LARGE_FILE_THRESHOLD: 10 * 1024 * 1024,
+    LINE_COUNT_LIMIT: 10 * 1024 * 1024,
 } as const;
 
 const READ_PERFORMANCE_THRESHOLDS = {
-    SMALL_READ_THRESHOLD: 100,    // For very small reads
-    DEEP_OFFSET_THRESHOLD: 1000,  // For byte estimation
-    SAMPLE_SIZE: 10000,           // Sample size for estimation
-    CHUNK_SIZE: 8192,             // 8KB chunks for reverse reading
+    SMALL_READ_THRESHOLD: 100,
+    DEEP_OFFSET_THRESHOLD: 1000,
+    SAMPLE_SIZE: 10000,
+    CHUNK_SIZE: 8192,
 } as const;
 
 export class TextReader {
@@ -53,7 +53,6 @@ export class TextReader {
                 return this.countLines(content);
             }
         } catch (error) {
-            // If we can't read the file, return undefined
         }
         return undefined;
     }
@@ -74,8 +73,8 @@ export class TextReader {
         const encoding = await this.detectTextEncoding(filePath);
         const totalLines = await this.getFileLineCount(filePath, signal, encoding);
 
-        
-        
+
+
         if (encoding === 'utf16le') {
             if (offset < 0) {
                 return await this.readFromEndWithReadline(
@@ -89,7 +88,7 @@ export class TextReader {
             );
         }
 
-        
+
         if (offset < 0) {
             const requestedLines = Math.abs(offset);
 
@@ -100,7 +99,6 @@ export class TextReader {
                 return await this.readFromEndWithReadline(filePath, requestedLines, mimeType, includeStatusMessage, totalLines, signal);
             }
         }
-        // For positive offsets
         else {
             if (fileSize < FILE_SIZE_LIMITS.LARGE_FILE_THRESHOLD || offset === 0) {
                 return await this.readFromStartWithReadline(filePath, offset, length, mimeType, includeStatusMessage, totalLines, signal);
@@ -271,7 +269,7 @@ export class TextReader {
         fileTotalLines?: number,
         signal?: AbortSignal
     ): Promise<FileResult> {
-        
+
         const rl = createInterface({
             input: createReadStream(filePath, { signal }),
             crlfDelay: Infinity
@@ -292,7 +290,7 @@ export class TextReader {
             return await this.readFromStartWithReadline(filePath, offset, length, mimeType, includeStatusMessage, fileTotalLines, signal);
         }
 
-        
+
         const avgLineLength = bytesRead / sampleLines;
         const estimatedBytePosition = Math.floor(offset * avgLineLength);
 

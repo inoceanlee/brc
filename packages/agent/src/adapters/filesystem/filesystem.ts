@@ -23,9 +23,9 @@ export interface FilesystemDependencies {
 
 
 const FILE_OPERATION_TIMEOUTS = {
-    PATH_VALIDATION: 10000,    // 10 seconds
-    URL_FETCH: 30000,          // 30 seconds
-    FILE_READ: 30000,          // 30 seconds
+    PATH_VALIDATION: 10000,
+    URL_FETCH: 30000,
+    FILE_READ: 30000,
 } as const;
 
 
@@ -37,7 +37,7 @@ const FILE_OPERATION_TIMEOUTS = {
 export const READ_OPERATION_TIMEOUT_MS = 3 * 60 * 1000; 
 
 const FILE_SIZE_LIMITS = {
-    LINE_COUNT_LIMIT: 10 * 1024 * 1024,      // 10MB for line counting
+    LINE_COUNT_LIMIT: 10 * 1024 * 1024,
 } as const;
 
 
@@ -122,11 +122,11 @@ async function getAllowedDirs(configManager: AgentConfigManager): Promise<string
     if (config.allowedDirectories && Array.isArray(config.allowedDirectories)) {
         allowedDirectories = config.allowedDirectories;
     } else {
-        
+
         allowedDirectories = [
             os.homedir()   
         ];
-        
+
         await configManager.setValue('allowedDirectories', allowedDirectories);
     }
     return allowedDirectories;
@@ -189,7 +189,7 @@ export function invalidateRealpathCache(target?: string): void {
 async function validateParentDirectories(directoryPath: string): Promise<boolean> {
     const parentDir = path.dirname(directoryPath);
 
-    
+
     if (parentDir === directoryPath || parentDir === path.dirname(parentDir)) {
         return false;
     }
@@ -205,7 +205,7 @@ async function validateParentDirectories(directoryPath: string): Promise<boolean
  * @returns boolean True if path is allowed
  */
 async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: string): Promise<boolean> {
-    
+
     const allowedDirectories = await getAllowedDirs(configManager);
     if (allowedDirectories.includes('/') || allowedDirectories.length === 0) {
         return true;
@@ -223,27 +223,27 @@ async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: str
         }),
     );
 
-    
+
     const isAllowed = resolvedAllowed.some(allowedDir => {
         let normalizedAllowedDir = normalizePath(allowedDir);
         if (normalizedAllowedDir.slice(-1) === path.sep) {
             normalizedAllowedDir = normalizedAllowedDir.slice(0, -1);
         }
 
-        
+
         if (normalizedPathToCheck === normalizedAllowedDir) {
             return true;
         }
 
-        
-        
-        
+
+
+
         const subdirCheck = normalizedPathToCheck.startsWith(normalizedAllowedDir + path.sep);
         if (subdirCheck) {
             return true;
         }
 
-        
+
         if (normalizedAllowedDir === 'c:' && process.platform === 'win32') {
             return normalizedPathToCheck.startsWith('c:');
         }
@@ -266,19 +266,19 @@ async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: str
 export async function validatePath(dependencies: FilesystemDependencies, requestedPath: string): Promise<string> {
     const { configManager, capture } = dependencies;
     const validationOperation = async (): Promise<string> => {
-        
+
         const expandedPath = expandHome(requestedPath);
 
-        
+
         const absoluteOriginal = path.isAbsolute(expandedPath)
             ? path.resolve(expandedPath)
             : path.resolve(process.cwd(), expandedPath);
 
-        
-        
-        
-        
-        
+
+
+
+
+
         let resolvedRealPath: string | null = null;
         try {
             resolvedRealPath = await resolveRealPath(absoluteOriginal);
@@ -292,11 +292,11 @@ export async function validatePath(dependencies: FilesystemDependencies, request
         }
 
         if (resolvedRealPath === null) {
-            
-            
-            
-            
-            
+
+
+
+
+
             const parentDir = path.dirname(absoluteOriginal);
             const basename = path.basename(absoluteOriginal);
             const resolvedParent = await resolveRealPathOrNull(parentDir);
@@ -321,7 +321,7 @@ export async function validatePath(dependencies: FilesystemDependencies, request
 
         const pathForNextCheck = resolvedRealPath ?? absoluteOriginal;
 
-        
+
         if (!(await isPathAllowed(configManager, pathForNextCheck))) {
             capture('server_path_validation_error', {
                 error: 'Path not allowed',
@@ -331,38 +331,38 @@ export async function validatePath(dependencies: FilesystemDependencies, request
             throw new Error(`Path not allowed: ${requestedPath}. Must be within one of these directories: ${(await getAllowedDirs(configManager)).join(', ')}`);
         }
 
-        
-        
-        
-        
 
-        
+
+
+
+
+
         try {
-            
+
             await fs.stat(pathForNextCheck);
             return pathForNextCheck;
         } catch (error) {
-            
+
             if (await validateParentDirectories(pathForNextCheck)) {
-                
-                
+
+
                 return pathForNextCheck;
             }
-            
+
             return pathForNextCheck;
         }
     };
 
-    
+
     const result = await withTimeout(
         validationOperation(),
         FILE_OPERATION_TIMEOUTS.PATH_VALIDATION,
-        `Path validation operation`, // Generic name for telemetry
+        `Path validation operation`,
         null
     );
 
     if (result === null) {
-        
+
         capture('server_path_validation_timeout', {
             timeoutMs: FILE_OPERATION_TIMEOUTS.PATH_VALIDATION
         });
@@ -389,10 +389,10 @@ type FileResultPayloads = PdfPayload;
  * @returns File content or file result with metadata
  */
 export async function readFileFromUrl(url: string): Promise<FileResult> {
-    
+
     const { isImageFile } = await import('../../core/tools/mime-types.js');
 
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FILE_OPERATION_TIMEOUTS.URL_FETCH);
 
@@ -401,21 +401,21 @@ export async function readFileFromUrl(url: string): Promise<FileResult> {
             signal: controller.signal
         });
 
-        
+
         clearTimeout(timeoutId);
 
         if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}`);
         }
 
-        
+
         const contentType = response.headers.get('content-type') || 'text/plain';
         const isImage = isImageFile(contentType);
         const isPdf = isPdfFile(contentType) || url.toLowerCase().endsWith('.pdf');
 
-        
+
         if (isPdf) {
-            
+
             const pdfResult = await parsePdfToMarkdown(url);
 
             return {
@@ -432,22 +432,22 @@ export async function readFileFromUrl(url: string): Promise<FileResult> {
             };
 
         } else if (isImage) {
-            
+
             const buffer = await response.arrayBuffer();
             const content = Buffer.from(buffer).toString('base64');
 
             return { content, mimeType: contentType, metadata: { isImage } };
         } else {
-            
+
             const content = await response.text();
 
             return { content, mimeType: contentType, metadata: { isImage } };
         }
     } catch (error) {
-        
+
         clearTimeout(timeoutId);
 
-        
+
         const errorMessage = error instanceof DOMException && error.name === 'AbortError'
             ? `URL fetch timed out after ${FILE_OPERATION_TIMEOUTS.URL_FETCH}ms: ${url}`
             : `Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`;
@@ -471,22 +471,22 @@ export async function readFileFromDisk(
     const { offset = 0, sheet, range } = options ?? {};
     let { length } = options ?? {};
 
-    
+
     if (!filePath || typeof filePath !== 'string') {
         throw new Error('Invalid file path provided');
     }
 
-    
+
     if (length === undefined) {
         length = await getDefaultReadLength(configManager);
     }
 
     const validPath = await validatePath(dependencies, filePath);
 
-    
+
     const fileExtension = getFileExtension(validPath);
 
-    
+
     try {
         const stats = await fs.stat(validPath);
         if (stats.isDirectory()) {
@@ -511,20 +511,20 @@ export async function readFileFromDisk(
             return dirResult;
         }
     } catch (error) {
-        
-        
+
+
         const err = error as NodeJS.ErrnoException;
         if (err.message?.includes('Directory listing') || err.message?.includes('list_directory')) {
             throw error;
         }
-        // stat() failed (e.g. ENOENT) — fall through to the read path below
+
     }
 
-    
+
     try {
         const stats = await fs.stat(validPath);
 
-        
+
         capture('server_read_file', {
             fileExtension: fileExtension,
             offset: offset,
@@ -535,16 +535,16 @@ export async function readFileFromDisk(
         console.error('error catch ' + error);
         const errorMessage = error instanceof Error ? error.message : String(error);
         capture('server_read_file_error', { error: errorMessage, fileExtension: fileExtension });
-        // If we can't stat the file, continue anyway and let the read operation handle errors
+
     }
 
-    
-    
+
+
     const readOperation = async (signal: AbortSignal) => {
-        
+
         const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
-        
+
         const result = await handler.read(validPath, {
             offset,
             length,
@@ -554,14 +554,14 @@ export async function readFileFromDisk(
             signal
         });
 
-        
-        
-        
+
+
+
         let content: string;
         if (typeof result.content === 'string') {
             content = result.content;
         } else if (result.metadata?.isImage) {
-            
+
             content = result.content.toString('base64');
         } else {
             content = result.content.toString('utf8');
@@ -574,7 +574,7 @@ export async function readFileFromDisk(
         };
     };
 
-    
+
     let result;
     try {
         result = await runWithAbortableTimeout(
@@ -584,8 +584,8 @@ export async function readFileFromDisk(
         );
     } catch (error) {
         const err = error as NodeJS.ErrnoException;
-        
-        
+
+
         if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ETIMEDOUT') {
             throw buildPermissionError(filePath, err.code);
         }
@@ -593,7 +593,7 @@ export async function readFileFromDisk(
     }
 
     if (result == null) {
-        
+
         throw new Error('Failed to read the file');
     }
 
@@ -628,14 +628,14 @@ export async function readFile(
  */
 export async function readFileInternal(dependencies: FilesystemDependencies, filePath: string, offset: number = 0, length?: number): Promise<string> {
     const { configManager } = dependencies;
-    
+
     if (length === undefined) {
         length = await getDefaultReadLength(configManager);
     }
 
     const validPath = await validatePath(dependencies, filePath);
 
-    
+
     const fileExtension = getFileExtension(validPath);
     const { mimeType, isImage } = await getMimeTypeInfo(validPath);
 
@@ -643,32 +643,32 @@ export async function readFileInternal(dependencies: FilesystemDependencies, fil
         throw new Error('Cannot read image files as text for internal operations');
     }
 
-    
-    
-    
 
-    
-    
-    
+
+
+
+
+
+
     const content = await runWithAbortableTimeout(
         (signal) => fs.readFile(validPath, { encoding: 'utf8', signal }),
         READ_OPERATION_TIMEOUT_MS,
         `Internal read for ${filePath}`
     );
 
-    
+
     if (offset === 0 && length >= Number.MAX_SAFE_INTEGER) {
-        
+
         return content;
     }
 
-    
+
     const lines = TextFileHandler.splitLinesPreservingEndings(content);
 
-    
+
     const selectedLines = lines.slice(offset, offset + length);
 
-    
+
     return selectedLines.join('');
 }
 
@@ -676,14 +676,14 @@ export async function writeFile(dependencies: FilesystemDependencies, filePath: 
     const { capture } = dependencies;
     const validPath = await validatePath(dependencies, filePath);
 
-    
+
     const fileExtension = getFileExtension(validPath);
 
-    
+
     const contentBytes = Buffer.from(content).length;
     const lineCount = TextFileHandler.countLines(content);
 
-    
+
     capture('server_write_file', {
         fileExtension: fileExtension,
         mode: mode,
@@ -691,10 +691,10 @@ export async function writeFile(dependencies: FilesystemDependencies, filePath: 
         lineCount: lineCount
     });
 
-    
+
     const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
-    
+
     await handler.write(validPath, content, mode);
     invalidateRealpathCache();
 }
@@ -715,7 +715,7 @@ export async function readMultipleFiles(dependencies: FilesystemDependencies, pa
             try {
                 const validPath = await validatePath(dependencies, filePath);
                 const fileResult = await readFile(dependencies, validPath);
-                
+
                 let content: string;
                 if (typeof fileResult.content === 'string') {
                     content = fileResult.content;
@@ -772,7 +772,7 @@ export async function listDirectory(dependencies: FilesystemDependencies, dirPat
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
             const displayPath = relativePath || path.basename(currentPath);
-            
+
             if (err.code === 'ENOENT') {
                 results.push(`[NOT_FOUND] ${displayPath} — path does not exist`);
             } else if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ETIMEDOUT') {
@@ -783,7 +783,7 @@ export async function listDirectory(dependencies: FilesystemDependencies, dirPat
             return;
         }
 
-        
+
         const totalEntries = entries.length;
         let entriesToShow = entries;
         let filteredCount = 0;
@@ -797,24 +797,24 @@ export async function listDirectory(dependencies: FilesystemDependencies, dirPat
             const fullPath = path.join(currentPath, entry.name);
             const displayPath = relativePath ? path.join(relativePath, entry.name) : entry.name;
 
-            
+
             results.push(`${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${displayPath}`);
 
-            
+
             if (entry.isDirectory() && currentDepth > 1) {
                 try {
-                    
+
                     await validatePath(dependencies, fullPath);
                     await listRecursive(fullPath, currentDepth - 1, displayPath, false);
                 } catch (error) {
-                    
-                    
+
+
                     continue;
                 }
             }
         }
 
-        
+
         if (filteredCount > 0) {
             const displayPath = relativePath || path.basename(currentPath);
             results.push(`[WARNING] ${displayPath}: ${filteredCount} items hidden (showing first ${MAX_NESTED_ITEMS} of ${totalEntries} total)`);
@@ -834,8 +834,8 @@ export async function moveFile(dependencies: FilesystemDependencies, sourcePath:
 
 export async function searchFiles(dependencies: FilesystemDependencies, searchManager: SearchManager, rootPath: string, pattern: string): Promise<string[]> {
     const { capture } = dependencies;
-    
-    
+
+
 
     try {
         const result = await searchManager.startSearch({
@@ -843,18 +843,18 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
             pattern,
             searchType: 'files',
             ignoreCase: true,
-            maxResults: 5000, // Higher limit for compatibility
-            earlyTermination: true, // Use early termination for better performance
+            maxResults: 5000,
+            earlyTermination: true,
         });
 
         const sessionId = result.sessionId;
 
-        
+
         let allResults: string[] = [];
         let isComplete = result.isComplete;
         let startTime = Date.now();
 
-        
+
         for (const searchResult of result.results) {
             if (searchResult.type === 'file') {
                 allResults.push(searchResult.file);
@@ -867,21 +867,21 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
             const results = searchManager.readSearchResults(sessionId);
             isComplete = results.isComplete;
 
-            
+
             for (const searchResult of results.results) {
                 if (searchResult.file !== '__LAST_READ_MARKER__' && searchResult.type === 'file') {
                     allResults.push(searchResult.file);
                 }
             }
 
-            
+
             if (Date.now() - startTime > 30000) {
                 searchManager.terminateSearch(sessionId);
                 break;
             }
         }
 
-        
+
         capture('server_search_files_complete', {
             resultsCount: allResults.length,
             patternLength: pattern.length,
@@ -890,7 +890,7 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
 
         return allResults;
     } catch (error) {
-        
+
         capture('server_search_files_ripgrep_fallback', {
             error: error instanceof Error ? error.message : 'Unknown error'
         });
@@ -932,11 +932,11 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
     }
 
     try {
-        
+
         const validPath = await validatePath(dependencies, rootPath);
         await search(validPath);
 
-        
+
         capture('server_search_files_complete', {
             resultsCount: results.length,
             patternLength: pattern.length,
@@ -945,14 +945,14 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
 
         return results;
     } catch (error) {
-        
+
         capture('server_search_files_error', {
             errorType: error instanceof Error ? error.name : 'Unknown',
             error: 'Error with root path',
             isRootPathError: true
         });
 
-        
+
         throw error;
     }
 }
@@ -960,7 +960,7 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
 export async function getFileInfo(dependencies: FilesystemDependencies, filePath: string): Promise<Record<string, any>> {
     const validPath = await validatePath(dependencies, filePath);
 
-    
+
     const stats = await fs.stat(validPath);
     const fallbackInfo = {
         size: stats.size,
@@ -974,20 +974,20 @@ export async function getFileInfo(dependencies: FilesystemDependencies, filePath
         metadata: undefined as Record<string, any> | undefined,
     };
 
-    
+
     const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
-    
+
     let fileInfo;
     try {
         fileInfo = await handler.getInfo(validPath);
     } catch (error) {
-        
+
         fileInfo = fallbackInfo;
     }
 
-    
-    
+
+
     const info: Record<string, any> = {
         size: fileInfo.size ?? fallbackInfo.size,
         created: fileInfo.created ?? fallbackInfo.created,
@@ -999,27 +999,27 @@ export async function getFileInfo(dependencies: FilesystemDependencies, filePath
         fileType: fileInfo.fileType ?? fallbackInfo.fileType,
     };
 
-    
+
     if (fileInfo.metadata) {
-        
+
         if (fileInfo.metadata.lineCount !== undefined) {
             info.lineCount = fileInfo.metadata.lineCount;
             info.lastLine = fileInfo.metadata.lineCount - 1;
             info.appendPosition = fileInfo.metadata.lineCount;
         }
 
-        
+
         if (fileInfo.metadata.sheets) {
             info.sheets = fileInfo.metadata.sheets;
             info.isExcelFile = true;
         }
 
-        
+
         if (fileInfo.metadata.isImage) {
             info.isImage = true;
         }
 
-        
+
         if (fileInfo.metadata.isPdf) {
             info.isPdf = true;
             info.totalPages = fileInfo.metadata.totalPages;
@@ -1027,7 +1027,7 @@ export async function getFileInfo(dependencies: FilesystemDependencies, filePath
             if (fileInfo.metadata.author) info.author = fileInfo.metadata.author;
         }
 
-        
+
         if (fileInfo.metadata.isBinary) {
             info.isBinary = true;
         }
@@ -1057,7 +1057,7 @@ export async function writePdf(
     const fileExtension = getFileExtension(validPath);
 
     if (typeof content === 'string') {
-        
+
         capture('server_write_pdf', {
             fileExtension: fileExtension,
             contentLength: content.length,
@@ -1065,18 +1065,18 @@ export async function writePdf(
         });
 
         const pdfBuffer = await parseMarkdownToPdf(content, options);
-        
+
         const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
         await fs.writeFile(targetPath, pdfBuffer);
         invalidateRealpathCache();
     } else if (Array.isArray(content)) {
 
-        
+
         const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
 
         const operations: PdfOperations[] = [];
 
-        
+
         for (const o of content) {
             if (o.type === 'insert') {
                 if (o.sourcePdfPath) {
@@ -1094,10 +1094,10 @@ export async function writePdf(
             insertCount: operations.filter(op => op.type === 'insert').length
         });
 
-        
+
         const modifiedPdfBuffer = await editPdf(validPath, operations);
 
-        
+
         await fs.writeFile(targetPath, modifiedPdfBuffer);
         invalidateRealpathCache();
     } else {
@@ -1149,7 +1149,7 @@ export async function getDefaultEditorMetadata(filePath: string): Promise<Defaul
         if (cacheKey) {
             defaultEditorCache.set(cacheKey, { metadata: {}, expiresAt: Date.now() + DEFAULT_EDITOR_NEGATIVE_CACHE_MS });
         }
-        // Generic UI fallback is good enough if detection fails.
+
     }
 
     return {};

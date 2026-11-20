@@ -92,15 +92,15 @@ export interface SearchSessionOptions {
   }> {
     if (this.stopped) throw new Error('Search manager is stopped.');
     const sessionId = `search_${++this.sessionCounter}_${Date.now()}`;
-    
-    
+
+
     const validPath = await validatePath(this.dependencies, options.rootPath);
     if (this.stopped) throw new Error('Search manager is stopped.');
 
-    
+
     const args = this.buildRipgrepArgs({ ...options, rootPath: validPath });
-    
-    
+
+
     let rgPath: string;
     try {
       rgPath = await getRipgrepPath();
@@ -108,15 +108,15 @@ export interface SearchSessionOptions {
       throw new Error(`Failed to locate ripgrep binary: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (this.stopped) throw new Error('Search manager is stopped.');
-    
-    
+
+
     const rgProcess = spawn(rgPath, args, { windowsHide: true });  
-    
+
     if (!rgProcess.pid) {
       throw new Error('Failed to start ripgrep process');
     }
 
-    
+
     const session: SearchSession = {
       id: sessionId,
       process: rgProcess,
@@ -133,16 +133,16 @@ export interface SearchSessionOptions {
 
     this.sessions.set(sessionId, session);
 
-    
+
     this.setupProcessHandlers(session);
 
-    
+
     this.startCleanupIfNeeded();
 
-    
-    
+
+
     const timeoutMs = options.timeout ?? (this.isExactFilename(options.pattern) ? 1500 : undefined);
-    
+
     let killTimer: NodeJS.Timeout | null = null;
     if (timeoutMs) {
       killTimer = setTimeout(() => {
@@ -152,7 +152,7 @@ export interface SearchSessionOptions {
       }, timeoutMs);
     }
 
-    
+
     session.process.once('close', () => {
       if (killTimer) {
         clearTimeout(killTimer);
@@ -176,9 +176,9 @@ export interface SearchSessionOptions {
       validatedPath: validPath
     });
 
-    
-    
-    
+
+
+
     const shouldSearchExcel = options.searchType === 'content' &&
       this.shouldIncludeExcelSearch(options.filePattern, validPath);
 
@@ -188,23 +188,23 @@ export interface SearchSessionOptions {
         options.pattern,
         options.ignoreCase !== false,
         options.maxResults,
-        options.filePattern,  // Pass filePattern to filter Excel files too
+        options.filePattern,
         options.literalSearch  
       ).then(excelResults => {
-        
+
         for (const result of excelResults) {
           session.results.push(result);
           session.totalMatches++;
         }
       }).catch((err) => {
-        
+
         this.dependencies.capture('excel_search_error', { error: err instanceof Error ? err.message : String(err) });
       });
       this.backgroundSearches.add(background);
       void background.then(() => this.backgroundSearches.delete(background), () => this.backgroundSearches.delete(background));
     }
 
-    
+
     const shouldSearchDocx = options.searchType === 'content' &&
       this.shouldIncludeDocxSearch(options.filePattern, validPath);
 
@@ -228,8 +228,8 @@ export interface SearchSessionOptions {
       void background.then(() => this.backgroundSearches.delete(background), () => this.backgroundSearches.delete(background));
     }
 
-    
-    
+
+
     const firstChunk = new Promise<void>(resolve => {
       const onData = () => {
         session.process.stdout?.off('data', onData);
@@ -239,7 +239,7 @@ export interface SearchSessionOptions {
       setTimeout(resolve, 40); 
     });
 
-    
+
     await firstChunk;
 
     return {
@@ -273,15 +273,15 @@ export interface SearchSessionOptions {
     wasIncomplete?: boolean;      
   } {
     const session = this.sessions.get(sessionId);
-    
+
     if (!session) {
       throw new Error(`Search session ${sessionId} not found`);
     }
 
-    
+
     const allResults = session.results.filter(r => r.file !== '__LAST_READ_MARKER__');
-    
-    
+
+
     if (offset < 0) {
       const tailCount = Math.abs(offset);
       const tailResults = allResults.slice(-tailCount);
@@ -289,17 +289,17 @@ export interface SearchSessionOptions {
         results: tailResults,
         returnedCount: tailResults.length,
         totalResults: session.totalMatches + session.totalContextLines,
-        totalMatches: session.totalMatches, // Actual matches only
+        totalMatches: session.totalMatches,
         isComplete: session.isComplete,
-        isError: session.isError && !!session.error?.trim(), // Only error if we have actual errors
+        isError: session.isError && !!session.error?.trim(),
         error: session.error?.trim() || undefined,
-        hasMoreResults: false, // Tail always returns what's available
+        hasMoreResults: false,
         runtime: Date.now() - session.startTime,
         wasIncomplete: session.wasIncomplete
       };
     }
 
-    
+
     const slicedResults = allResults.slice(offset, offset + length);
     const hasMoreResults = offset + length < allResults.length || !session.isComplete;
 
@@ -309,9 +309,9 @@ export interface SearchSessionOptions {
       results: slicedResults,
       returnedCount: slicedResults.length,
       totalResults: session.totalMatches + session.totalContextLines,
-      totalMatches: session.totalMatches, // Actual matches only
+      totalMatches: session.totalMatches,
       isComplete: session.isComplete,
-      isError: session.isError && !!session.error?.trim(), // Only error if we have actual errors
+      isError: session.isError && !!session.error?.trim(),
       error: session.error?.trim() || undefined,
       hasMoreResults,
       runtime: Date.now() - session.startTime,
@@ -324,7 +324,7 @@ export interface SearchSessionOptions {
    */
   terminateSearch(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
-    
+
     if (!session) {
       return false;
     }
@@ -333,9 +333,9 @@ export interface SearchSessionOptions {
       session.process.kill('SIGTERM');
     }
 
-    
-    
-    
+
+
+
     return true;
   }
 
@@ -381,37 +381,37 @@ export interface SearchSessionOptions {
   ): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
 
-    
-    
+
+
     const searchTerm = ignoreCase ? pattern.toLowerCase() : pattern;
 
-    
+
     let excelFiles = await this.findExcelFiles(rootPath);
 
-    
+
     if (filePattern) {
       const patterns = filePattern.split('|').map(p => p.trim()).filter(Boolean);
       excelFiles = excelFiles.filter(filePath => {
         const fileName = path.basename(filePath);
         return patterns.some(pat => {
-          
+
           if (pat.includes('*')) {
-            
-            
-            
-            
+
+
+
+
             const regexPat = pat
               .replace(/[.+^${}()|[\]\\]/g, '\\$&') 
               .replace(/\*/g, '.*');                  
             return new RegExp(`^${regexPat}$`, 'i').test(fileName);
           }
-          
+
           return fileName.toLowerCase() === pat.toLowerCase();
         });
       });
     }
 
-    
+
     const ExcelJS = await import('exceljs');
 
     for (const filePath of excelFiles) {
@@ -421,17 +421,17 @@ export interface SearchSessionOptions {
         const workbook = new ExcelJS.default.Workbook();
         await workbook.xlsx.readFile(filePath);
 
-        
+
         for (const worksheet of workbook.worksheets) {
           if (maxResults && results.length >= maxResults) break;
 
           const sheetName = worksheet.name;
 
-          
+
           worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
             if (maxResults && results.length >= maxResults) return;
 
-            
+
             const rowValues: string[] = [];
             row.eachCell({ includeEmpty: false }, (cell) => {
               if (cell.value === null || cell.value === undefined) return;
@@ -456,7 +456,7 @@ export interface SearchSessionOptions {
               }
             });
 
-            
+
             const rowText = rowValues.join(' ');
 
             const textToSearch = ignoreCase ? rowText.toLowerCase() : rowText;
@@ -474,7 +474,7 @@ export interface SearchSessionOptions {
           });
         }
       } catch (error) {
-        
+
         continue;
       }
     }
@@ -497,7 +497,7 @@ export interface SearchSessionOptions {
           const fullPath = path.join(dir, entry.name);
 
           if (entry.isDirectory()) {
-            
+
             if (!entry.name.startsWith('.') && entry.name !== 'node_modules') {
               await walk(fullPath);
             }
@@ -506,11 +506,11 @@ export interface SearchSessionOptions {
           }
         }
       } catch {
-        // Skip directories we can't read
+
       }
     }
 
-    
+
     try {
       const stats = await fs.stat(rootPath);
       if (stats.isFile() && fileHandlers.isExcelFile(rootPath)) {
@@ -519,7 +519,7 @@ export interface SearchSessionOptions {
         await walk(rootPath);
       }
     } catch {
-      // Path doesn't exist or can't be accessed
+
     }
 
     return excelFiles;
@@ -564,8 +564,8 @@ export interface SearchSessionOptions {
   ): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
 
-    
-    
+
+
     const searchTerm = ignoreCase ? pattern.toLowerCase() : pattern;
 
     let docxFiles = await this.findDocxFiles(rootPath);
@@ -593,7 +593,7 @@ export interface SearchSessionOptions {
         const buf = await fs.readFile(filePath);
         const zip = new PizZip(buf);
 
-        
+
         const xmlParts = ['word/document.xml', 'word/header1.xml', 'word/header2.xml',
           'word/header3.xml', 'word/footer1.xml', 'word/footer2.xml', 'word/footer3.xml'];
 
@@ -604,7 +604,7 @@ export interface SearchSessionOptions {
           if (!file) continue;
 
           const xml = file.asText();
-          
+
           const wtRe = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
           let m;
           let lineNum = 0;
@@ -658,7 +658,7 @@ export interface SearchSessionOptions {
             docxFiles.push(fullPath);
           }
         }
-      } catch { /* skip */ }
+      } catch { }
     }
 
     try {
@@ -668,7 +668,7 @@ export interface SearchSessionOptions {
       } else if (stats.isDirectory()) {
         await walk(rootPath);
       }
-    } catch { /* skip */ }
+    } catch { }
 
     return docxFiles;
   }
@@ -683,7 +683,7 @@ export interface SearchSessionOptions {
 
     let context = text.substring(start, end);
 
-    
+
     if (start > 0) context = '...' + context;
     if (end < text.length) context = context + '...';
 
@@ -696,7 +696,7 @@ export interface SearchSessionOptions {
    */
   cleanupSessions(maxAge: number = 5 * 60 * 1000): void {
     const cutoffTime = Date.now() - maxAge;
-    
+
     for (const [sessionId, session] of this.sessions) {
       if (session.isComplete && session.lastReadTime < cutoffTime) {
         this.sessions.delete(sessionId);
@@ -741,7 +741,7 @@ export interface SearchSessionOptions {
   private shouldIncludeExcelSearch(filePattern?: string, rootPath?: string): boolean {
     const excelExtensions = ['.xlsx', '.xls', '.xlsm', '.xlsb'];
 
-    
+
     if (rootPath) {
       const lowerPath = rootPath.toLowerCase();
       if (excelExtensions.some(ext => lowerPath.endsWith(ext))) {
@@ -749,10 +749,10 @@ export interface SearchSessionOptions {
       }
     }
 
-    
+
     if (filePattern) {
       const lowerPattern = filePattern.toLowerCase();
-      
+
       if (excelExtensions.some(ext =>
         lowerPattern.includes(`*${ext}`) ||
         lowerPattern.endsWith(ext)
@@ -766,12 +766,12 @@ export interface SearchSessionOptions {
 
   private buildRipgrepArgs(options: SearchSessionOptions): string[] {
     const args: string[] = [];
-    
+
     if (options.searchType === 'content') {
-      
+
       args.push('--json', '--line-number');
-      
-      
+
+
       if (options.literalSearch) {
         args.push('-F'); 
       }
@@ -780,35 +780,35 @@ export interface SearchSessionOptions {
         args.push('-C', options.contextLines.toString());
       }
     } else {
-      
+
       args.push('--files');
     }
-    
-    
+
+
     if (options.searchType === 'content' && options.ignoreCase !== false) {
       args.push('-i');
     }
-    
+
     if (options.includeHidden) {
       args.push('--hidden');
     }
-    
+
     if (options.maxResults && options.maxResults > 0) {
       args.push('-m', options.maxResults.toString());
     }
 
-    
+
     if (options.filePattern) {
       const patterns = options.filePattern
         .split('|')
         .map(p => p.trim())
         .filter(Boolean);
-      
+
       for (const p of patterns) {
         if (options.searchType === 'content') {
           args.push('-g', p);
         } else {
-          
+
           if (options.ignoreCase !== false) {
             args.push('--iglob', p);
           } else {
@@ -817,30 +817,30 @@ export interface SearchSessionOptions {
         }
       }
     }
-    
-    
+
+
     if (options.searchType === 'files') {
-      
+
       const globFlag = options.ignoreCase !== false ? '--iglob' : '--glob';
-      
+
       if (this.isExactFilename(options.pattern)) {
-        
+
         args.push(globFlag, options.pattern);
       } else if (this.isGlobPattern(options.pattern)) {
-        
+
         args.push(globFlag, options.pattern);
       } else {
-        
+
         args.push(globFlag, `*${options.pattern}*`);
       }
-      
+
       args.push(options.rootPath);
     } else {
-      
-      
+
+
       args.push('--', options.pattern, options.rootPath);
     }
-    
+
     return args;
   }
 
@@ -855,26 +855,26 @@ export interface SearchSessionOptions {
     process.stderr?.on('data', (data: Buffer) => {
       const errorText = data.toString();
 
-      
-      
+
+
       session.error = (session.error || '') + errorText;
 
-      
+
       const filteredErrors = errorText
         .split('\n')
         .filter(line => {
           const trimmed = line.trim();
 
-          
+
           if (!trimmed || trimmed.match(/^[\)\(\s\d:]*$/)) return false;
 
-          
+
           if (trimmed.startsWith('rg:')) return false;
 
           return true;
         });
 
-      
+
       if (filteredErrors.length > 0) {
         const meaningfulErrors = filteredErrors.join('\n').trim();
         if (meaningfulErrors) {
@@ -888,32 +888,32 @@ export interface SearchSessionOptions {
     });
 
     process.on('close', (code: number) => {
-      
+
       if (session.buffer.trim()) {
         this.processBufferedOutput(session, true);
       }
 
       session.isComplete = true;
 
-      
-      
+
+
       if (code === 2) {
         session.wasIncomplete = true;
       }
 
-      
-      
-      
-      
+
+
+
+
       if (code !== 0 && code !== 1 && code !== 2) {
-        
+
         if (session.error?.trim() && session.totalMatches === 0) {
           session.isError = true;
           session.error = session.error || `ripgrep exited with code ${code}`;
         }
       }
 
-      
+
       if (session.totalMatches > 0) {
         session.isError = false;
       }
@@ -927,7 +927,7 @@ export interface SearchSessionOptions {
         wasIncomplete: session.wasIncomplete || false  
       });
 
-      // Rely on cleanupSessions(maxAge) only; no per-session timer
+
     });
 
     process.on('error', (error: Error) => {
@@ -935,34 +935,34 @@ export interface SearchSessionOptions {
       session.isError = true;
       session.error = `Process error: ${error.message}`;
 
-      // Rely on cleanupSessions(maxAge) only; no per-session timer
+
     });
   }
 
   private processBufferedOutput(session: SearchSession, isFinal: boolean = false): void {
     const lines = session.buffer.split('\n');
-    
-    
+
+
     if (!isFinal) {
       session.buffer = lines.pop() || '';
     } else {
       session.buffer = '';
     }
-    
+
     for (const line of lines) {
       if (!line.trim()) continue;
-      
+
       const result = this.parseLine(line, session.options.searchType);
       if (result) {
         session.results.push(result);
-        
+
         if (result.type === 'content' && line.includes('"type":"context"')) {
           session.totalContextLines++;
         } else {
           session.totalMatches++;
         }
 
-        
+
         if (session.options.earlyTermination !== false && 
             session.options.searchType === 'files' &&
             this.isExactFilename(session.options.pattern)) {
@@ -973,7 +973,7 @@ export interface SearchSessionOptions {
             ? filePath.toLowerCase().endsWith(pat.toLowerCase())
             : filePath.endsWith(pat);
           if (ends) {
-            
+
             setTimeout(() => {
               if (!session.process.killed) {
                 session.process.kill('SIGTERM');
@@ -988,12 +988,12 @@ export interface SearchSessionOptions {
 
   private parseLine(line: string, searchType: 'files' | 'content'): SearchResult | null {
     if (searchType === 'content') {
-      
+
       try {
         const parsed = JSON.parse(line);
-        
+
         if (parsed.type === 'match') {
-          
+
           const submatch = parsed.data?.submatches?.[0];
           return {
             file: parsed.data.path.text,
@@ -1002,7 +1002,7 @@ export interface SearchSessionOptions {
             type: 'content'
           };
         }
-        
+
         if (parsed.type === 'context') {
           return {
             file: parsed.data.path.text,
@@ -1011,20 +1011,20 @@ export interface SearchSessionOptions {
             type: 'content'
           };
         }
-        
-        
+
+
         if (parsed.type === 'summary') {
-          
+
           return null;
         }
-        
+
         return null;
       } catch (error) {
-        
+
         return null;
       }
     } else {
-      
+
       return {
         file: line.trim(),
         type: 'file'

@@ -36,7 +36,7 @@ export class ImageFileHandler implements FileHandler {
     }
 
     async read(path: string, options?: ReadOptions): Promise<FileResult> {
-        
+
         const buffer = await fs.readFile(path, { signal: options?.signal });
         const content = buffer.toString('base64');
         const mimeType = this.getMimeType(path);
@@ -51,7 +51,7 @@ export class ImageFileHandler implements FileHandler {
     }
 
     async write(path: string, content: Buffer | string): Promise<void> {
-        
+
         if (typeof content === 'string') {
             const buffer = Buffer.from(content, 'base64');
             await fs.writeFile(path, buffer);

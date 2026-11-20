@@ -7,7 +7,7 @@ export const normalizePageIndexes = (pageIndexes: number[], pageCount: number): 
         .map(idx => idx < 0 ? pageCount + idx : idx)
         .filter(idx => idx >= 0 && idx < pageCount);
 
-    
+
     return [...new Set(normalizedIndexes)];
 };
 
@@ -24,21 +24,21 @@ export function generatePageNumbers(
     totalPages: number
 ): number[] {
 
-    
+
     const startPage = offset < 0
         ? totalPages + offset + 1
         : offset + 1;
 
-    
+
     if (startPage > totalPages) return [];
     const safeStart = Math.max(1, startPage);
 
-    
+
     const endPage = Math.min(safeStart + length - 1, totalPages);
 
     const count = endPage - safeStart + 1;
     if (count <= 0) return [];
 
-    
+
     return Array.from({ length: count }, (_, i) => safeStart + i);
 }

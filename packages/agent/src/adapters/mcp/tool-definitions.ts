@@ -35,7 +35,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
   const osGuidance = getOSSpecificGuidance(systemInfo);
   const pathGuidance = `IMPORTANT: ${getPathGuidance(systemInfo)} Relative paths may fail as they depend on the current working directory. Tilde paths (~/...) might not work in all contexts. Unless the user explicitly asks for relative paths, use absolute paths.`;
   const allTools: ToolDefinition[] = [
-    
+
     {
         name: "get_config",
         description: `
@@ -86,7 +86,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
         },
     },
 
-    
+
     {
         name: "read_file",
         description: `
@@ -599,9 +599,9 @@ export function buildToolDefinitions(): ToolDefinition[] {
             readOnlyHint: true,
         },
     },
-    
 
-    
+
+
     {
         name: "edit_block",
         description: `
@@ -666,7 +666,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
         },
     },
 
-    
+
     {
         name: "start_process",
         description: `

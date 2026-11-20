@@ -75,7 +75,7 @@ async function detectAvailableShells(systemInfo: ReturnType<typeof getSystemInfo
         .filter((line) => line.length > 0 && !line.startsWith('#'))
         .forEach(add);
     } catch {
-      // Best-effort discovery only.
+
     }
   }
 
@@ -96,10 +96,10 @@ export async function getConfig({ configManager, featureFlagManager, currentClie
   try {
     const config = await configManager.getConfig();
 
-    
+
     const systemInfo = getSystemInfo();
 
-    
+
     const memoryUsage = process.memoryUsage();
     const memory = {
       rss: `${(memoryUsage.rss / 1024 / 1024).toFixed(2)} MB`,
@@ -185,7 +185,7 @@ export async function setConfigValue(args: unknown, configManager: AgentConfigMa
     try {
       await configManager.setUserSetting(parsed.data.key, parsed.data.value);
       const valueToStore = await configManager.getValue(parsed.data.key);
-      
+
       const updatedConfig = await configManager.getConfig();
       console.error(`setConfigValue updated ${parsed.data.key}`);
       return {

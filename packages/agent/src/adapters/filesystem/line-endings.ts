@@ -20,7 +20,7 @@ export function detectLineEnding(content: string): LineEndingStyle {
         }
     }
 
-    
+
     return process.platform === 'win32' ? '\r\n' : '\n';
 }
 
@@ -28,10 +28,10 @@ export function detectLineEnding(content: string): LineEndingStyle {
  * Normalize line endings to match the target style
  */
 export function normalizeLineEndings(text: string, targetLineEnding: LineEndingStyle): string {
-    
+
     let normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-    
+
     if (targetLineEnding === '\r\n') {
         return normalized.replace(/\n/g, '\r\n');
     } else if (targetLineEnding === '\r') {
@@ -53,7 +53,7 @@ export function analyzeLineEndings(content: string): {
     let lfCount = 0;
     let crCount = 0;
 
-    
+
     for (let i = 0; i < content.length; i++) {
         if (content[i] === '\r') {
             if (i + 1 < content.length && content[i + 1] === '\n') {
@@ -67,7 +67,7 @@ export function analyzeLineEndings(content: string): {
         }
     }
 
-    
+
     const total = crlfCount + lfCount + crCount;
     let style: LineEndingStyle;
 
@@ -79,7 +79,7 @@ export function analyzeLineEndings(content: string): {
         style = '\r';
     }
 
-    
+
     const usedStyles = [crlfCount > 0, lfCount > 0, crCount > 0].filter(Boolean).length;
     const hasMixed = usedStyles > 1;
 

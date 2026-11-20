@@ -39,7 +39,6 @@ try {
     const versionModule = await import('../../core/version.js');
     VERSION = versionModule.VERSION;
 } catch {
-    // Continue without version info if not available
 }
 
 
@@ -60,7 +59,7 @@ const TELEMETRY_PROXY_FALLBACK_URL = 'https://dc-telemetry-proxy-83847352264.eur
  * Set DESKTOP_COMMANDER_DISABLE_TELEMETRY to 1/true/yes/on to disable.
  */
 export function isTelemetryDisabledByEnv(env: NodeJS.ProcessEnv): boolean {
-    
+
     if (!['1', 'true'].includes((env.BRC_UPSTREAM_TELEMETRY ?? '').toLowerCase())) return true;
     const raw = env.DESKTOP_COMMANDER_DISABLE_TELEMETRY;
     if (!raw) return false;
@@ -78,10 +77,10 @@ export function sanitizeError(error: any): { message: string, code?: string } {
     let errorCode = undefined;
 
     if (error instanceof Error) {
-        
+
         errorMessage = error.name + ': ' + error.message;
 
-        
+
         if ('code' in error) {
             errorCode = (error as any).code;
         }
@@ -91,8 +90,8 @@ export function sanitizeError(error: any): { message: string, code?: string } {
         errorMessage = 'Unknown error';
     }
 
-    
-    
+
+
     errorMessage = errorMessage.replace(/(?:\/|\\)[\w\d_.-\/\\]+/g, '[PATH]');
     errorMessage = errorMessage.replace(/[A-Za-z]:\\[\w\d_.-\/\\]+/g, '[PATH]');
 
@@ -116,8 +115,8 @@ const buildEventProperties = async (properties?: any) => {
         uniqueUserId = await configManager.getOrCreateClientId();
     }
 
-    
-    
+
+
     const effectiveClient =
         currentCallIsRemote && currentRemoteClient ? currentRemoteClient : currentClient;
     let clientContext: any = {};
@@ -210,9 +209,9 @@ const buildEventProperties = async (properties?: any) => {
         app_version: VERSION,
         engagement_time_msec: "100",
         ...clientContext,
-        
-        
-        
+
+
+
         ...(currentCallIsRemote ? { remote: String(true) } : {}),
         ...sanitizedProperties,
     };
@@ -242,7 +241,6 @@ const sendToTelemetryProxy = async (event: string, eventProperties: any) => {
             await postTelemetryPayload(TELEMETRY_PROXY_FALLBACK_URL, payload);
         }
     } catch {
-        // Silent fail — telemetry should never break functionality
     }
 };
 
@@ -281,8 +279,8 @@ const postTelemetryPayload = async (endpoint: string, payload: string): Promise<
 
 const capture = async (event: string, properties?: unknown) => {
     if (isTelemetryDisabledByEnv(env)) return;
-    
-    
+
+
     if (isInsideUiOriginCall()) {
         return;
     }
@@ -291,7 +289,6 @@ const capture = async (event: string, properties?: unknown) => {
             const eventProperties = await buildEventProperties(properties);
             await sendToTelemetryProxy(event, eventProperties);
         } catch {
-            // Silent fail — telemetry should never break functionality
         }
     })();
 }
@@ -306,10 +303,10 @@ const capture_ui_event = capture;
  * @param properties Optional event properties
  */
 const captureRemote = async (event: string, properties?: Record<string, unknown>) => {
-    
+
     const sanitizedProps = properties ? { ...properties } : {};
 
-    
+
     const sensitiveIdentityKeys = ['deviceId', 'userId', 'email', 'user_id', 'device_id', 'user_email'];
     for (const key of sensitiveIdentityKeys) {
         if (key in sanitizedProps) {

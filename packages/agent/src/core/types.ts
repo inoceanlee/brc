@@ -67,8 +67,8 @@ export interface FilePreviewStructuredContent {
   sourceTool?: 'read_file' | 'write_file' | 'edit_block';
   defaultEditorName?: string;
   defaultEditorPath?: string;
-  
-  
+
+
   content?: string;
   mimeType?: string;
 }

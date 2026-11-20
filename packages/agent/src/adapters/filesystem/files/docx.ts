@@ -77,13 +77,13 @@ function loadDocxZip(buf: Buffer): DocxZipContents {
     if (!docFile) throw new Error('Invalid DOCX: missing word/document.xml');
 
     const xmlParts = new Map<string, string>();
-    
+
     const zipFiles = zip.files;
     for (const relativePath of Object.keys(zipFiles)) {
         if (relativePath.endsWith('.xml') || relativePath.endsWith('.rels')) {
             try {
                 xmlParts.set(relativePath, zipFiles[relativePath].asText());
-            } catch { /* skip binary entries */ }
+            } catch { }
         }
     }
 
@@ -125,15 +125,15 @@ interface OutlineItem {
 function extractOutline(xml: string): string {
     const lines: string[] = [];
 
-    
-    
+
+
     const bodyMatch = xml.match(/<w:body[^>]*>([\s\S]*)<\/w:body>/);
     if (!bodyMatch) return '[No w:body found in document.xml]';
 
     const bodyContent = bodyMatch[1];
 
-    
-    
+
+
     const children = splitTopLevelElements(bodyContent);
 
     let paragraphCount = 0;
@@ -186,7 +186,7 @@ function extractOutline(xml: string): string {
             let line = `[${i}] w:tbl (${rows.length} rows)`;
             const style = extractTableStyle(child);
             if (style) line += ` style="${style}"`;
-            
+
             for (let r = 0; r < rows.length; r++) {
                 const cells = rows[r].map(c => {
                     if (!c || c.trim() === '') return '';
@@ -197,7 +197,7 @@ function extractOutline(xml: string): string {
             lines.push(line);
             tableCount++;
         } else if (tag === 'w:sdt') {
-            
+
             const sdtFragments = extractTextFragments(child);
             const innerTables = (child.match(/<w:tbl[\s>]/g) || []).length;
             let line = `[${i}] w:sdt`;
@@ -224,7 +224,7 @@ function extractOutline(xml: string): string {
         }
     }
 
-    
+
     const header = `DOCX Outline: ${children.length} body children, ${paragraphCount} paragraphs, ${tableCount} tables, ${imageCount} images\n` +
         `Edit with: edit_block(file, old_string="<w:t>old text</w:t>", new_string="<w:t>new text</w:t>")\n` +
         `Raw XML: use read_file with offset=1 to see pretty-printed XML for advanced edits.\n` +
@@ -240,7 +240,7 @@ function extractOutline(xml: string): string {
 /** Extract all <w:t>...</w:t> text content from an XML fragment */
 function extractAllText(xml: string): string {
     const texts: string[] = [];
-    
+
     const re = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g;
     let m;
     while ((m = re.exec(xml)) !== null) {
@@ -275,7 +275,7 @@ function extractTableStyle(xml: string): string | null {
 /** Extract table rows as arrays of cell text */
 function extractTableRows(tableXml: string): string[][] {
     const rows: string[][] = [];
-    
+
     const rowElements = extractNestedElements(tableXml, 'w:tr');
     for (const rowXml of rowElements) {
         const cells: string[] = [];
@@ -302,14 +302,14 @@ function extractNestedElements(xml: string, tagName: string): string[] {
         const openPos = xml.indexOf(openTag, searchFrom);
         if (openPos === -1) break;
 
-        
+
         const charAfter = xml[openPos + openTag.length];
         if (charAfter !== ' ' && charAfter !== '>' && charAfter !== '/') {
             searchFrom = openPos + 1;
             continue;
         }
 
-        
+
         const nextClose = xml.indexOf('>', openPos);
         if (nextClose !== -1 && xml[nextClose - 1] === '/') {
             results.push(xml.substring(openPos, nextClose + 1));
@@ -317,7 +317,7 @@ function extractNestedElements(xml: string, tagName: string): string[] {
             continue;
         }
 
-        
+
         let depth = 1;
         let pos = nextClose + 1;
         while (depth > 0 && pos < xml.length) {
@@ -327,7 +327,7 @@ function extractNestedElements(xml: string, tagName: string): string[] {
             if (nextCloseTag === -1) break; 
 
             if (nextOpen !== -1 && nextOpen < nextCloseTag) {
-                
+
                 const ca = xml[nextOpen + openTag.length];
                 if (ca === ' ' || ca === '>' || ca === '/') {
                     depth++;
@@ -355,16 +355,16 @@ function splitTopLevelElements(xml: string): string[] {
     let depth = 0;
     let currentStart = -1;
 
-    
+
     let i = 0;
     while (i < xml.length) {
         if (xml[i] === '<') {
-            
+
             if (xml[i + 1] === '/') {
-                
+
                 depth--;
                 if (depth === 0) {
-                    
+
                     const closeEnd = xml.indexOf('>', i);
                     if (closeEnd === -1) break; 
                     if (currentStart !== -1) {
@@ -375,19 +375,19 @@ function splitTopLevelElements(xml: string): string[] {
                     continue;
                 }
             } else if (xml[i + 1] === '?' || xml[i + 1] === '!') {
-                
+
                 const end = xml.indexOf('>', i);
                 if (end === -1) break; 
                 i = end + 1;
                 continue;
             } else {
-                
+
                 if (depth === 0) currentStart = i;
-                
+
                 const tagEnd = xml.indexOf('>', i);
                 if (tagEnd === -1) break; 
                 if (xml[tagEnd - 1] === '/') {
-                    
+
                     if (depth === 0) {
                         elements.push(xml.substring(currentStart, tagEnd + 1).trim());
                         currentStart = -1;
@@ -426,7 +426,7 @@ function extractHeaderFooterOutline(zip: PizZip): string {
                 } else {
                     parts.push(`${name}: (no text content)`);
                 }
-            } catch { /* skip */ }
+            } catch { }
         }
     }
 
@@ -524,7 +524,7 @@ export class DocxFileHandler implements FileHandler {
         const offset = options?.offset ?? 0;
         const length = options?.length;
 
-        
+
         const wantsRaw = offset !== 0;
 
         if (wantsRaw) {
@@ -550,7 +550,7 @@ export class DocxFileHandler implements FileHandler {
             };
         }
 
-        
+
         const outline = extractOutline(documentXml);
         const headerFooterInfo = extractHeaderFooterOutline(zip);
         const rawSizeKB = (documentXml.length / 1024).toFixed(1);
@@ -577,7 +577,7 @@ export class DocxFileHandler implements FileHandler {
         const text = typeof content === 'string' ? content : String(content);
         const lines = text.split('\n');
 
-        
+
         const paragraphs: string[] = [];
         for (const line of lines) {
             const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
@@ -644,7 +644,7 @@ export class DocxFileHandler implements FileHandler {
                 };
             }
 
-            
+
             const buf = await fs.readFile(path);
             const zip = new PizZip(buf);
             const docFile = zip.file('word/document.xml');
@@ -653,12 +653,12 @@ export class DocxFileHandler implements FileHandler {
             const rawXml = docFile.asText();
             const pretty = prettyPrintXml(rawXml);
 
-            
+
             let targetPretty = pretty;
             let targetFile = 'word/document.xml';
             let matchCount = countOccurrences(pretty, oldStr);
 
-            
+
             if (matchCount === 0) {
                 const xmlFiles = ['word/header1.xml', 'word/header2.xml', 'word/header3.xml',
                     'word/footer1.xml', 'word/footer2.xml', 'word/footer3.xml'];
@@ -695,7 +695,7 @@ export class DocxFileHandler implements FileHandler {
                 };
             }
 
-            
+
             let edited = targetPretty;
             if (expectedReplacements === 1) {
                 const idx = edited.indexOf(oldStr);
@@ -704,7 +704,7 @@ export class DocxFileHandler implements FileHandler {
                 edited = edited.split(oldStr).join(newStr);
             }
 
-            
+
             const compacted = compactXml(edited);
             zip.file(targetFile, compacted);
 
@@ -748,7 +748,7 @@ export class DocxFileHandler implements FileHandler {
                 imageCount,
                 wordCount,
             };
-        } catch { /* return basic info */ }
+        } catch { }
 
         return {
             size: stats.size,

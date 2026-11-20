@@ -82,8 +82,8 @@ interface ShellSpawnConfig {
   executable: string;
   args: string[];
   useShellOption: string | boolean;
-  
-  
+
+
   windowsVerbatim?: boolean;
 }
 
@@ -93,8 +93,8 @@ interface ShellSpawnConfig {
  */
 function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig {
   const shellName = path.basename(shellPath).toLowerCase();
-  
-  
+
+
   if (shellName.includes('bash') || shellName.includes('zsh')) {
     return { 
       executable: shellPath, 
@@ -102,8 +102,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  
+
+
   if (shellName === 'pwsh' || shellName === 'pwsh.exe') {
     return { 
       executable: shellPath, 
@@ -111,8 +111,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  
+
+
   if (shellName === 'powershell' || shellName === 'powershell.exe') {
     return { 
       executable: shellPath, 
@@ -120,8 +120,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  
+
+
   if (shellName === 'cmd' || shellName === 'cmd.exe') {
     return { 
       executable: shellPath, 
@@ -130,8 +130,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  
+
+
   if (shellName.includes('fish')) {
     return { 
       executable: shellPath, 
@@ -139,9 +139,9 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  
-  
+
+
+
   return { 
     executable: command,
     args: [],
@@ -196,7 +196,7 @@ export class TerminalManager {
   listVirtualNodeSessions(): IterableIterator<[number, { timeout_ms: number }]> {
     return this.virtualNodeSessions.entries();
   }
-  
+
   /**
    * Send input to a running process
    * @param pid Process ID
@@ -208,10 +208,10 @@ export class TerminalManager {
     if (!session) {
       return false;
     }
-    
+
     try {
       if (session.process.stdin && !session.process.stdin.destroyed) {
-        
+
         const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
     session.process.stdin.write(session.inputEncoding ? encodeShellInput(inputWithNewline, session.inputEncoding) : inputWithNewline);
         return true;
@@ -222,24 +222,24 @@ export class TerminalManager {
       return false;
     }
   }
-  
+
   async executeCommand(command: string, timeoutMs: number = DEFAULT_COMMAND_TIMEOUT, shell?: string, collectTiming: boolean = false): Promise<CommandExecutionResult> {
-    
+
     let shellToUse: string | boolean | undefined = shell;
     if (!shellToUse) {
       try {
         const config = await this.configManager.getConfig();
         shellToUse = config.defaultShell || true;
       } catch (error) {
-        
+
         shellToUse = true;
       }
     }
 
-    
-    
 
-    
+
+
+
     let enhancedCommand = command;
     if (command.trim().startsWith('ssh ') && !command.includes(' -t')) {
       enhancedCommand = command.replace(/^ssh /, 'ssh -t ');
@@ -252,9 +252,9 @@ export class TerminalManager {
   const shellCommand = encodingSession.wrappedCommand;
     let spawnConfig: ShellSpawnConfig;
     let spawnOptions: any;
-    
+
   if (effectiveShellPath) {
-      
+
    spawnConfig = getShellSpawnArgs(effectiveShellPath, shellCommand);
       spawnOptions = {
         env: {
@@ -265,12 +265,12 @@ export class TerminalManager {
         windowsHide: true  
       };
 
-      
+
       if (spawnConfig.useShellOption) {
         spawnOptions.shell = spawnConfig.useShellOption;
       }
     } else {
-      
+
       spawnConfig = {
         executable: enhancedCommand,
         args: [],
@@ -286,40 +286,40 @@ export class TerminalManager {
       };
     }
 
-    
-    
-    
-    
+
+
+
+
     if (process.platform === 'win32' && spawnOptions.env) {
       spawnOptions.env.PATHEXT = getRepairedPathExt();
     }
 
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
     if (process.platform === 'win32' && spawnConfig.windowsVerbatim) {
       spawnOptions.windowsVerbatimArguments = true;
     }
 
-    
+
     const childProcess = spawn(spawnConfig.executable, spawnConfig.args, spawnOptions);
     let output = '';
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+
+
+
+
+
+
+
+
+
     let forwardProcessError: ((err: Error) => void) | null = null;
     let pendingProcessError: Error | null = null;
     childProcess.on('error', (err: Error) => {
@@ -331,11 +331,11 @@ export class TerminalManager {
       }
     });
 
-    
+
     if (!childProcess.pid) {
-      
+
       return {
-        pid: -1,  // Use -1 to indicate an error state
+        pid: -1,
         output: 'Error: Failed to get process ID. The command could not be executed.',
         isBlocked: false
       };
@@ -344,8 +344,8 @@ export class TerminalManager {
     const session: TerminalSession = {
       pid: childProcess.pid,
       process: childProcess,
-      outputLines: [],           // Line-based buffer
-      lastReadIndex: 0,          // Track where "new" output starts
+      outputLines: [],
+      lastReadIndex: 0,
       isBlocked: false,
       startTime: new Date(),
       bufferedChars: 0,
@@ -355,7 +355,7 @@ export class TerminalManager {
 
     this.sessions.set(childProcess.pid, session);
 
-    
+
     const startTime = Date.now();
     let firstOutputTime: number | undefined;
     let lastOutputTime: number | undefined;
@@ -368,7 +368,7 @@ export class TerminalManager {
    let commandTimeout: NodeJS.Timeout | null = null;
    let probeTimeout: NodeJS.Timeout | null = null;
    let probeReady = !encodingSession.probeRequired;
-      
+
       const quickPromptPatterns = />>>\s*$|>\s*$|\$\s*$|#\s*$/;
 
       const resolveOnce = (result: CommandExecutionResult) => {
@@ -378,7 +378,7 @@ export class TerminalManager {
     if (commandTimeout) clearTimeout(commandTimeout);
     if (probeTimeout) clearTimeout(probeTimeout);
 
-        
+
         if (collectTiming) {
           const endTime = Date.now();
           result.timingInfo = {
@@ -416,9 +416,9 @@ export class TerminalManager {
    } else {
     startCommandTimeout();
    }
-      
-      
-      
+
+
+
       forwardProcessError = (err: Error) => {
         this.sessions.delete(childProcess.pid!);
         exitReason = 'process_exit';
@@ -428,8 +428,8 @@ export class TerminalManager {
           isBlocked: false
         });
       };
-      
-      
+
+
       if (pendingProcessError) {
         forwardProcessError(pendingProcessError);
       }
@@ -466,18 +466,18 @@ export class TerminalManager {
         if (!firstOutputTime) firstOutputTime = now;
         lastOutputTime = now;
 
-        
-        
+
+
         if (!resolved) {
           output += text;
           if (output.length > MAX_WAIT_OUTPUT_CHARS) {
             output = output.slice(-Math.floor(MAX_WAIT_OUTPUT_CHARS / 2));
           }
         }
-        
+
         this.appendToLineBuffer(session, text);
 
-        
+
         if (collectTiming) {
           outputEvents.push({
             timestamp: now,
@@ -488,7 +488,7 @@ export class TerminalManager {
           });
         }
 
-        
+
         if (quickPromptPatterns.test(text)) {
           session.isBlocked = true;
           exitReason = 'early_exit_quick_pattern';
@@ -525,10 +525,10 @@ export class TerminalManager {
             output = output.slice(-Math.floor(MAX_WAIT_OUTPUT_CHARS / 2));
           }
         }
-        
+
         this.appendToLineBuffer(session, text);
 
-        
+
         if (collectTiming) {
           outputEvents.push({
             timestamp: now,
@@ -540,7 +540,7 @@ export class TerminalManager {
         }
       });
 
-      
+
       periodicCheck = setInterval(() => {
         if (output.trim()) {
           const processState = analyzeProcessState(output, childProcess.pid);
@@ -556,13 +556,13 @@ export class TerminalManager {
         }
       }, 100);
 
-      
+
       childProcess.on('close', (code: any) => {
         if (childProcess.pid) {
-          
+
           this.completedSessions.set(childProcess.pid, {
             pid: childProcess.pid,
-            outputLines: [...session.outputLines], // Copy line buffer
+            outputLines: [...session.outputLines],
             exitCode: code,
             startTime: session.startTime,
             endTime: new Date(),
@@ -570,7 +570,7 @@ export class TerminalManager {
             evictedChars: session.evictedChars
           });
 
-          
+
           if (this.completedSessions.size > 100) {
             const oldestKey = Array.from(this.completedSessions.keys())[0];
             this.completedSessions.delete(oldestKey);
@@ -595,7 +595,7 @@ export class TerminalManager {
   private appendToLineBuffer(session: TerminalSession, text: string): void {
     if (!text) return;
 
-    
+
     const lines = text.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
@@ -604,23 +604,23 @@ export class TerminalManager {
       const endsWithNewline = text.endsWith('\n');
 
       if (session.outputLines.length === 0) {
-        
+
         session.outputLines.push(line);
       } else if (i === 0) {
-        
+
         session.outputLines[session.outputLines.length - 1] += line;
       } else {
-        
+
         session.outputLines.push(line);
       }
     }
-    
-    
+
+
     session.bufferedChars += text.length;
 
-    
-    
-    
+
+
+
     let lastIndex = session.outputLines.length - 1;
     while (session.outputLines[lastIndex].length > MAX_LINE_CHARS) {
       const overlong = session.outputLines[lastIndex];
@@ -630,9 +630,9 @@ export class TerminalManager {
       lastIndex++;
     }
 
-    
-    
-    
+
+
+
     while (session.bufferedChars > MAX_BUFFERED_OUTPUT_CHARS && session.outputLines.length > 1) {
       const dropped = session.outputLines.shift()!;
       const droppedJoinedChars = dropped.length + 1; 
@@ -651,7 +651,7 @@ export class TerminalManager {
    * @param updateReadIndex Whether to update lastReadIndex (default: true for offset=0)
    */
   readOutputPaginated(pid: number, offset: number = 0, length: number = 1000): PaginatedOutputResult | null {
-    
+
     const session = this.sessions.get(pid);
     if (session) {
       const result = this.readFromLineBuffer(
@@ -667,7 +667,7 @@ export class TerminalManager {
       return result;
     }
 
-    
+
     const completedSession = this.completedSessions.get(pid);
     if (completedSession) {
       const runtimeMs = completedSession.endTime.getTime() - completedSession.startTime.getTime();
@@ -675,8 +675,8 @@ export class TerminalManager {
         completedSession.outputLines,
         offset,
         length,
-        0,  // Completed sessions don't track read position
-        () => {},  // No-op for completed sessions
+        0,
+        () => {},
         true,
         completedSession.exitCode,
         runtimeMs
@@ -706,23 +706,23 @@ export class TerminalManager {
     let linesToRead: string[];
 
     if (offset < 0) {
-      
-      
+
+
       const fromEnd = Math.abs(offset);
       startIndex = Math.max(0, totalLines - fromEnd);
       linesToRead = lines.slice(startIndex, startIndex + length);
-      // Don't update lastReadIndex for tail reads
+
     } else if (offset === 0) {
-      
+
       startIndex = lastReadIndex;
       linesToRead = lines.slice(startIndex, startIndex + length);
-      
+
       updateLastRead(Math.min(startIndex + linesToRead.length, totalLines));
     } else {
-      
+
       startIndex = offset;
       linesToRead = lines.slice(startIndex, startIndex + length);
-      // Don't update lastReadIndex for absolute position reads
+
     }
 
     const readCount = linesToRead.length;
@@ -770,7 +770,7 @@ export class TerminalManager {
 
     const output = result.lines.join('\n').trim();
 
-    
+
     if (result.isComplete) {
       const runtimeStr = result.runtimeMs !== undefined 
         ? `\nRuntime: ${(result.runtimeMs / 1000).toFixed(2)}s` 
@@ -782,7 +782,7 @@ export class TerminalManager {
       }
     }
 
-    
+
     if (result.remaining > 0) {
       return `${output}\n\n[Output truncated: ${result.remaining} more lines available. Use read_process_output with offset/length for full output.]`;
     }
@@ -799,9 +799,9 @@ export class TerminalManager {
     if (session) {
       const fullOutput = session.outputLines.join('\n');
       return {
-        
-        
-        
+
+
+
         totalChars: session.evictedChars + fullOutput.length,
         lineCount: session.evictedLines + session.outputLines.length
       };
@@ -815,13 +815,13 @@ export class TerminalManager {
    * Also checks completed sessions in case process finished between snapshot and poll.
    */
   getOutputSinceSnapshot(pid: number, snapshot: { totalChars: number; lineCount: number }): string | null {
-    
+
     const session = this.sessions.get(pid);
     if (session) {
       return TerminalManager.outputSinceSnapshot(session.outputLines, session.evictedChars, snapshot.totalChars);
     }
 
-    
+
     const completedSession = this.completedSessions.get(pid);
     if (completedSession) {
       return TerminalManager.outputSinceSnapshot(completedSession.outputLines, completedSession.evictedChars, snapshot.totalChars);
@@ -868,7 +868,7 @@ export class TerminalManager {
         }, 1000);
         return true;
       } catch (error) {
-        
+
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.capture('server_request_error', {error: errorMessage, message: `Failed to terminate process ${pid}:`});
         return false;

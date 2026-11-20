@@ -8,7 +8,7 @@ import { logToStderr } from '../telemetry/logger.js';
  */
 export async function openBrowser(url: string): Promise<void> {
   const platform = os.platform();
-  
+
   return new Promise((resolve, reject) => {
     const callback = (error: Error | null) => {
       if (error) {
@@ -25,7 +25,7 @@ export async function openBrowser(url: string): Promise<void> {
         execFile('open', [url], callback);
         break;
       case 'win32':
-        
+
         spawn('cmd', ['/c', 'start', '', url], { shell: false, windowsHide: true }).on('close', (code) => {
           code === 0 ? resolve() : reject(new Error(`Exit code ${code}`));
         });
@@ -41,8 +41,8 @@ export async function openBrowser(url: string): Promise<void> {
  * Open the Desktop Commander welcome page
  */
 export async function openWelcomePage(clientName?: string): Promise<void> {
-  
-  
+
+
   const url = 'https://desktopcommander.app/welcome/'
     + (clientName ? `?utm_source=${encodeURIComponent(clientName)}` : '');
   await openBrowser(url);

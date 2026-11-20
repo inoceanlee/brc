@@ -52,7 +52,7 @@ export class ExcelFileHandler implements FileHandler {
             options?.length
         );
 
-        
+
         const paginationInfo = totalRows > returnedRows
             ? `\n[Showing rows ${(options?.offset || 0) + 1}-${(options?.offset || 0) + returnedRows} of ${totalRows} total. Use offset/length to paginate.]`
             : '';
@@ -77,18 +77,18 @@ ${JSON.stringify(data)}`;
     }
 
     async write(path: string, content: any, mode?: 'rewrite' | 'append'): Promise<void> {
-        
+
         try {
             await this.checkFileSize(path);
         } catch (error) {
-            
+
             if ((error as any).code !== 'ENOENT' &&
                 !(error instanceof Error && error.message.includes('ENOENT'))) {
                 throw error;
             }
         }
 
-        
+
         let parsedContent = content;
         if (typeof content === 'string') {
             try {
@@ -98,14 +98,14 @@ ${JSON.stringify(data)}`;
             }
         }
 
-        
+
         if (mode === 'append') {
             try {
                 const workbook = new ExcelJS.Workbook();
                 await workbook.xlsx.readFile(path);
 
                 if (Array.isArray(parsedContent)) {
-                    
+
                     let worksheet = workbook.getWorksheet('Sheet1');
                     if (!worksheet) {
                         worksheet = workbook.addWorksheet('Sheet1');
@@ -113,7 +113,7 @@ ${JSON.stringify(data)}`;
                     const startRow = (worksheet.actualRowCount || 0) + 1;
                     this.writeRowsStartingAt(worksheet, startRow, parsedContent);
                 } else if (typeof parsedContent === 'object' && parsedContent !== null) {
-                    
+
                     for (const [sheetName, data] of Object.entries(parsedContent)) {
                         if (Array.isArray(data)) {
                             let worksheet = workbook.getWorksheet(sheetName);
@@ -129,7 +129,7 @@ ${JSON.stringify(data)}`;
                 await workbook.xlsx.writeFile(path);
                 return;
             } catch (error) {
-                
+
                 if ((error as any).code !== 'ENOENT' &&
                     !(error instanceof Error && error.message.includes('ENOENT'))) {
                     throw error;
@@ -137,14 +137,14 @@ ${JSON.stringify(data)}`;
             }
         }
 
-        
+
         const workbook = new ExcelJS.Workbook();
 
         if (Array.isArray(parsedContent)) {
-            
+
             this.writeDataToSheet(workbook, 'Sheet1', parsedContent);
         } else if (typeof parsedContent === 'object' && parsedContent !== null) {
-            
+
             for (const [sheetName, data] of Object.entries(parsedContent)) {
                 if (Array.isArray(data)) {
                     this.writeDataToSheet(workbook, sheetName, data as any[][]);
@@ -158,7 +158,7 @@ ${JSON.stringify(data)}`;
     }
 
     async editRange(path: string, range: string, content: any, options?: Record<string, any>): Promise<EditResult> {
-        
+
         try {
             await this.checkFileSize(path);
         } catch (error) {
@@ -169,25 +169,25 @@ ${JSON.stringify(data)}`;
             throw error;
         }
 
-        
+
         if (!Array.isArray(content)) {
             throw new Error('Content must be a 2D array for range editing');
         }
 
-        
+
         const [sheetName, cellRange] = this.parseRange(range);
 
         const workbook = new ExcelJS.Workbook();
         await workbook.xlsx.readFile(path);
 
-        
+
         let worksheet = workbook.getWorksheet(sheetName);
         if (!worksheet) {
             worksheet = workbook.addWorksheet(sheetName);
         }
 
         if (cellRange) {
-            
+
             const { startRow, startCol } = this.parseCellRange(cellRange);
 
             for (let r = 0; r < content.length; r++) {
@@ -206,15 +206,15 @@ ${JSON.stringify(data)}`;
                 }
             }
         } else {
-            
-            
+
+
             worksheet.eachRow((row, rowNumber) => {
                 row.eachCell((cell) => {
                     cell.value = null;
                 });
             });
 
-            
+
             for (let r = 0; r < content.length; r++) {
                 const rowData = content[r];
                 if (!Array.isArray(rowData)) continue;
@@ -281,7 +281,7 @@ ${JSON.stringify(data)}`;
         }
     }
 
-    
+
 
     private async checkFileSize(path: string): Promise<void> {
         const stats = await fs.stat(path);
@@ -321,9 +321,9 @@ ${JSON.stringify(data)}`;
             return { sheetName: '', data: [], totalRows: 0, returnedRows: 0 };
         }
 
-        
-        
-        
+
+
+
         let cellRangeOnly: string | undefined = range;
         if (range && range.includes('!')) {
             const [sheetFromRange, cellsFromRange] = this.parseRange(range);
@@ -333,7 +333,7 @@ ${JSON.stringify(data)}`;
             }
         }
 
-        
+
         let worksheet: ExcelJS.Worksheet | undefined;
         let sheetName: string;
 
@@ -355,7 +355,7 @@ ${JSON.stringify(data)}`;
             sheetName = sheetRef;
         }
 
-        
+
         let startRow = 1;
         let endRow = worksheet.actualRowCount || 1;
         let startCol = 1;
@@ -369,33 +369,33 @@ ${JSON.stringify(data)}`;
             if (parsed.endCol) endCol = parsed.endCol;
         }
 
-        
+
         const totalRows = endRow - startRow + 1;
 
-        
+
         if (offset !== undefined) {
             if (offset < 0) {
-                
-                
+
+
                 const lastNRows = Math.abs(offset);
                 startRow = Math.max(startRow, endRow - lastNRows + 1);
             } else if (offset > 0) {
-                
+
                 startRow = startRow + offset;
             }
         }
 
-        
+
         if (length !== undefined && length > 0 && (offset === undefined || offset >= 0)) {
             endRow = Math.min(endRow, startRow + length - 1);
         }
 
-        
+
         if (startRow > endRow) {
             return { sheetName, data: [], totalRows, returnedRows: 0 };
         }
 
-        
+
         const data: any[][] = [];
         for (let r = startRow; r <= endRow; r++) {
             const row = worksheet.getRow(r);
@@ -407,7 +407,7 @@ ${JSON.stringify(data)}`;
 
                 if (cell.value !== null && cell.value !== undefined) {
                     if (typeof cell.value === 'object') {
-                        
+
                         if ('result' in cell.value) {
                             value = cell.value.result ?? null;
                         } else if ('richText' in cell.value) {
@@ -420,7 +420,7 @@ ${JSON.stringify(data)}`;
                             value = String(cell.value);
                         }
                     } else {
-                        
+
                         value = cell.value;
                     }
                 }
@@ -434,7 +434,7 @@ ${JSON.stringify(data)}`;
     }
 
     private writeDataToSheet(workbook: ExcelJS.Workbook, sheetName: string, data: any[][]): void {
-        
+
         const existing = workbook.getWorksheet(sheetName);
         if (existing) {
             workbook.removeWorksheet(existing.id);
@@ -467,8 +467,8 @@ ${JSON.stringify(data)}`;
             const idx = range.indexOf('!');
             let sheetName = range.slice(0, idx);
             const cellRange = range.slice(idx + 1);
-            
-            
+
+
             if (sheetName.length >= 2 && sheetName.startsWith("'") && sheetName.endsWith("'")) {
                 sheetName = sheetName.slice(1, -1).replace(/''/g, "'");
             }
@@ -478,7 +478,7 @@ ${JSON.stringify(data)}`;
     }
 
     private parseCellRange(range: string): { startRow: number; startCol: number; endRow?: number; endCol?: number } {
-        
+
         const match = range.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
         if (!match) {
             throw new Error(

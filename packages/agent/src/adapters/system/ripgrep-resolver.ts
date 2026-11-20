@@ -14,26 +14,24 @@ export async function getRipgrepPath(): Promise<string> {
     return cachedRgPath;
   }
 
-  
+
   try {
     const { rgPath } = await import('@vscode/ripgrep');
     if (existsSync(rgPath)) {
-      
+
       if (process.platform !== 'win32') {
         try {
           chmodSync(rgPath, 0o755);
         } catch (e) {
-          // Ignore chmod errors - might not have write access
         }
       }
       cachedRgPath = rgPath;
       return rgPath;
     }
   } catch (e) {
-    // @vscode/ripgrep import or binary resolution failed, continue to fallbacks
   }
 
-  
+
   try {
     const systemRg = process.platform === 'win32' ? 'rg.exe' : 'rg';
     const whichCmd = process.platform === 'win32' ? 'where' : 'which';
@@ -43,10 +41,10 @@ export async function getRipgrepPath(): Promise<string> {
       return result;
     }
   } catch (e) {
-    // System rg not found via which
+
   }
 
-  
+
   const commonPaths: string[] = [];
 
   if (process.platform === 'win32') {
@@ -72,7 +70,7 @@ export async function getRipgrepPath(): Promise<string> {
     }
   }
 
-  
+
   throw new Error(
     'ripgrep binary not found. Desktop Commander requires ripgrep to perform searches. ' +
     'Please install ripgrep:\n' +

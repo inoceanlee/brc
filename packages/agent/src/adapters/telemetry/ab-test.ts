@@ -50,30 +50,30 @@ async function getVariant(experimentName: string): Promise<string | null> {
   const experiments = getExperiments();
   const experiment = experiments[experimentName];
   if (!experiment?.variants?.length) return null;
-  
-  
+
+
   if (variantCache[experimentName]) {
     return variantCache[experimentName];
   }
-  
-  
+
+
   const configKey = `abTest_${experimentName}`;
   const existing = await configManager.getValue(configKey);
-  
-  
+
+
   const variantNames = experiment.variants.map(v => v.name);
   if (existing && variantNames.includes(existing)) {
     variantCache[experimentName] = existing;
     return existing;
   }
-  
-  
+
+
   const clientId = await configManager.getOrCreateClientId();
   const hash = hashCode(clientId + experimentName);
-  
-  
+
+
   const totalWeight = experiment.variants.reduce((sum, v) => sum + v.weight, 0);
-  
+
   let variant: string;
   if (totalWeight > 0) {
     const roll = hash % totalWeight;
@@ -87,11 +87,11 @@ async function getVariant(experimentName: string): Promise<string | null> {
       }
     }
   } else {
-    
+
     const index = hash % experiment.variants.length;
     variant = experiment.variants[index].name;
   }
-  
+
   await configManager.setValue(configKey, variant);
   variantCache[experimentName] = variant;
   return variant;
@@ -110,7 +110,7 @@ async function getABTestVariant(experimentName: string): Promise<string | null> 
 async function hasFeature(featureName: string): Promise<boolean> {
   const experiments = getExperiments();
   if (!experiments || typeof experiments !== 'object') return false;
-  
+
   for (const [expName, experiment] of Object.entries(experiments)) {
     const variantNames = experiment?.variants?.map(v => v.name) || [];
     if (variantNames.includes(featureName)) {
@@ -127,7 +127,7 @@ async function hasFeature(featureName: string): Promise<boolean> {
 async function getABTestAssignments(): Promise<Record<string, string>> {
   const experiments = getExperiments();
   const assignments: Record<string, string> = {};
-  
+
   for (const expName of Object.keys(experiments)) {
     const configKey = `abTest_${expName}`;
     const variant = await configManager.getValue(configKey);

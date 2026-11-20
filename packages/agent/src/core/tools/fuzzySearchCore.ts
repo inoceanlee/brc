@@ -69,7 +69,7 @@ export function runFuzzySearch(text: string, query: string): { result: FuzzyMatc
 export function recursiveFuzzyIndexOf(text: string, query: string, start: number = 0, end: number | null = null, parentDistance: number = Infinity): FuzzyMatch {
     if (end === null) end = text.length;
 
-    
+
     if (end - start <= 2 * query.length) {
         return iterativeReduction(text, query, start, end, parentDistance);
     }
@@ -78,17 +78,17 @@ export function recursiveFuzzyIndexOf(text: string, query: string, start: number
     let leftEnd = Math.min(end, midPoint + query.length); 
     let rightStart = Math.max(start, midPoint - query.length); 
 
-    
+
     let leftDistance = distance(text.substring(start, leftEnd), query);
     let rightDistance = distance(text.substring(rightStart, end), query);
     let bestDistance = Math.min(leftDistance, parentDistance, rightDistance);
 
-    
+
     if (parentDistance === bestDistance) {
         return iterativeReduction(text, query, start, end, parentDistance);
     }
 
-    
+
     if (leftDistance < rightDistance) {
         return recursiveFuzzyIndexOf(text, query, start, leftEnd, bestDistance);
     } else {
@@ -109,15 +109,15 @@ function iterativeReduction(text: string, query: string, start: number, end: num
     const startTime = performance.now();
     let iterations = 0;
 
-    
-    
-    
-    
+
+
+
+
     let bestDistance = distance(text.substring(start, end), query);
     let bestStart = start;
     let bestEnd = end;
 
-    
+
     let nextDistance = distance(text.substring(bestStart + 1, bestEnd), query);
 
     while (nextDistance < bestDistance) {
@@ -128,7 +128,7 @@ function iterativeReduction(text: string, query: string, start: number, end: num
         iterations++;
     }
 
-    
+
     nextDistance = distance(text.substring(bestStart, bestEnd - 1), query);
 
     while (nextDistance < bestDistance) {

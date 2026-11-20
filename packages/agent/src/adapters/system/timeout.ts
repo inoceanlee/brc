@@ -15,25 +15,25 @@ export function withTimeout<T>(
     operationName: string,
     defaultValue: T
 ): Promise<T> {
-    
+
     return new Promise((resolve, reject) => {
         let isCompleted = false;
 
-        
+
         const timeoutId = setTimeout(() => {
             if (!isCompleted) {
                 isCompleted = true;
                 if (defaultValue !== null) {
                     resolve(defaultValue);
                 } else {
-                    
-                    
+
+
                     reject(`__ERROR__: ${operationName} timed out after ${timeoutMs / 1000} seconds`);
                 }
             }
         }, timeoutMs);
 
-        
+
         operation
             .then(result => {
                 if (!isCompleted) {
@@ -49,7 +49,7 @@ export function withTimeout<T>(
                     if (defaultValue !== null) {
                         resolve(defaultValue);
                     } else {
-                        
+
                         reject(error);
                     }
                 }
@@ -91,8 +91,8 @@ export function runWithAbortableTimeout<T>(
     });
 
     const op = operation(controller.signal);
-    
-    
+
+
     op.catch(() => {});
 
     return Promise.race([op, timeout]).finally(() => clearTimeout(timeoutId));

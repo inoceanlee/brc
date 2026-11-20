@@ -2,8 +2,8 @@ import { z } from "zod";
 
 
 export const GetConfigArgsSchema = z.object({
-  
-  
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -16,7 +16,7 @@ export const SetConfigValueArgsSchema = z.object({
     z.array(z.string()),
     z.null(),
   ]),
-  
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -29,16 +29,16 @@ export const StartProcessArgsSchema = z.object({
   timeout_ms: z.number(),
   shell: z.string().optional(),
   verbose_timing: z.boolean().optional(),
-  
-  
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
 export const ReadProcessOutputArgsSchema = z.object({
   pid: z.number(),
   timeout_ms: z.number().optional(),
-  offset: z.number().optional(),   // Line offset: 0=from last read, positive=absolute, negative=tail
-  length: z.number().optional(),   // Max lines to return (default from config.fileReadLineLimit)
+  offset: z.number().optional(),
+  length: z.number().optional(),
   verbose_timing: z.boolean().optional(),
 });
 
@@ -58,12 +58,12 @@ export const ReadFileArgsSchema = z.object({
   isUrl: z.boolean().optional().default(false),
   offset: z.number().optional().default(0),
   length: z.number().optional(),
-  sheet: z.string().optional(),  // String only for MCP client compatibility (Cursor doesn't support union types in JSON Schema)
+  sheet: z.string().optional(),
   range: z.string().optional(),
   options: z.record(z.any()).optional(),
-  
-  
-  
+
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -75,8 +75,8 @@ export const WriteFileArgsSchema = z.object({
   path: z.string(),
   content: z.string(),
   mode: z.enum(['rewrite', 'append']).default('rewrite'),
-  
-  
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -98,25 +98,25 @@ export const PdfOperationSchema = z.union([PdfInsertOperationSchema, PdfDeleteOp
 
 export const WritePdfArgsSchema = z.object({
   path: z.string(),
-  
+
   content: z.preprocess(
     (val) => {
-      
+
       if (typeof val === 'string' && val.trim().startsWith('[')) {
         try {
           return JSON.parse(val);
         } catch {
-          
+
           return val;
         }
       }
-      
+
       return val;
     },
     z.union([z.string(), z.array(PdfOperationSchema)])
   ),
   outputPath: z.string().optional(),
-  options: z.object({}).passthrough().optional(), // Allow passing options to md-to-pdf
+  options: z.object({}).passthrough().optional(),
 });
 
 export const CreateDirectoryArgsSchema = z.object({
@@ -126,8 +126,8 @@ export const CreateDirectoryArgsSchema = z.object({
 export const ListDirectoryArgsSchema = z.object({
   path: z.string(),
   depth: z.number().optional().default(2),
-  
-  
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
@@ -164,20 +164,20 @@ export const GetFileInfoArgsSchema = z.object({
 
 export const EditBlockArgsSchema = z.object({
   file_path: z.string(),
-  
+
   old_string: z.string().optional(),
   new_string: z.string().optional(),
   expected_replacements: z.number().optional().default(1),
-  
+
   range: z.string().optional(),
   content: z.any().optional(),
   options: z.record(z.any()).optional(),
-  
-  
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 }).refine(
   data => {
-    
+
     const hasValue = (v: unknown) => v !== undefined && v !== '';
     return (hasValue(data.old_string) && data.new_string !== undefined) ||
            (hasValue(data.range) && hasValue(data.content));
@@ -199,12 +199,6 @@ export const GetUsageStatsArgsSchema = z.object({});
 
 
 export const GiveFeedbackArgsSchema = z.object({
-  // No parameters needed - form will be filled manually by user
-  // Only auto-filled hidden fields remain:
-  // - tool_call_count (auto)
-  // - days_using (auto) 
-  // - platform (auto)
-  // - client_id (auto)
 });
 
 
@@ -217,18 +211,18 @@ export const StartSearchArgsSchema = z.object({
   maxResults: z.number().optional(),
   includeHidden: z.boolean().optional().default(false),
   contextLines: z.number().optional().default(5),
-  timeout_ms: z.number().optional(), // Match process naming convention
-  earlyTermination: z.boolean().optional(), // Stop search early when exact filename match is found (default: true for files, false for content)
-  literalSearch: z.boolean().optional().default(false), // Force literal string matching (-F flag) instead of regex
-  
-  
+  timeout_ms: z.number().optional(),
+  earlyTermination: z.boolean().optional(),
+  literalSearch: z.boolean().optional().default(false),
+
+
   origin: z.enum(['ui', 'llm']).optional(),
 });
 
 export const GetMoreSearchResultsArgsSchema = z.object({
   sessionId: z.string(),
-  offset: z.number().optional().default(0),    // Same as file reading
-  length: z.number().optional().default(100),  // Same as file reading (but smaller default)
+  offset: z.number().optional().default(0),
+  length: z.number().optional().default(100),
 });
 
 export const StopSearchArgsSchema = z.object({
@@ -241,8 +235,6 @@ export const ListSearchesArgsSchema = z.object({});
 export const GetPromptsArgsSchema = z.object({
   action: z.enum(['get_prompt']),
   promptId: z.string(),
-  // Disabled to check if it makes sense or should be removed or changed
-  // anonymous_user_use_case: z.string().optional(),
 });
 
 

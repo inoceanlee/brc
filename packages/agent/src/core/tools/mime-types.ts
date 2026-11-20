@@ -6,7 +6,7 @@ export function getMimeType(filePath: string): string {
     return "application/pdf";
   }
 
-  
+
   const imageTypes: Record<string, string> = {
     'png': 'image/png',
     'jpg': 'image/jpeg',
@@ -15,12 +15,12 @@ export function getMimeType(filePath: string): string {
     'webp': 'image/webp'
   };
 
-  
+
   if (extension in imageTypes) {
     return imageTypes[extension];
   }
 
-  
+
   return 'text/plain';
 }
 

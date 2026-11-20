@@ -34,6 +34,23 @@ test('core preview file typing uses pure string logic without Node path import',
   assert.equal(resolvePreviewFileType('/a/b/data.bin'), 'unsupported');
 });
 
+test('Agent source has no trailing line comments or inline block comments', () => {
+  const sourceRoot = path.join(repoRoot, 'packages', 'agent', 'src');
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const target = path.join(dir, entry.name);
+    return entry.isDirectory() ? walk(target) : entry.name.endsWith('.ts') ? [target] : [];
+  });
+  const residue = [];
+  for (const file of walk(sourceRoot)) {
+    const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (/\S\s+\/\//.test(line) && !/https?:\/\//.test(line)) residue.push(path.relative(repoRoot, file) + ':' + (index + 1));
+      if (/\/\*[^*]/.test(line)) residue.push(path.relative(repoRoot, file) + ':' + (index + 1));
+    });
+  }
+  assert.deepEqual(residue, []);
+});
+
 test('Agent core files contain no Node builtin imports', () => {
   const core = path.join(repoRoot, 'packages', 'agent', 'src', 'core');
   const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

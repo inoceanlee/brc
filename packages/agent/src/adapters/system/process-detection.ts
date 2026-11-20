@@ -16,7 +16,7 @@ const REPL_PROMPTS = {
   python: ['>>> ', '... '],
   node: ['> ', '... '],
   r: ['> ', '+ '],
-  julia: ['julia> ', '       '], // julia continuation is spaces
+  julia: ['julia> ', '       '],
   shell: ['$ ', '# ', '% ', 'bash-', 'zsh-'],
   mysql: ['mysql> ', '    -> '],
   postgres: ['=# ', '-# '],
@@ -35,7 +35,7 @@ const ERROR_COMPLETION_PATTERNS = [
   /ValueError/i,
   /ReferenceError/i,
   /Uncaught/i,
-  /at Object\./i, // Node.js stack traces
+  /at Object\./i,
   /^\s*\^/m       
 ];
 
@@ -65,7 +65,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
   const lastLine = lines[lines.length - 1] || '';
   const lastFewLines = lines.slice(-3).join('\n');
 
-  
+
   const allPrompts = Object.values(REPL_PROMPTS).flat();
   const detectedPrompt = allPrompts.find(prompt => 
     lastLine.endsWith(prompt) || lastLine.includes(prompt)
@@ -81,7 +81,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
     };
   }
 
-  
+
   const hasCompletionIndicator = COMPLETION_INDICATORS.some(pattern => 
     pattern.test(output)
   );
@@ -95,13 +95,13 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
     };
   }
 
-  
+
   const hasErrorCompletion = ERROR_COMPLETION_PATTERNS.some(pattern => 
     pattern.test(lastFewLines)
   );
 
   if (hasErrorCompletion) {
-    
+
     if (detectedPrompt) {
       return {
         isWaitingForInput: true,
@@ -120,7 +120,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
     }
   }
 
-  
+
   return {
     isWaitingForInput: false,
     isFinished: false,
@@ -135,7 +135,7 @@ export function analyzeProcessState(output: string, pid?: number): ProcessState 
 export function cleanProcessOutput(output: string, inputSent?: string): string {
   let cleaned = output;
 
-  
+
   if (inputSent) {
     const inputLines = inputSent.split('\n');
     inputLines.forEach(line => {
@@ -145,13 +145,13 @@ export function cleanProcessOutput(output: string, inputSent?: string): string {
     });
   }
 
-  
+
   cleaned = cleaned.replace(/^>>>\s*/gm, '');  
   cleaned = cleaned.replace(/^>\s*/gm, '');    
   cleaned = cleaned.replace(/^\.{3}\s*/gm, ''); 
   cleaned = cleaned.replace(/^\+\s*/gm, '');   
 
-  
+
   cleaned = cleaned.replace(/\n>>>\s*$/, '');
   cleaned = cleaned.replace(/\n>\s*$/, '');
   cleaned = cleaned.replace(/\n\+\s*$/, '');

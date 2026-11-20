@@ -73,20 +73,20 @@ function getErrorFromPath(path: string): string {
  */
 export async function handleReadFile(args: unknown, dependencies: FilesystemDependencies): Promise<ServerResult> {
     const { configManager } = dependencies;
-    
-    
-    
-    
-    
+
+
+
+
+
     const HANDLER_TIMEOUT = 3.5 * 60 * 1000; 
-    
+
     if (args === null || args === undefined) {
         return createErrorResponse('No arguments provided for read_file command', dependencies.capture);
     }
     const readFileOperation = async () => {
         const parsed = ReadFileArgsSchema.parse(args);
 
-        
+
         const config = await configManager.getConfig();
         if (!config) {
             return createErrorResponse('Configuration not available', dependencies.capture);
@@ -94,7 +94,7 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
 
         const defaultLimit = config.fileReadLineLimit ?? AGENT_DEFAULTS.fileReadLineLimit;
 
-        
+
         let sheetParam: string | number | undefined = parsed.sheet;
         if (parsed.sheet !== undefined && /^\d+$/.test(parsed.sheet)) {
             sheetParam = parseInt(parsed.sheet, 10);
@@ -108,14 +108,14 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
             range: parsed.range
         };
 
-        
+
         const resolvedFilePath = parsed.isUrl
             ? parsed.path
             : resolveAbsolutePath(parsed.path);
 
         const fileResult = await readFile(dependencies, parsed.path, options);
 
-        
+
         if (fileResult.metadata?.isPdf) {
             const meta = fileResult.metadata;
             const author = meta?.author ? `, Author: ${meta?.author}` : "";
@@ -152,11 +152,11 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
             };
         }
 
-        
+
         if (fileResult.metadata?.isImage) {
-            
-            
-            
+
+
+
             const imageData = typeof fileResult.content === 'string'
                 ? fileResult.content
                 : fileResult.content.toString('base64');
@@ -168,21 +168,21 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
                 ...await getDefaultEditorMetadata(resolvedFilePath),
                 mimeType: fileResult.mimeType,
             };
-            
-            
-            
-            
-            
-            
+
+
+
+
+
+
             if (parsed.origin === 'ui') {
                 return {
                     content: [{ type: "text", text: imageData }],
                     structuredContent: imageStructuredContent,
                 };
             }
-            
-            
-            
+
+
+
             return {
                 content: [
                     {
@@ -197,16 +197,16 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
                 ],
             };
         } else {
-            
-            
-            
+
+
+
             let textContent = typeof fileResult.content === 'string'
                 ? fileResult.content
                 : fileResult.content.toString('utf8');
             const fileType = fileResult.metadata?.isDirectory ? 'directory' as const : resolvePreviewFileType(resolvedFilePath);
-            
-            
-            
+
+
+
             if (parsed.origin === 'ui' && fileType === 'directory') {
                 textContent = textContent.replace(/^This is a directory, not a file\.[^\n]*\n+/, '');
             }
@@ -224,7 +224,7 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
         }
     };
 
-    
+
     const result = await withTimeout(
         readFileOperation(),
         HANDLER_TIMEOUT,
@@ -232,7 +232,7 @@ export async function handleReadFile(args: unknown, dependencies: FilesystemDepe
         null
     );
     if (result == null) {
-        
+
         throw new Error('Failed to read the file');
     }
     return result;
@@ -245,7 +245,7 @@ export async function handleReadMultipleFiles(args: unknown, dependencies: Files
     const parsed = ReadMultipleFilesArgsSchema.parse(args);
     const fileResults = await readMultipleFiles(dependencies, parsed.paths);
 
-    
+
     const textSummary = fileResults.map(result => {
         if (result.error) {
             return `${result.path}: Error - ${result.error}`;
@@ -258,13 +258,13 @@ export async function handleReadMultipleFiles(args: unknown, dependencies: Files
         }
     }).join("\n");
 
-    
+
     const contentItems: Array<{ type: string, text?: string, data?: string, mimeType?: string }> = [];
 
-    
+
     contentItems.push({ type: "text", text: textSummary });
 
-    
+
     for (const result of fileResults) {
         if (!result.error && result.content !== undefined) {
             if (result.isPdf) {
@@ -282,14 +282,14 @@ export async function handleReadMultipleFiles(args: unknown, dependencies: Files
                     });
                 });
             } else if (result.isImage && result.mimeType) {
-                
+
                 contentItems.push({
                     type: "image",
                     data: result.content,
                     mimeType: result.mimeType
                 });
             } else {
-                
+
                 contentItems.push({
                     type: "text",
                     text: `\n--- ${result.path} contents: ---\n${result.content}`
@@ -310,18 +310,18 @@ export async function handleWriteFile(args: unknown, dependencies: FilesystemDep
         const modeProvided = !!(args && typeof args === 'object' && 'mode' in args);
         const parsed = WriteFileArgsSchema.parse(args);
 
-        
-        
-        
-        
-        
+
+
+
+
+
         if (!modeProvided) {
             let existing: Record<string, any> | null = null;
             try {
                 existing = await getFileInfo(dependencies, parsed.path);
             } catch {
-                // Missing file or invalid path — nothing to protect; the write
-                // itself will surface any real path error.
+
+
             }
             if (existing?.isFile && existing.size > 0) {
                 return createErrorResponse(
@@ -334,11 +334,11 @@ export async function handleWriteFile(args: unknown, dependencies: FilesystemDep
             }
         }
 
-        
+
         const config = await configManager.getConfig();
         const MAX_LINES = config.fileWriteLineLimit ?? AGENT_DEFAULTS.fileWriteLineLimit;
 
-        
+
         const lines = parsed.content.split('\n');
         const lineCount = lines.length;
         let errorMessage = "";
@@ -348,14 +348,14 @@ export async function handleWriteFile(args: unknown, dependencies: FilesystemDep
 💡 Performance tip: For optimal speed, consider chunking files into ≤30 line pieces in future operations.`;
         }
 
-        
+
         await writeFile(dependencies, parsed.path, parsed.content, parsed.mode);
 
-        
+
         const modeMessage = parsed.mode === 'append' ? 'appended to' : 'wrote to';
 
-        
-        
+
+
         return {
             content: [{
                 type: "text",
@@ -438,7 +438,7 @@ function formatValue(value: unknown, indent: string = ''): string {
     }
     if (Array.isArray(value)) {
         if (value.length === 0) return '[]';
-        
+
         const items = value.map((item, i) => {
             if (typeof item === 'object' && item !== null) {
                 const props = Object.entries(item)
@@ -464,7 +464,7 @@ export async function handleGetFileInfo(args: unknown, dependencies: FilesystemD
         const parsed = GetFileInfoArgsSchema.parse(args);
         const info = await getFileInfo(dependencies, parsed.path);
 
-        
+
         const formattedText = Object.entries(info)
             .map(([key, value]) => `${key}: ${formatValue(value)}`)
             .join('\n');

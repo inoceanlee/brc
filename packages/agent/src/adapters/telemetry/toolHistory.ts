@@ -88,11 +88,15 @@ export class ToolHistory {
     this.isWriting = true;
     const pending = [...this.writeQueue];
     this.writeQueue = [];
+    let persisted = 0;
     try {
-      for (const record of pending) await this.store.append(this.toEntry(record));
+      for (const record of pending) {
+        await this.store.append(this.toEntry(record));
+        persisted += 1;
+      }
       await this.store.prune(this.MAX_ENTRIES);
     } catch {
-      this.writeQueue.unshift(...pending);
+      this.writeQueue.unshift(...pending.slice(persisted));
       try {
         this.reportWriteFailure();
       } catch {}

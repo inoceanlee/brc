@@ -31,7 +31,7 @@ async function loadPdfDocumentFromBuffer(filePathOrBuffer: string | Buffer | Uin
 function deletePages(pdfDoc: PDFDocumentType, pageIndexes: number[]): PDFDocumentType {
     const pageCount = pdfDoc.getPageCount();
 
-    
+
     const normalizedIndexes = normalizePageIndexes(pageIndexes, pageCount).sort((a, b) => b - a);
 
     for (const pageIndex of normalizedIndexes) {
@@ -47,7 +47,7 @@ function getPageLayout(page: PDFPage) {
     const mediaBox = page.getMediaBox(); 
     const cropBox = page.getCropBox();   
 
-    
+
     let marginLeft = cropBox.x - mediaBox.x;
     let marginBottom = cropBox.y - mediaBox.y;
     let marginRight = (mediaBox.x + mediaBox.width) - (cropBox.x + cropBox.width);
@@ -59,12 +59,12 @@ function getPageLayout(page: PDFPage) {
         marginRight = 72;
         marginTop = 72;
     }
-    
-    
+
+
     const pointsToInches = (pts: number) => (pts / 72).toFixed(4);
 
     return {
-        format: undefined,  // Explicitly disable format to use custom dimensions
+        format: undefined,
         width: `${pointsToInches(width)}in`,
         height: `${pointsToInches(height)}in`,
         margin: {
@@ -104,7 +104,7 @@ export async function editPdf(
 ): Promise<Uint8Array> {
     const pdfDoc = await loadPdfDocumentFromBuffer(pdfPath);
 
-    
+
     const pageLayout = pdfDoc.getPageCount() > 0 ? getPageLayout(pdfDoc.getPage(0)) : undefined;
 
     for (const op of operations) {
