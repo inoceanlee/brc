@@ -3,6 +3,7 @@ export * from './config/core/settings.js';
 export * from './config/core/ports.js';
 export * from './config/adapters/yaml-store.js';
 export * from './config/adapters/file-settings-lock.js';
+export * from './contracts/ports.js';
 export * from './cli/core/result.js';
 export * from './cli/adapters/renderer.js';
 export * from './managed-control.js';
