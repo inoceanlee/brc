@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, type CliResult } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteToolHistoryStore, type CliResult } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import type { AgentConnectionServices } from './adapters/transport/connection.js';
-import { parseAgentInvocation, AgentUsageError } from './commands/parser.js';
+import { parseAgentInvocation } from './commands/parser.js';
 import { runAgentLocalCommand } from './commands/local.js';
-import { TokenInputError } from './adapters/terminal/secret-input.js';
+import { toCliError } from './commands/errors.js';
 import { existsSync, realpathSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { BRC_SETTING_KEYS, FileSettingsLock, YamlSettingsStore } from 'brc-shared';
@@ -17,7 +17,6 @@ import { CredentialStore } from './adapters/storage/credential-store.js';
 import { migrateCredentialFile } from './adapters/storage/credential-migration.js';
 import type { WsClientOptions } from './adapters/transport/ws-client.js';
 import { VERSION } from './core/version.js';
-import { ToolHistoryStorage } from './adapters/telemetry/toolHistoryStorage.js';
 import { AgentConfigManager, resolveAgentSettings } from './adapters/storage/config-manager.js';
 import { FeatureFlagManager } from './adapters/network/feature-flags.js';
 import { SearchManager } from './adapters/system/search-manager.js';
@@ -46,10 +45,7 @@ export function createAgentCredentials(env: NodeJS.ProcessEnv): AgentCredentials
   return {
     filename: paths.credentialsFile,
     load: () => {
-      const defaultRoot = resolveAgentPaths({ ...env, BRC_DATA_ROOT: undefined }).root;
-      if (path.normalize(paths.root).toLowerCase() === path.normalize(defaultRoot).toLowerCase()) {
-        migrateCredentialFile(path.join(paths.legacyDirectory, 'device.json'), path.dirname(paths.credentialsFile), legacyStore, credentialStore);
-      }
+      migrateCredentialFile(path.join(paths.legacyDirectory, 'device.json'), path.dirname(paths.credentialsFile), legacyStore, credentialStore);
       return credentialStore.load();
     },
     save: (value) => credentialStore.save(value),
@@ -110,7 +106,9 @@ export async function configureAgentServices(): Promise<AgentServices> {
     historyFailureReporter = report;
     return () => { historyFailureReporter = (message) => process.stderr.write(message + '\n'); };
   };
-  const toolHistory = new ToolHistory(new ToolHistoryStorage(paths.historyDirectory), reportHistoryFailure);
+  const historyDatabasePath = resolveDiagnosticsDbPath(paths.root, env);
+  const toolHistory = new ToolHistory(new SqliteToolHistoryStore({ databasePath: historyDatabasePath }), reportHistoryFailure, historyDatabasePath);
+  await toolHistory.load();
   const usageTracker = new UsageTracker({
     configManager, featureFlagManager, getCurrentClient: () => currentClient,
     isOnboardingDisabled: () => 'disableOnboarding' in globalThis && Boolean(globalThis.disableOnboarding),
@@ -234,14 +232,7 @@ try {
   });
 } catch (error) {
   const primary = error instanceof AggregateError && error.cause ? error.cause : error;
-  const usage = primary instanceof AgentUsageError || primary instanceof TokenInputError;
-  const result = cliFailure({
-    code: usage ? 'INVALID_USAGE' : 'AGENT_ERROR',
-    exitCode: usage ? 2 : 1,
-    message: sanitizeError(error instanceof Error ? error.message : String(error)),
-    run: usage ? 'brc-agent help' : 'brc-agent connect --no-browser',
-    retryable: !usage,
-  });
+  const result = cliFailure(toCliError(primary, sanitizeError(error instanceof Error ? error.message : String(error))));
   process.exitCode = renderCliResult(result, { format, quiet, verbose, stringifyYaml: yaml }, {
     stdout: (data) => process.stdout.write(data),
     stderr: (data) => process.stderr.write(data),

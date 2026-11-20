@@ -48,8 +48,8 @@ export async function extractImagesFromPdf(
     const pageResults: Record<number, ImageInfo[]> = {};
 
     try {
-        // Process pages in parallel batches for better performance
-        const batchSize = 5; // Process 5 pages at a time
+
+        const batchSize = 5; 
         const batches: number[][] = [];
         for (let i = 0; i < pagesToProcess.length; i += batchSize) {
             batches.push(pagesToProcess.slice(i, i + batchSize));
@@ -64,7 +64,7 @@ export async function extractImagesFromPdf(
                 }
 
                 try {
-                    // Use unpdf's built-in extractImages
+
                     const extractedImages = await extractImages(pdfDocument, pageNum);
 
                     const pageImages: ImageInfo[] = [];
@@ -84,17 +84,17 @@ export async function extractImagesFromPdf(
 
                             if (compressionResult) {
                                 pageImages.push({
-                                    objId: index, // Use index as objId since unpdf doesn't provide original objId
+                                    objId: index,
                                     width: img.width,
                                     height: img.height,
                                     data: compressionResult.data,
                                     mimeType: compressionResult.mimeType,
                                     originalSize,
-                                    compressedSize: Math.round(compressionResult.data.length * 0.75) // Approximate base64 overhead
+                                    compressedSize: Math.round(compressionResult.data.length * 0.75) 
                                 });
                             }
                         } catch (err) {
-                            // Ignore conversion errors as requested
+
                             console.warn(`Failed to convert image ${index} on page ${pageNum}:`, err instanceof Error ? err.message : String(err));
                         }
                     }
@@ -106,26 +106,26 @@ export async function extractImagesFromPdf(
                 }
             });
 
-            // Wait for the current batch to complete
+
             const batchResults = await Promise.all(batchPromises);
 
-            // Store results
+
             for (const { pageNum, images } of batchResults) {
                 pageResults[pageNum] = images;
             }
         }
     } finally {
-        // Clean up document
+
         try {
             if (typeof pdfDocument.cleanup === 'function') {
                 await pdfDocument.cleanup(false);
             }
-        } catch (e) { /* Ignore cleanup errors */ }
+        } catch (e) { }
         try {
             if (typeof (pdfDocument as any).destroy === 'function') {
                 await (pdfDocument as any).destroy();
             }
-        } catch (e) { /* Ignore cleanup errors */ }
+        } catch (e) { }
     }
 
     return pageResults;
@@ -147,7 +147,7 @@ async function convertRawImageToBase64(
         maxDimension = 1200
     } = options;
 
-    // Smart resizing - only resize large images
+
     let targetWidth = width;
     let targetHeight = height;
 
@@ -158,11 +158,11 @@ async function convertRawImageToBase64(
     }
 
     try {
-        // Try to dynamically import sharp
+
         const sharp = (await import('sharp')).default;
 
-        // sharp takes Buffer, Uint8Array, etc.
-        // unpdf returns Uint8ClampedArray, which works with Buffer.from()
+
+
         let pipeline = sharp(Buffer.from(data), {
             raw: {
                 width,
@@ -182,7 +182,7 @@ async function convertRawImageToBase64(
             outputBuffer = await pipeline.jpeg({ quality }).toBuffer();
             mimeType = 'image/jpeg';
         } else {
-            // Default to webp
+
             outputBuffer = await pipeline.webp({ quality }).toBuffer();
             mimeType = 'image/webp';
         }

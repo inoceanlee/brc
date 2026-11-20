@@ -52,7 +52,7 @@ export interface CompletedSession {
   endTime: Date;
 }
 
-// Define the server response types
+
 export interface ServerResponseContent {
   type: string;
   text?: string;
@@ -67,8 +67,8 @@ export interface FilePreviewStructuredContent {
   sourceTool?: 'read_file' | 'write_file' | 'edit_block';
   defaultEditorName?: string;
   defaultEditorPath?: string;
-  // For text/markdown this is the file text; for images it is the base64 image
-  // payload (single source — the preview UI renders the <img> from this).
+
+
   content?: string;
   mimeType?: string;
 }
@@ -80,5 +80,5 @@ export interface ServerResult {
   _meta?: Record<string, unknown>;
 }
 
-// Define a helper type for tool handler functions
+
 export type ToolHandler<T = unknown> = (args: T) => Promise<ServerResult>;

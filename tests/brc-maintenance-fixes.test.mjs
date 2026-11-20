@@ -81,8 +81,7 @@ test('managed services inherit one release version from CLI package metadata', a
 });
 test('real Agent exposes a manageable pairing state before user approval', async (t) => {
  const root = await mkdtemp(path.join(os.tmpdir(),'brc-agent-pair-'));
- t.after(()=>rm(root,{recursive:true,force:true}));
- const server = createServer((req,res)=>{
+  const server = createServer((req,res)=>{
    res.setHeader('content-type','application/json');
    if(req.url==='/device/start')return res.end(JSON.stringify({
      device_code:'fake',user_code:'TEST-CODE',verification_uri:'http://127.0.0.1/device/verify',
@@ -101,7 +100,14 @@ test('real Agent exposes a manageable pairing state before user approval', async
  let childOutput = '';
  child.stdout.on('data', (chunk) => { childOutput += chunk.toString(); });
  child.stderr.on('data', (chunk) => { childOutput += chunk.toString(); });
- t.after(()=>{try{child.kill()}catch{}});
+ t.after(async()=>{
+  try{child.kill()}catch{}
+  await Promise.race([
+    new Promise(resolve=>child.once('exit',resolve)),
+    new Promise(resolve=>setTimeout(resolve,3000))
+  ]);
+});
+  t.after(()=>rm(root,{recursive:true,force:true}));
  let ready;
  for(let i=0;i<120;i++){
    try{ready=JSON.parse(await readFile(file,'utf8'));break}catch{await sleep(100)}

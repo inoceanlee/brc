@@ -71,7 +71,7 @@ export async function pairDevice(opts: PairOptions): Promise<DeviceCredentials> 
   opts.log(`   code: ${start.user_code}   (expires in ${Math.round(start.expires_in / 60)} min)`);
   opts.log('');
   if (opts.openBrowser !== false) {
-    try { const { default: open } = await import('open'); await open(start.verification_uri_complete); } catch { /* headless */ }
+    try { const { default: open } = await import('open'); await open(start.verification_uri_complete); } catch { }
   }
 
   let state: Extract<PairingState, { kind: 'polling' }> = { kind: 'polling', interval: Math.max(2, start.interval ?? 5) * 1000 };

@@ -15,20 +15,20 @@ export class FeatureFlagManager {
   private cacheMaxAge: number = 30 * 60 * 1000;
   private flagUrl: string;
   private refreshInterval: NodeJS.Timeout | null = null;
-  
-  // Track fresh fetch status for A/B tests that need network flags
+
+
   private freshFetchPromise: Promise<void> | null = null;
   private resolveFreshFetch: (() => void) | null = null;
   private loadedFromCache: boolean = false;
 
   constructor(cachePath: string, private readonly logger: AgentLogger, env: NodeJS.ProcessEnv) {
     this.cachePath = cachePath;
-    
-    // Use production flags (v2 supports weighted variants)
+
+
     this.flagUrl = env.DC_FLAG_URL ||
       'https://desktopcommander.app/flags/v2/production.json';
-    
-    // Set up promise for waiting on fresh fetch
+
+
     this.freshFetchPromise = new Promise((resolve) => {
       this.resolveFreshFetch = resolve;
     });
@@ -39,34 +39,34 @@ export class FeatureFlagManager {
    */
   async initialize(): Promise<void> {
     try {
-      // Load from cache immediately (non-blocking)
+
       await this.loadFromCache();
-      
-      // Fetch in background (don't block startup)
+
+
       this.fetchFlags().then(() => {
-        // Signal that fresh flags are now available
+
         if (this.resolveFreshFetch) {
           this.resolveFreshFetch();
         }
       }).catch(err => {
         this.logger.debug('Initial flag fetch failed:', err.message);
-        // Still resolve the promise so waiters don't hang forever
+
         if (this.resolveFreshFetch) {
           this.resolveFreshFetch();
         }
       });
-      
-      // Start periodic refresh every 5 minutes
+
+
       this.refreshInterval = setInterval(() => {
         this.fetchFlags().catch(err => {
           this.logger.debug('Periodic flag fetch failed:', err.message);
         });
       }, this.cacheMaxAge);
-      
-      // Allow process to exit even if interval is pending
-      // This is critical for proper cleanup when MCP client disconnects
+
+
+
       this.refreshInterval.unref();
-      
+
       this.logger.info(`Feature flags initialized (refresh every ${this.cacheMaxAge / 1000}s)`);
     } catch (error) {
       this.logger.warning('Failed to initialize feature flags:', error);
@@ -113,7 +113,7 @@ export class FeatureFlagManager {
    * (e.g., A/B test assignments for new users who don't have a cache yet)
    * 
    * Has a hard timeout to prevent blocking MCP startup if the fetch hangs.
-   * See: https://github.com/wonderwhy-er/DesktopCommanderMCP/issues/465
+   * See: https:
    */
   async waitForFreshFlags(): Promise<void> {
     if (this.freshFetchPromise) {
@@ -144,7 +144,7 @@ export class FeatureFlagManager {
 
       const data = await fs.readFile(this.cachePath, 'utf8');
       const config: FeatureFlags = JSON.parse(data);
-      
+
       if (config.flags) {
         this.flags = config.flags;
         this.lastFetch = Date.now();
@@ -167,14 +167,14 @@ export class FeatureFlagManager {
     let hardTimeoutHandle: NodeJS.Timeout | undefined;
 
     try {
-      // Don't log here - runs async and can interfere with MCP clients
 
-      // Use Promise.race as a hard timeout safety net.
-      // On some platforms (Windows + Node 24 / undici 7.x), AbortController.abort()
-      // fails to interrupt an in-progress TCP connect — the fetch hangs until the
-      // OS-level TCP timeout (~30s on Windows). Promise.race guarantees we reject
-      // at the JS level regardless of AbortController behavior.
-      // See: https://github.com/wonderwhy-er/DesktopCommanderMCP/issues/465
+
+
+
+
+
+
+
       const fetchPromise = fetch(this.flagUrl, {
         signal: controller.signal,
         headers: {
@@ -193,21 +193,21 @@ export class FeatureFlagManager {
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-      
+
       const config: FeatureFlags = await response.json();
-      
-      // Update flags
+
+
       if (config.flags) {
         this.flags = config.flags;
         this.lastFetch = Date.now();
-        
-        // Save to cache (silently - don't log during async operations
-        // as it can interfere with MCP clients that close quickly)
+
+
+
         await this.saveToCache(config);
       }
     } catch (error: any) {
       this.logger.debug('Failed to fetch feature flags:', error.message);
-      // Continue with cached values
+
     } finally {
       clearTimeout(abortTimeout);
       if (hardTimeoutHandle) {
@@ -225,9 +225,9 @@ export class FeatureFlagManager {
       if (!existsSync(configDir)) {
         await fs.mkdir(configDir, { recursive: true });
       }
-      
+
       await fs.writeFile(this.cachePath, JSON.stringify(config, null, 2), 'utf8');
-      // Don't log here - this runs async and can cause issues with MCP clients
+
     } catch (error) {
       this.logger.warning('Failed to save feature flags to cache:', error);
     }

@@ -3,9 +3,9 @@
  * All file handlers implement the FileHandler interface
  */
 
-// ============================================================================
-// Core Interfaces
-// ============================================================================
+
+
+
 
 /**
  * Base interface that all file handlers must implement
@@ -63,9 +63,9 @@ export interface FileHandler {
     canHandle(path: string): boolean | Promise<boolean>;
 }
 
-// ============================================================================
-// Read Operations
-// ============================================================================
+
+
+
 
 /**
  * Options for reading files
@@ -170,9 +170,9 @@ export interface ExcelSheet {
     colCount: number;
 }
 
-// ============================================================================
-// Edit Operations
-// ============================================================================
+
+
+
 
 /**
  * Result from edit operation (used by editRange)
@@ -191,9 +191,9 @@ export interface EditResult {
     }>;
 }
 
-// ============================================================================
-// File Information
-// ============================================================================
+
+
+
 
 /**
  * File information and metadata

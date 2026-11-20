@@ -1,9 +1,5 @@
 /**
- * Register the agent to start at login, per platform, without admin rights:
- *   Windows: Task Scheduler (ONLOGON, hidden window via wscript launcher)
- *   Linux:   systemd --user unit (+ loginctl enable-linger hint)
- *   macOS:   launchd LaunchAgent plist
- * The service runs `node <this cli.js>` with saved credentials, so pair first (run once interactively).
+ * Register the agent to start at login without admin rights. Windows uses Task Scheduler with a hidden wscript launcher. Linux uses a systemd user unit with an enable-linger hint. macOS uses a launchd LaunchAgent plist. The service runs the CLI with saved credentials, so pair first.
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
@@ -33,7 +29,7 @@ function readWindowsTask(): string | null {
 }
 
 function verifyManagedFile(file: string, marker: string): void {
-  if (!readFileSync(file, 'utf8').includes(marker)) throw new Error('Existing service registration is not owned by BRC Agent.');
+  if (!readFileSync(file, 'utf8').includes(marker)) throw Object.assign(new Error('Existing service registration is not owned by BRC Agent.'), { exitCode: 5 });
 }
 
 export function installService(extraArgs: string[]): string {
@@ -43,15 +39,14 @@ export function installService(extraArgs: string[]): string {
   const logFile = path.join(home(), 'agent.log');
 
   if (process.platform === 'win32') {
-    // .cmd holds the real command line (no nested quoting issues); wscript runs it with a hidden window.
     const cmdFile = path.join(home(), 'start-agent.cmd');
     const vbs = path.join(home(), 'start-agent.vbs');
     const existing = readWindowsTask();
     if (existing !== null) {
-      if (!existsSync(vbs) || !ownsWindowsTask(existing, vbs)) throw new Error('An unrelated or unverified scheduled task already uses the BRC Agent name.');
+      if (!existsSync(vbs) || !ownsWindowsTask(existing, vbs)) throw Object.assign(new Error('An unrelated or unverified scheduled task already uses the BRC Agent name.'), { exitCode: 5 });
       return `Task Scheduler task "${NAME}" already installed.`;
     }
-    if (existsSync(vbs) || existsSync(cmdFile)) throw new Error('Unverified Agent startup scripts exist without a matching scheduled task.');
+    if (existsSync(vbs) || existsSync(cmdFile)) throw Object.assign(new Error('Unverified Agent startup scripts exist without a matching scheduled task.'), { exitCode: 5 });
     writeFileSync(cmdFile, `@echo off\r\ncd /d "${home()}"\r\n"${node}" ${args.map((a) => `"${a}"`).join(' ')} >> "${logFile}" 2>&1\r\n`);
     writeFileSync(vbs, `Set sh = CreateObject("WScript.Shell")\r\nsh.Run "cmd /c ""${cmdFile}""", 0, False\r\n`);
     run('schtasks', ['/Create', '/TN', NAME, '/SC', 'ONLOGON', '/RL', 'LIMITED', '/TR', `wscript.exe "${vbs}"`]);
@@ -81,7 +76,7 @@ export function installService(extraArgs: string[]): string {
       return `BRC Agent launchd service already installed: ${plist}.`;
     }
     writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n  <key>Label</key><string>dev.brc.${NAME}</string>\n  <key>ProgramArguments</key><array>\n${xmlArgs}\n  </array>\n  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n  <key>StandardOutPath</key><string>${logFile}</string>\n  <key>StandardErrorPath</key><string>${logFile}</string>\n  <key>EnvironmentVariables</key><dict><key>BRC_DATA_ROOT</key><string>${resolveAgentPaths().root}</string></dict>\n</dict></plist>\n`);
-    try { run('launchctl', ['unload', plist]); } catch { /* not loaded */ }
+    try { run('launchctl', ['unload', plist]); } catch {}
     run('launchctl', ['load', '-w', plist]);
     return `Installed LaunchAgent ${plist}. Log: ${logFile}`;
   }
@@ -93,8 +88,8 @@ export function uninstallService(): string {
     const vbs = path.join(home(), 'start-agent.vbs');
     const existing = readWindowsTask();
     if (existing === null) return `BRC Agent task "${NAME}" is not installed.`;
-    if (!existsSync(vbs) || !ownsWindowsTask(existing, vbs)) throw new Error('Refusing to remove a scheduled task without verified BRC Agent ownership.');
-    try { run('schtasks', ['/End', '/TN', NAME]); } catch { /* already stopped */ }
+    if (!existsSync(vbs) || !ownsWindowsTask(existing, vbs)) throw Object.assign(new Error('Refusing to remove a scheduled task without verified BRC Agent ownership.'), { exitCode: 5 });
+    try { run('schtasks', ['/End', '/TN', NAME]); } catch {}
     run('schtasks', ['/Delete', '/F', '/TN', NAME]);
     for (const f of ['start-agent.vbs', 'start-agent.cmd']) { const p = path.join(home(), f); if (existsSync(p)) unlinkSync(p); }
     return `Removed Task Scheduler task "${NAME}". If an Agent remains running, stop its specific PID.`;
@@ -112,7 +107,7 @@ export function uninstallService(): string {
     const plist = path.join(os.homedir(), 'Library', 'LaunchAgents', `dev.brc.${NAME}.plist`);
     if (!existsSync(plist)) return `BRC Agent launchd service ${plist} is not installed.`;
     verifyManagedFile(plist, `<string>dev.brc.${NAME}</string>`);
-    try { run('launchctl', ['unload', plist]); } catch { /* already stopped */ }
+    try { run('launchctl', ['unload', plist]); } catch {}
     unlinkSync(plist);
     return `Removed LaunchAgent ${plist}.`;
   }

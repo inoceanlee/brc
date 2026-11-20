@@ -6,7 +6,7 @@ export type ConfigFieldDefinition = {
   valueType: ConfigFieldValueType;
 };
 
-// Single source of truth for user-editable configuration fields.
+
 export const CONFIG_FIELD_DEFINITIONS = {
   blockedCommands: {
     label: 'Blocked Commands',

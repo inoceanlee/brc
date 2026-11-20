@@ -128,7 +128,7 @@ async function executeTool(name: string, args: Args): Promise<ToolResult> {
       try {
         deps.logHistoryFailure();
       } catch {
-        // Diagnostics must not alter the tool result.
+
       }
     }
   }

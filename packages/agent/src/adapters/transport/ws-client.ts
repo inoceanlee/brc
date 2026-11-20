@@ -10,7 +10,7 @@ import {
 } from 'brc-shared';
 
 export interface WsClientOptions {
-  relayUrl: string;          // https://host or wss://host
+  relayUrl: string;          
   token: string;
   deviceId: string;
   name: string;

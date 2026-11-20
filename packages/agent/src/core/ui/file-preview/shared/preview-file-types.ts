@@ -1,9 +1,17 @@
-/**
- * File-type inference rules used by preview flows to choose render strategy. It maps extension/path hints into supported preview modes and explicit unsupported states.
- */
-import path from 'path';
-
 export type PreviewFileType = 'markdown' | 'text' | 'html' | 'image' | 'directory' | 'unsupported';
+
+function suffixOf(value: string): string {
+  const separator = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  const name = value.slice(separator + 1);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot) : '';
+}
+
+function nameOf(value: string): string {
+  const separator = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  return value.slice(separator + 1);
+}
+
 
 export const MARKDOWN_PREVIEW_EXTENSIONS = new Set(['.md', '.markdown', '.mdx']);
 export const HTML_PREVIEW_EXTENSIONS = new Set(['.html', '.htm']);
@@ -50,8 +58,8 @@ const TEXT_PREVIEW_BASENAMES = new Set([
 
 export function resolvePreviewFileType(filePath: string): PreviewFileType {
     const normalizedPath = filePath.toLowerCase();
-    const extension = path.extname(normalizedPath);
-    const basename = path.basename(normalizedPath);
+    const extension = suffixOf(normalizedPath);
+    const basename = nameOf(normalizedPath);
 
     if (MARKDOWN_PREVIEW_EXTENSIONS.has(extension)) {
         return 'markdown';

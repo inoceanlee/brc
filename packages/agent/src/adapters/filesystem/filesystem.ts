@@ -21,26 +21,26 @@ export interface FilesystemDependencies {
     fileHandlers: FileHandlerFactory;
 }
 
-// CONSTANTS SECTION - Consolidate all timeouts and thresholds
+
 const FILE_OPERATION_TIMEOUTS = {
-    PATH_VALIDATION: 10000,    // 10 seconds
-    URL_FETCH: 30000,          // 30 seconds
-    FILE_READ: 30000,          // 30 seconds
+    PATH_VALIDATION: 10000,
+    URL_FETCH: 30000,
+    FILE_READ: 30000,
 } as const;
 
-// Cap file read operations at 3 minutes. The MCP client's hard per-call limit
-// is ~4 minutes; timing out at 3m lets us abort the underlying fs op and return
-// a useful error (e.g. the cloud-storage guidance in buildPermissionError)
-// BEFORE the client gives up with an opaque "No result received after 4
-// minutes". Paired with runWithAbortableTimeout so the read is actually
-// cancelled (fd/thread released), not just abandoned.
-export const READ_OPERATION_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+
+
+
+
+
+
+export const READ_OPERATION_TIMEOUT_MS = 3 * 60 * 1000; 
 
 const FILE_SIZE_LIMITS = {
-    LINE_COUNT_LIMIT: 10 * 1024 * 1024,      // 10MB for line counting
+    LINE_COUNT_LIMIT: 10 * 1024 * 1024,
 } as const;
 
-// UTILITY FUNCTIONS - Eliminate duplication
+
 
 /**
  * Get MIME type information for a file
@@ -115,24 +115,24 @@ function buildPermissionError(filePath: string, errCode: string | undefined): Er
     return new Error(lines.join('\n'));
 }
 
-// Initialize allowed directories from configuration
+
 async function getAllowedDirs(configManager: AgentConfigManager): Promise<string[]> {
     let allowedDirectories;
     const config = await configManager.getConfig();
     if (config.allowedDirectories && Array.isArray(config.allowedDirectories)) {
         allowedDirectories = config.allowedDirectories;
     } else {
-        // Fall back to default directories if not configured
+
         allowedDirectories = [
-            os.homedir()   // User's home directory
+            os.homedir()   
         ];
-        // Update config with default
+
         await configManager.setValue('allowedDirectories', allowedDirectories);
     }
     return allowedDirectories;
 }
 
-// Normalize all paths consistently
+
 function normalizePath(p: string): string {
     return path.normalize(expandHome(p)).toLowerCase();
 }
@@ -142,6 +142,40 @@ function expandHome(filepath: string): string {
         return path.join(os.homedir(), filepath.slice(1));
     }
     return filepath;
+}
+
+const realpathCache = new Map<string, string | null>();
+
+async function resolveRealPath(requested: string): Promise<string | null> {
+    if (realpathCache.has(requested)) return realpathCache.get(requested) ?? null;
+    try {
+        const resolved = await fs.realpath(requested, { encoding: 'utf8' });
+        realpathCache.set(requested, resolved);
+        return resolved;
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+            realpathCache.set(requested, null);
+            return null;
+        }
+        throw error;
+    }
+}
+
+async function resolveRealPathOrNull(requested: string): Promise<string | null> {
+    try {
+        return await resolveRealPath(requested);
+    } catch {
+        return null;
+    }
+}
+
+export function invalidateRealpathCache(target?: string): void {
+    if (target === undefined) {
+        realpathCache.clear();
+        return;
+    }
+    realpathCache.delete(target);
 }
 
 /**
@@ -155,19 +189,13 @@ function expandHome(filepath: string): string {
 async function validateParentDirectories(directoryPath: string): Promise<boolean> {
     const parentDir = path.dirname(directoryPath);
 
-    // Base case: we've reached the root or the same directory (shouldn't happen normally)
+
     if (parentDir === directoryPath || parentDir === path.dirname(parentDir)) {
         return false;
     }
 
-    try {
-        // Check if the parent directory exists
-        await fs.realpath(parentDir);
-        return true;
-    } catch {
-        // Parent doesn't exist, recursively check its parent
-        return validateParentDirectories(parentDir);
-    }
+    if ((await resolveRealPathOrNull(parentDir)) !== null) return true;
+    return validateParentDirectories(parentDir);
 }
 
 /**
@@ -177,7 +205,7 @@ async function validateParentDirectories(directoryPath: string): Promise<boolean
  * @returns boolean True if path is allowed
  */
 async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: string): Promise<boolean> {
-    // If root directory is allowed, all paths are allowed
+
     const allowedDirectories = await getAllowedDirs(configManager);
     if (allowedDirectories.includes('/') || allowedDirectories.length === 0) {
         return true;
@@ -190,35 +218,32 @@ async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: str
 
     const resolvedAllowed = await Promise.all(
         allowedDirectories.map(async (allowedDir) => {
-            try {
-                return await fs.realpath(allowedDir, { encoding: 'utf8' });
-            } catch {
-                return allowedDir;
-            }
+            const resolved = await resolveRealPathOrNull(allowedDir);
+            return resolved ?? allowedDir;
         }),
     );
 
-    // Check if the path is within any allowed directory
+
     const isAllowed = resolvedAllowed.some(allowedDir => {
         let normalizedAllowedDir = normalizePath(allowedDir);
         if (normalizedAllowedDir.slice(-1) === path.sep) {
             normalizedAllowedDir = normalizedAllowedDir.slice(0, -1);
         }
 
-        // Check if path is exactly the allowed directory
+
         if (normalizedPathToCheck === normalizedAllowedDir) {
             return true;
         }
 
-        // Check if path is a subdirectory of the allowed directory
-        // Make sure to add a separator to prevent partial directory name matches
-        // e.g. /home/user vs /home/username
+
+
+
         const subdirCheck = normalizedPathToCheck.startsWith(normalizedAllowedDir + path.sep);
         if (subdirCheck) {
             return true;
         }
 
-        // If allowed directory is the root (C:\ on Windows), allow access to the entire drive
+
         if (normalizedAllowedDir === 'c:' && process.platform === 'win32') {
             return normalizedPathToCheck.startsWith('c:');
         }
@@ -241,59 +266,54 @@ async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: str
 export async function validatePath(dependencies: FilesystemDependencies, requestedPath: string): Promise<string> {
     const { configManager, capture } = dependencies;
     const validationOperation = async (): Promise<string> => {
-        // Expand home directory if present
+
         const expandedPath = expandHome(requestedPath);
 
-        // Convert to absolute path
+
         const absoluteOriginal = path.isAbsolute(expandedPath)
             ? path.resolve(expandedPath)
             : path.resolve(process.cwd(), expandedPath);
 
-        // Attempt to resolve symlinks to get the real path
-        // This will succeed if the path exists and all symlinks in the chain are valid
-        // It will fail with ENOENT if:
-        //   - The path itself doesn't exist, OR
-        //   - A symlink exists but points to a non-existent target (broken symlink)
+
+
+
+
+
         let resolvedRealPath: string | null = null;
         try {
-            resolvedRealPath = await fs.realpath(absoluteOriginal, { encoding: 'utf8' });
+            resolvedRealPath = await resolveRealPath(absoluteOriginal);
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
-            // Only throw for non-ENOENT errors (e.g., permission denied, I/O errors)
-            if (!err.code || err.code !== 'ENOENT') {
-                capture('server_path_realpath_error', {
-                    error: err.message,
-                    path: absoluteOriginal
-                });
-                throw new Error(`Failed to resolve symlink for path: ${absoluteOriginal}. Error: ${err.message}`);
-            }
+            capture('server_path_realpath_error', {
+                error: err.message,
+                path: absoluteOriginal
+            });
+            throw new Error(`Failed to resolve symlink for path: ${absoluteOriginal}. Error: ${err.message}`);
+        }
 
-            // SECURITY FIX: When the full path doesn't exist (e.g., writing a new file),
-            // resolve the parent directory to detect symlinks in the path chain.
-            // Without this, an attacker could create a symlink inside an allowed directory
-            // pointing to a restricted location, then write to a non-existent file through
-            // that symlink — bypassing the directory restriction check.
-            try {
-                const parentDir = path.dirname(absoluteOriginal);
-                const resolvedParent = await fs.realpath(parentDir, { encoding: 'utf8' });
-                const basename = path.basename(absoluteOriginal);
+        if (resolvedRealPath === null) {
+
+
+
+
+
+            const parentDir = path.dirname(absoluteOriginal);
+            const basename = path.basename(absoluteOriginal);
+            const resolvedParent = await resolveRealPathOrNull(parentDir);
+            if (resolvedParent !== null) {
                 resolvedRealPath = path.join(resolvedParent, basename);
-            } catch {
-                // Parent also doesn't exist — walk up the tree to find
-                // the deepest existing ancestor and resolve it
+            } else {
                 let current = absoluteOriginal;
-                let remaining: string[] = [];
+                const remaining: string[] = [];
                 while (true) {
                     const parent = path.dirname(current);
-                    if (parent === current) break; // reached filesystem root
+                    if (parent === current) break;
                     remaining.unshift(path.basename(current));
                     current = parent;
-                    try {
-                        const resolvedAncestor = await fs.realpath(current, { encoding: 'utf8' });
+                    const resolvedAncestor = await resolveRealPathOrNull(current);
+                    if (resolvedAncestor !== null) {
                         resolvedRealPath = path.join(resolvedAncestor, ...remaining);
                         break;
-                    } catch {
-                        // keep walking up
                     }
                 }
             }
@@ -301,7 +321,7 @@ export async function validatePath(dependencies: FilesystemDependencies, request
 
         const pathForNextCheck = resolvedRealPath ?? absoluteOriginal;
 
-        // Check if path is allowed
+
         if (!(await isPathAllowed(configManager, pathForNextCheck))) {
             capture('server_path_validation_error', {
                 error: 'Path not allowed',
@@ -311,38 +331,38 @@ export async function validatePath(dependencies: FilesystemDependencies, request
             throw new Error(`Path not allowed: ${requestedPath}. Must be within one of these directories: ${(await getAllowedDirs(configManager)).join(', ')}`);
         }
 
-        // SECURITY: Always return the resolved path (with symlinks resolved) so that
-        // all subsequent file operations (read, write, mkdir, etc.) operate on the
-        // canonical target, not on a symlink that could point outside allowed directories.
-        // pathForNextCheck already holds resolvedRealPath ?? absoluteOriginal from above.
 
-        // Check if path exists
+
+
+
+
+
         try {
-            // fs.stat() will automatically follow symlinks, so we get existence info
+
             await fs.stat(pathForNextCheck);
             return pathForNextCheck;
         } catch (error) {
-            // Path doesn't exist - validate parent directories
+
             if (await validateParentDirectories(pathForNextCheck)) {
-                // Return the resolved path if a valid parent exists
-                // This will be used for folder creation and many other file operations
+
+
                 return pathForNextCheck;
             }
-            // If no valid parent found, return the resolved path anyway
+
             return pathForNextCheck;
         }
     };
 
-    // Execute with timeout
+
     const result = await withTimeout(
         validationOperation(),
         FILE_OPERATION_TIMEOUTS.PATH_VALIDATION,
-        `Path validation operation`, // Generic name for telemetry
+        `Path validation operation`,
         null
     );
 
     if (result === null) {
-        // Keep original path in error for AI but a generic message for telemetry
+
         capture('server_path_validation_timeout', {
             timeoutMs: FILE_OPERATION_TIMEOUTS.PATH_VALIDATION
         });
@@ -353,7 +373,7 @@ export async function validatePath(dependencies: FilesystemDependencies, request
     return result;
 }
 
-// Re-export FileResult from base for consumers
+
 export type { FileResult } from './files/base.js';
 
 type PdfPayload = {
@@ -369,10 +389,10 @@ type FileResultPayloads = PdfPayload;
  * @returns File content or file result with metadata
  */
 export async function readFileFromUrl(url: string): Promise<FileResult> {
-    // Import the MIME type utilities
+
     const { isImageFile } = await import('../../core/tools/mime-types.js');
 
-    // Set up fetch with timeout
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FILE_OPERATION_TIMEOUTS.URL_FETCH);
 
@@ -381,21 +401,21 @@ export async function readFileFromUrl(url: string): Promise<FileResult> {
             signal: controller.signal
         });
 
-        // Clear the timeout since fetch completed
+
         clearTimeout(timeoutId);
 
         if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}`);
         }
 
-        // Get MIME type from Content-Type header or infer from URL
+
         const contentType = response.headers.get('content-type') || 'text/plain';
         const isImage = isImageFile(contentType);
         const isPdf = isPdfFile(contentType) || url.toLowerCase().endsWith('.pdf');
 
-        // NEW: Add PDF handling before image check
+
         if (isPdf) {
-            // Use URL directly - pdfreader handles URL downloads internally
+
             const pdfResult = await parsePdfToMarkdown(url);
 
             return {
@@ -412,22 +432,22 @@ export async function readFileFromUrl(url: string): Promise<FileResult> {
             };
 
         } else if (isImage) {
-            // For images, convert to base64
+
             const buffer = await response.arrayBuffer();
             const content = Buffer.from(buffer).toString('base64');
 
             return { content, mimeType: contentType, metadata: { isImage } };
         } else {
-            // For text content
+
             const content = await response.text();
 
             return { content, mimeType: contentType, metadata: { isImage } };
         }
     } catch (error) {
-        // Clear the timeout to prevent memory leaks
+
         clearTimeout(timeoutId);
 
-        // Return error information instead of throwing
+
         const errorMessage = error instanceof DOMException && error.name === 'AbortError'
             ? `URL fetch timed out after ${FILE_OPERATION_TIMEOUTS.URL_FETCH}ms: ${url}`
             : `Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`;
@@ -451,22 +471,22 @@ export async function readFileFromDisk(
     const { offset = 0, sheet, range } = options ?? {};
     let { length } = options ?? {};
 
-    // Add validation for required parameters
+
     if (!filePath || typeof filePath !== 'string') {
         throw new Error('Invalid file path provided');
     }
 
-    // Get default length from config if not provided
+
     if (length === undefined) {
         length = await getDefaultReadLength(configManager);
     }
 
     const validPath = await validatePath(dependencies, filePath);
 
-    // Get file extension for telemetry
+
     const fileExtension = getFileExtension(validPath);
 
-    // Check if path is a directory — return listing instead of EISDIR error
+
     try {
         const stats = await fs.stat(validPath);
         if (stats.isDirectory()) {
@@ -491,20 +511,20 @@ export async function readFileFromDisk(
             return dirResult;
         }
     } catch (error) {
-        // If stat itself failed, fall through to the read path which will produce a proper error.
-        // But if this was a directory-listing error, re-throw — don't let it fall into the file-read path.
+
+
         const err = error as NodeJS.ErrnoException;
         if (err.message?.includes('Directory listing') || err.message?.includes('list_directory')) {
             throw error;
         }
-        // stat() failed (e.g. ENOENT) — fall through to the read path below
+
     }
 
-    // Check file size before attempting to read
+
     try {
         const stats = await fs.stat(validPath);
 
-        // Capture file extension in telemetry without capturing the file path
+
         capture('server_read_file', {
             fileExtension: fileExtension,
             offset: offset,
@@ -515,16 +535,16 @@ export async function readFileFromDisk(
         console.error('error catch ' + error);
         const errorMessage = error instanceof Error ? error.message : String(error);
         capture('server_read_file_error', { error: errorMessage, fileExtension: fileExtension });
-        // If we can't stat the file, continue anyway and let the read operation handle errors
+
     }
 
-    // Read under an abortable timeout so a hung/stalled read is cancelled
-    // (fd/thread freed) rather than leaked until the OS call returns.
+
+
     const readOperation = async (signal: AbortSignal) => {
-        // Get appropriate handler for this file type (async - includes binary detection)
+
         const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
-        // Use handler to read the file
+
         const result = await handler.read(validPath, {
             offset,
             length,
@@ -534,14 +554,14 @@ export async function readFileFromDisk(
             signal
         });
 
-        // Return with content as string
-        // For images: content is already base64-encoded string from handler
-        // For text: content may be string or Buffer, convert to UTF-8 string
+
+
+
         let content: string;
         if (typeof result.content === 'string') {
             content = result.content;
         } else if (result.metadata?.isImage) {
-            // Image buffer should be base64 encoded, not UTF-8 converted
+
             content = result.content.toString('base64');
         } else {
             content = result.content.toString('utf8');
@@ -554,7 +574,7 @@ export async function readFileFromDisk(
         };
     };
 
-    // Execute with a 3-minute, cancellable timeout
+
     let result;
     try {
         result = await runWithAbortableTimeout(
@@ -564,8 +584,8 @@ export async function readFileFromDisk(
         );
     } catch (error) {
         const err = error as NodeJS.ErrnoException;
-        // runWithAbortableTimeout rejects with an Error whose .code is 'ETIMEDOUT'
-        // on timeout; fs rejects with EPERM/EACCES. Map all to the guidance error.
+
+
         if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ETIMEDOUT') {
             throw buildPermissionError(filePath, err.code);
         }
@@ -573,7 +593,7 @@ export async function readFileFromDisk(
     }
 
     if (result == null) {
-        // Handles the impossible case where withTimeout resolves to null instead of throwing
+
         throw new Error('Failed to read the file');
     }
 
@@ -608,14 +628,14 @@ export async function readFile(
  */
 export async function readFileInternal(dependencies: FilesystemDependencies, filePath: string, offset: number = 0, length?: number): Promise<string> {
     const { configManager } = dependencies;
-    // Get default length from config if not provided
+
     if (length === undefined) {
         length = await getDefaultReadLength(configManager);
     }
 
     const validPath = await validatePath(dependencies, filePath);
 
-    // Get file extension and MIME type
+
     const fileExtension = getFileExtension(validPath);
     const { mimeType, isImage } = await getMimeTypeInfo(validPath);
 
@@ -623,32 +643,32 @@ export async function readFileInternal(dependencies: FilesystemDependencies, fil
         throw new Error('Cannot read image files as text for internal operations');
     }
 
-    // IMPORTANT: For internal operations (especially edit operations), we must
-    // preserve exact file content including original line endings.
-    // We cannot use readline-based reading as it strips line endings.
 
-    // Read entire file content preserving line endings, under a 3-minute,
-    // cancellable timeout so an edit on a stalled/cloud path can't hang forever
-    // (previously this read had no timeout at all).
+
+
+
+
+
+
     const content = await runWithAbortableTimeout(
         (signal) => fs.readFile(validPath, { encoding: 'utf8', signal }),
         READ_OPERATION_TIMEOUT_MS,
         `Internal read for ${filePath}`
     );
 
-    // If we need to apply offset/length, do it while preserving line endings
+
     if (offset === 0 && length >= Number.MAX_SAFE_INTEGER) {
-        // Most common case for edit operations: read entire file
+
         return content;
     }
 
-    // Handle offset/length by splitting on line boundaries while preserving line endings
+
     const lines = TextFileHandler.splitLinesPreservingEndings(content);
 
-    // Apply offset and length
+
     const selectedLines = lines.slice(offset, offset + length);
 
-    // Join back together (this preserves the original line endings)
+
     return selectedLines.join('');
 }
 
@@ -656,14 +676,14 @@ export async function writeFile(dependencies: FilesystemDependencies, filePath: 
     const { capture } = dependencies;
     const validPath = await validatePath(dependencies, filePath);
 
-    // Get file extension for telemetry
+
     const fileExtension = getFileExtension(validPath);
 
-    // Calculate content metrics
+
     const contentBytes = Buffer.from(content).length;
     const lineCount = TextFileHandler.countLines(content);
 
-    // Capture file extension and operation details in telemetry without capturing the file path
+
     capture('server_write_file', {
         fileExtension: fileExtension,
         mode: mode,
@@ -671,11 +691,12 @@ export async function writeFile(dependencies: FilesystemDependencies, filePath: 
         lineCount: lineCount
     });
 
-    // Get appropriate handler for this file type (async - includes binary detection)
+
     const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
-    // Use handler to write the file
+
     await handler.write(validPath, content, mode);
+    invalidateRealpathCache();
 }
 
 export interface MultiFileResult {
@@ -694,7 +715,7 @@ export async function readMultipleFiles(dependencies: FilesystemDependencies, pa
             try {
                 const validPath = await validatePath(dependencies, filePath);
                 const fileResult = await readFile(dependencies, validPath);
-                // Handle content conversion properly for images vs text
+
                 let content: string;
                 if (typeof fileResult.content === 'string') {
                     content = fileResult.content;
@@ -733,13 +754,14 @@ export async function readMultipleFiles(dependencies: FilesystemDependencies, pa
 export async function createDirectory(dependencies: FilesystemDependencies, dirPath: string): Promise<void> {
     const validPath = await validatePath(dependencies, dirPath);
     await fs.mkdir(validPath, { recursive: true });
+    invalidateRealpathCache();
 }
 
 export async function listDirectory(dependencies: FilesystemDependencies, dirPath: string, depth: number = 2): Promise<string[]> {
     const validPath = await validatePath(dependencies, dirPath);
     const results: string[] = [];
 
-    const MAX_NESTED_ITEMS = 100; // Maximum items to show per nested directory
+    const MAX_NESTED_ITEMS = 100; 
 
     async function listRecursive(currentPath: string, currentDepth: number, relativePath: string = '', isTopLevel: boolean = true): Promise<void> {
         if (currentDepth <= 0) return;
@@ -750,7 +772,7 @@ export async function listDirectory(dependencies: FilesystemDependencies, dirPat
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
             const displayPath = relativePath || path.basename(currentPath);
-            // Distinguish "not found" from "permission denied" so AI and UI get accurate info.
+
             if (err.code === 'ENOENT') {
                 results.push(`[NOT_FOUND] ${displayPath} — path does not exist`);
             } else if (err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'ETIMEDOUT') {
@@ -761,7 +783,7 @@ export async function listDirectory(dependencies: FilesystemDependencies, dirPat
             return;
         }
 
-        // Apply filtering for nested directories (not top level)
+
         const totalEntries = entries.length;
         let entriesToShow = entries;
         let filteredCount = 0;
@@ -775,24 +797,24 @@ export async function listDirectory(dependencies: FilesystemDependencies, dirPat
             const fullPath = path.join(currentPath, entry.name);
             const displayPath = relativePath ? path.join(relativePath, entry.name) : entry.name;
 
-            // Add this entry to results
+
             results.push(`${entry.isDirectory() ? "[DIR]" : "[FILE]"} ${displayPath}`);
 
-            // If it's a directory and we have depth remaining, recurse
+
             if (entry.isDirectory() && currentDepth > 1) {
                 try {
-                    // Validate the path before recursing
+
                     await validatePath(dependencies, fullPath);
                     await listRecursive(fullPath, currentDepth - 1, displayPath, false);
                 } catch (error) {
-                    // If validation fails or we can't access it, it will be marked as denied
-                    // when we try to read it in the recursive call
+
+
                     continue;
                 }
             }
         }
 
-        // Add warning message if items were filtered
+
         if (filteredCount > 0) {
             const displayPath = relativePath || path.basename(currentPath);
             results.push(`[WARNING] ${displayPath}: ${filteredCount} items hidden (showing first ${MAX_NESTED_ITEMS} of ${totalEntries} total)`);
@@ -807,12 +829,13 @@ export async function moveFile(dependencies: FilesystemDependencies, sourcePath:
     const validSourcePath = await validatePath(dependencies, sourcePath);
     const validDestPath = await validatePath(dependencies, destinationPath);
     await fs.rename(validSourcePath, validDestPath);
+    invalidateRealpathCache();
 }
 
 export async function searchFiles(dependencies: FilesystemDependencies, searchManager: SearchManager, rootPath: string, pattern: string): Promise<string[]> {
     const { capture } = dependencies;
-    // Use the new search manager for better performance
-    // This provides a temporary compatibility layer until we fully migrate to search sessions
+
+
 
     try {
         const result = await searchManager.startSearch({
@@ -820,18 +843,18 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
             pattern,
             searchType: 'files',
             ignoreCase: true,
-            maxResults: 5000, // Higher limit for compatibility
-            earlyTermination: true, // Use early termination for better performance
+            maxResults: 5000,
+            earlyTermination: true,
         });
 
         const sessionId = result.sessionId;
 
-        // Poll for results until complete
+
         let allResults: string[] = [];
         let isComplete = result.isComplete;
         let startTime = Date.now();
 
-        // Add initial results
+
         for (const searchResult of result.results) {
             if (searchResult.type === 'file') {
                 allResults.push(searchResult.file);
@@ -839,26 +862,26 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
         }
 
         while (!isComplete) {
-            await new Promise(resolve => setTimeout(resolve, 100)); // Wait 100ms
+            await new Promise(resolve => setTimeout(resolve, 100)); 
 
             const results = searchManager.readSearchResults(sessionId);
             isComplete = results.isComplete;
 
-            // Add new file paths to results
+
             for (const searchResult of results.results) {
                 if (searchResult.file !== '__LAST_READ_MARKER__' && searchResult.type === 'file') {
                     allResults.push(searchResult.file);
                 }
             }
 
-            // Safety check to prevent infinite loops (30 second timeout)
+
             if (Date.now() - startTime > 30000) {
                 searchManager.terminateSearch(sessionId);
                 break;
             }
         }
 
-        // Log only the count of found files, not their paths
+
         capture('server_search_files_complete', {
             resultsCount: allResults.length,
             patternLength: pattern.length,
@@ -867,7 +890,7 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
 
         return allResults;
     } catch (error) {
-        // Fallback to original Node.js implementation if ripgrep fails
+
         capture('server_search_files_ripgrep_fallback', {
             error: error instanceof Error ? error.message : 'Unknown error'
         });
@@ -876,7 +899,7 @@ export async function searchFiles(dependencies: FilesystemDependencies, searchMa
     }
 }
 
-// Keep the original Node.js implementation as fallback
+
 async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath: string, pattern: string): Promise<string[]> {
     const { capture } = dependencies;
     const results: string[] = [];
@@ -886,7 +909,7 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
         try {
             entries = await fs.readdir(currentPath, { withFileTypes: true });
         } catch (error) {
-            return; // Skip this directory on error
+            return; 
         }
 
         for (const entry of entries) {
@@ -909,11 +932,11 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
     }
 
     try {
-        // Validate root path before starting search
+
         const validPath = await validatePath(dependencies, rootPath);
         await search(validPath);
 
-        // Log only the count of found files, not their paths
+
         capture('server_search_files_complete', {
             resultsCount: results.length,
             patternLength: pattern.length,
@@ -922,14 +945,14 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
 
         return results;
     } catch (error) {
-        // For telemetry only - sanitize error info
+
         capture('server_search_files_error', {
             errorType: error instanceof Error ? error.name : 'Unknown',
             error: 'Error with root path',
             isRootPathError: true
         });
 
-        // Re-throw the original error for the caller
+
         throw error;
     }
 }
@@ -937,7 +960,7 @@ async function searchFilesNodeJS(dependencies: FilesystemDependencies, rootPath:
 export async function getFileInfo(dependencies: FilesystemDependencies, filePath: string): Promise<Record<string, any>> {
     const validPath = await validatePath(dependencies, filePath);
 
-    // Get fs.stat as a fallback for any missing fields
+
     const stats = await fs.stat(validPath);
     const fallbackInfo = {
         size: stats.size,
@@ -951,20 +974,20 @@ export async function getFileInfo(dependencies: FilesystemDependencies, filePath
         metadata: undefined as Record<string, any> | undefined,
     };
 
-    // Get appropriate handler for this file type (async - includes binary detection)
+
     const handler = await dependencies.fileHandlers.getFileHandler(validPath);
 
-    // Use handler to get file info, with fallback
+
     let fileInfo;
     try {
         fileInfo = await handler.getInfo(validPath);
     } catch (error) {
-        // If handler fails, use fallback stats
+
         fileInfo = fallbackInfo;
     }
 
-    // Convert to legacy format (for backward compatibility)
-    // Use handler values with fallback to fs.stat values for any missing fields
+
+
     const info: Record<string, any> = {
         size: fileInfo.size ?? fallbackInfo.size,
         created: fileInfo.created ?? fallbackInfo.created,
@@ -976,27 +999,27 @@ export async function getFileInfo(dependencies: FilesystemDependencies, filePath
         fileType: fileInfo.fileType ?? fallbackInfo.fileType,
     };
 
-    // Add type-specific metadata from file handler
+
     if (fileInfo.metadata) {
-        // For text files
+
         if (fileInfo.metadata.lineCount !== undefined) {
             info.lineCount = fileInfo.metadata.lineCount;
             info.lastLine = fileInfo.metadata.lineCount - 1;
             info.appendPosition = fileInfo.metadata.lineCount;
         }
 
-        // For Excel files
+
         if (fileInfo.metadata.sheets) {
             info.sheets = fileInfo.metadata.sheets;
             info.isExcelFile = true;
         }
 
-        // For images
+
         if (fileInfo.metadata.isImage) {
             info.isImage = true;
         }
 
-        // For PDF files
+
         if (fileInfo.metadata.isPdf) {
             info.isPdf = true;
             info.totalPages = fileInfo.metadata.totalPages;
@@ -1004,7 +1027,7 @@ export async function getFileInfo(dependencies: FilesystemDependencies, filePath
             if (fileInfo.metadata.author) info.author = fileInfo.metadata.author;
         }
 
-        // For binary files
+
         if (fileInfo.metadata.isBinary) {
             info.isBinary = true;
         }
@@ -1034,7 +1057,7 @@ export async function writePdf(
     const fileExtension = getFileExtension(validPath);
 
     if (typeof content === 'string') {
-        // --- PDF CREATION MODE ---
+
         capture('server_write_pdf', {
             fileExtension: fileExtension,
             contentLength: content.length,
@@ -1042,17 +1065,18 @@ export async function writePdf(
         });
 
         const pdfBuffer = await parseMarkdownToPdf(content, options);
-        // Use outputPath if provided, otherwise overwrite input file
+
         const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
         await fs.writeFile(targetPath, pdfBuffer);
+        invalidateRealpathCache();
     } else if (Array.isArray(content)) {
 
-        // Use outputPath if provided, otherwise overwrite input file
+
         const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
 
         const operations: PdfOperations[] = [];
 
-        // Validate paths in operations
+
         for (const o of content) {
             if (o.type === 'insert') {
                 if (o.sourcePdfPath) {
@@ -1070,11 +1094,12 @@ export async function writePdf(
             insertCount: operations.filter(op => op.type === 'insert').length
         });
 
-        // Perform the PDF editing
+
         const modifiedPdfBuffer = await editPdf(validPath, operations);
 
-        // Write the modified PDF to the output path
+
         await fs.writeFile(targetPath, modifiedPdfBuffer);
+        invalidateRealpathCache();
     } else {
         throw new Error('Invalid content type for writePdf. Expected string (markdown) or array of operations.');
     }
@@ -1124,7 +1149,7 @@ export async function getDefaultEditorMetadata(filePath: string): Promise<Defaul
         if (cacheKey) {
             defaultEditorCache.set(cacheKey, { metadata: {}, expiresAt: Date.now() + DEFAULT_EDITOR_NEGATIVE_CACHE_MS });
         }
-        // Generic UI fallback is good enough if detection fails.
+
     }
 
     return {};

@@ -14,26 +14,24 @@ export async function getRipgrepPath(): Promise<string> {
     return cachedRgPath;
   }
 
-  // Strategy 1: Try @vscode/ripgrep package
+
   try {
     const { rgPath } = await import('@vscode/ripgrep');
     if (existsSync(rgPath)) {
-      // Ensure executable permissions on Unix systems
+
       if (process.platform !== 'win32') {
         try {
           chmodSync(rgPath, 0o755);
         } catch (e) {
-          // Ignore chmod errors - might not have write access
         }
       }
       cachedRgPath = rgPath;
       return rgPath;
     }
   } catch (e) {
-    // @vscode/ripgrep import or binary resolution failed, continue to fallbacks
   }
 
-  // Strategy 2: Try system ripgrep using 'which' (Unix) or 'where' (Windows)
+
   try {
     const systemRg = process.platform === 'win32' ? 'rg.exe' : 'rg';
     const whichCmd = process.platform === 'win32' ? 'where' : 'which';
@@ -43,10 +41,10 @@ export async function getRipgrepPath(): Promise<string> {
       return result;
     }
   } catch (e) {
-    // System rg not found via which
+
   }
 
-  // Strategy 3: Try common installation paths
+
   const commonPaths: string[] = [];
 
   if (process.platform === 'win32') {
@@ -61,7 +59,7 @@ export async function getRipgrepPath(): Promise<string> {
       '/usr/local/bin/rg',
       '/usr/bin/rg',
       path.join(os.homedir(), '.cargo', 'bin', 'rg'),
-      '/opt/homebrew/bin/rg' // Apple Silicon Homebrew
+      '/opt/homebrew/bin/rg' 
     );
   }
 
@@ -72,7 +70,7 @@ export async function getRipgrepPath(): Promise<string> {
     }
   }
 
-  // No ripgrep found - provide helpful error message
+
   throw new Error(
     'ripgrep binary not found. Desktop Commander requires ripgrep to perform searches. ' +
     'Please install ripgrep:\n' +

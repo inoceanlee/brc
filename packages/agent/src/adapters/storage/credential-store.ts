@@ -62,11 +62,11 @@ export class CredentialStore {
       this.operations.fsyncSync(descriptor);
       this.operations.closeSync(descriptor);
       descriptor = undefined;
-      try { chmodSync(temporaryFile, 0o600); } catch { /* windows */ }
+      try { chmodSync(temporaryFile, 0o600); } catch { }
       this.replaceWithRetry(temporaryFile);
     } catch (error) {
       if (descriptor !== undefined) this.operations.closeSync(descriptor);
-      try { this.operations.unlinkSync(temporaryFile); } catch { /* already removed */ }
+      try { this.operations.unlinkSync(temporaryFile); } catch { }
       throw error;
     }
   }

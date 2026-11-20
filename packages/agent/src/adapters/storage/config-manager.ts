@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { lstat, readFile, unlink } from 'node:fs/promises';
+import { lstat, readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import {
   DEFAULT_SETTINGS, resolveSettings, withSettingValue,
@@ -112,11 +112,8 @@ export class AgentConfigManager {
   private async load(): Promise<void> {
     await this.settingsStore.read();
     await this.readState();
-    const runtimeEnv = this.options.env ?? process.env;
-    const defaultRoot = resolveAgentPaths({ ...runtimeEnv, BRC_DATA_ROOT: undefined }).root;
-    const eligible = path.normalize(this.paths.root).toLowerCase() === path.normalize(defaultRoot).toLowerCase();
-    const legacyDirectory = this.options.legacyDirectory ?? (eligible ? this.paths.legacyDirectory : undefined);
-    if (legacyDirectory) await this.migrateLegacy(path.join(legacyDirectory, 'config.json'));
+    const legacyDirectory = this.options.legacyDirectory ?? this.paths.legacyDirectory;
+    await this.migrateLegacy(path.join(legacyDirectory, 'config.json'));
   }
 
   private async readState(): Promise<ServerConfig> {
@@ -202,7 +199,7 @@ export class AgentConfigManager {
     }
     await this.settingsStore.read();
     await this.readState();
-    await unlink(filename);
+    await rename(filename, filename + '.bak');
   }
 
   async getConfig(): Promise<ServerConfig> {

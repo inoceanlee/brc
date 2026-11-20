@@ -168,7 +168,7 @@ export class DefaultShellEncodingSession implements ShellEncodingSession {
         try {
           cb(this.info, handshake);
         } catch {
-          // ignore callback error
+
         }
       }
 
@@ -243,7 +243,7 @@ export class DefaultShellEncodingSession implements ShellEncodingSession {
       try {
         cb(error);
       } catch {
-        // ignore
+
       }
     }
   }
@@ -256,7 +256,7 @@ export class DefaultShellEncodingSession implements ShellEncodingSession {
       try {
         cb(error);
       } catch {
-        // ignore
+
       }
     }
   }

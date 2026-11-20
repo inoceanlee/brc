@@ -42,11 +42,11 @@ function getRepairedPathExt(): string {
 
 interface CompletedSession {
   pid: number;
-  outputLines: string[];       // Line-based buffer (consistent with active sessions)
+  outputLines: string[];       
   exitCode: number | null;
   startTime: Date;
   endTime: Date;
-  evictedLines: number;        // Carried over from the active session (see TerminalSession)
+  evictedLines: number;        
   evictedChars: number;
 }
 
@@ -58,21 +58,21 @@ interface CompletedSession {
  * The cap also bounds the join() cost in snapshot reads and the periodic
  * process-state scan, both of which are O(total output).
  */
-export const MAX_BUFFERED_OUTPUT_CHARS = 50 * 1024 * 1024;  // per session; oldest lines evicted first
-const MAX_LINE_CHARS = 1024 * 1024;                  // force-split longer lines so eviction can work
-const MAX_WAIT_OUTPUT_CHARS = 2 * 1024 * 1024;       // start_process wait buffer (prompt/state detection)
+export const MAX_BUFFERED_OUTPUT_CHARS = 50 * 1024 * 1024;  
+const MAX_LINE_CHARS = 1024 * 1024;                  
+const MAX_WAIT_OUTPUT_CHARS = 2 * 1024 * 1024;       
 
-// Result type for paginated output reading
+
 export interface PaginatedOutputResult {
   lines: string[];
   totalLines: number;
-  readFrom: number;            // Starting line of this read
-  readCount: number;           // Number of lines returned
-  remaining: number;           // Lines remaining after this read
-  isComplete: boolean;         // Whether process has finished
-  exitCode?: number | null;    // Exit code if completed
-  runtimeMs?: number;          // Runtime in milliseconds (for completed processes)
-  evictedLines?: number;       // Lines dropped by the buffer cap; when > 0, line numbers are relative to the retained buffer
+  readFrom: number;            
+  readCount: number;           
+  remaining: number;           
+  isComplete: boolean;         
+  exitCode?: number | null;    
+  runtimeMs?: number;          
+  evictedLines?: number;       
 }
 
 /**
@@ -82,8 +82,8 @@ interface ShellSpawnConfig {
   executable: string;
   args: string[];
   useShellOption: string | boolean;
-  // When true, pass args verbatim on Windows (see executeCommand). Only cmd.exe
-  // needs this; its quote parsing conflicts with libuv's default \" escaping.
+
+
   windowsVerbatim?: boolean;
 }
 
@@ -93,8 +93,8 @@ interface ShellSpawnConfig {
  */
 function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig {
   const shellName = path.basename(shellPath).toLowerCase();
-  
-  // Unix shells with login flag support
+
+
   if (shellName.includes('bash') || shellName.includes('zsh')) {
     return { 
       executable: shellPath, 
@@ -102,8 +102,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  // PowerShell Core (cross-platform, supports -Login)
+
+
   if (shellName === 'pwsh' || shellName === 'pwsh.exe') {
     return { 
       executable: shellPath, 
@@ -111,8 +111,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  // Windows PowerShell 5.1 (no login flag support)
+
+
   if (shellName === 'powershell' || shellName === 'powershell.exe') {
     return { 
       executable: shellPath, 
@@ -120,8 +120,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  // CMD
+
+
   if (shellName === 'cmd' || shellName === 'cmd.exe') {
     return { 
       executable: shellPath, 
@@ -130,8 +130,8 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  // Fish shell (uses -l for login, -c for command)
+
+
   if (shellName.includes('fish')) {
     return { 
       executable: shellPath, 
@@ -139,9 +139,9 @@ function getShellSpawnArgs(shellPath: string, command: string): ShellSpawnConfig
       useShellOption: false 
     };
   }
-  
-  // Unknown/other shells - use shell option for safety
-  // This provides a fallback for shells we don't explicitly handle
+
+
+
   return { 
     executable: command,
     args: [],
@@ -196,7 +196,7 @@ export class TerminalManager {
   listVirtualNodeSessions(): IterableIterator<[number, { timeout_ms: number }]> {
     return this.virtualNodeSessions.entries();
   }
-  
+
   /**
    * Send input to a running process
    * @param pid Process ID
@@ -208,10 +208,10 @@ export class TerminalManager {
     if (!session) {
       return false;
     }
-    
+
     try {
       if (session.process.stdin && !session.process.stdin.destroyed) {
-        // Ensure input ends with a newline for most REPLs
+
         const inputWithNewline = input.endsWith('\n') ? input : input + '\n';
     session.process.stdin.write(session.inputEncoding ? encodeShellInput(inputWithNewline, session.inputEncoding) : inputWithNewline);
         return true;
@@ -222,24 +222,24 @@ export class TerminalManager {
       return false;
     }
   }
-  
+
   async executeCommand(command: string, timeoutMs: number = DEFAULT_COMMAND_TIMEOUT, shell?: string, collectTiming: boolean = false): Promise<CommandExecutionResult> {
-    // Get the shell from config if not specified
+
     let shellToUse: string | boolean | undefined = shell;
     if (!shellToUse) {
       try {
         const config = await this.configManager.getConfig();
         shellToUse = config.defaultShell || true;
       } catch (error) {
-        // If there's an error getting the config, fall back to default
+
         shellToUse = true;
       }
     }
 
-    // For REPL interactions, we need to ensure stdin, stdout, and stderr are properly configured
-    // Note: No special stdio options needed here, Node.js handles pipes by default
 
-    // Enhance SSH commands automatically
+
+
+
     let enhancedCommand = command;
     if (command.trim().startsWith('ssh ') && !command.includes(' -t')) {
       enhancedCommand = command.replace(/^ssh /, 'ssh -t ');
@@ -252,25 +252,25 @@ export class TerminalManager {
   const shellCommand = encodingSession.wrappedCommand;
     let spawnConfig: ShellSpawnConfig;
     let spawnOptions: any;
-    
+
   if (effectiveShellPath) {
-      // Use shell-specific configuration with login flags where appropriate
+
    spawnConfig = getShellSpawnArgs(effectiveShellPath, shellCommand);
       spawnOptions = {
         env: {
           ...process.env,
           ...encodingSession.commandEnvironment,
-          TERM: 'xterm-256color'  // Better terminal compatibility
+          TERM: 'xterm-256color'  
         },
-        windowsHide: true  // Prevent visible console windows on Windows
+        windowsHide: true  
       };
 
-      // Add shell option if needed (for unknown shells)
+
       if (spawnConfig.useShellOption) {
         spawnOptions.shell = spawnConfig.useShellOption;
       }
     } else {
-      // Boolean or undefined shell - use default shell option behavior
+
       spawnConfig = {
         executable: enhancedCommand,
         args: [],
@@ -282,44 +282,44 @@ export class TerminalManager {
           ...process.env,
           TERM: 'xterm-256color'
         },
-        windowsHide: true  // Prevent visible console windows on Windows
+        windowsHide: true  
       };
     }
 
-    // Repair PATHEXT on Windows before spawning. On some Windows DXT launches
-    // the server process inherits a corrupted PATHEXT (e.g. ".CPL"), which we
-    // would otherwise propagate via { ...process.env } and break command
-    // resolution (git, node, python, rg, ...) in the spawned shell. See #481.
+
+
+
+
     if (process.platform === 'win32' && spawnOptions.env) {
       spawnOptions.env.PATHEXT = getRepairedPathExt();
     }
 
-    // On Windows, when we invoke cmd.exe directly and pass the user's command as a
-    // single argument, Node/libuv applies MSVCRT-style quoting that escapes embedded
-    // double quotes as \" . cmd.exe does not understand that escaping, so any command
-    // containing quotes (e.g. a quoted path with spaces like "C:\Program Files\app.exe")
-    // is corrupted before the shell ever parses it. Passing arguments verbatim lets
-    // cmd handle its own quoting. Scoped to shells that set windowsVerbatim (cmd only)
-    // because PowerShell/pwsh have different quote rules and must NOT use verbatim.
+
+
+
+
+
+
+
     if (process.platform === 'win32' && spawnConfig.windowsVerbatim) {
       spawnOptions.windowsVerbatimArguments = true;
     }
 
-    // Spawn the process with appropriate arguments
+
     const childProcess = spawn(spawnConfig.executable, spawnConfig.args, spawnOptions);
     let output = '';
 
-    // spawn() reports failure asynchronously via an 'error' event; it does not
-    // throw. Node rethrows an 'error' that has no listener as an uncaught
-    // exception, and our process-level handler (src/index.ts) turns that into
-    // process.exit(1). So an unresolvable executable — e.g. shell: "/usr/bin/bash"
-    // on Windows — used to kill the entire MCP server one tick AFTER this
-    // function had already returned "Failed to get process ID", making the crash
-    // look unrelated to the command that caused it. Under `remote` the parent
-    // then kept accepting tool calls over a dead stdio pipe ("Not connected").
-    //
-    // Attach before any return path below, and keep it for the session lifetime
-    // so a later runtime error (EPIPE on a closed stdin, ...) can't crash us either.
+
+
+
+
+
+
+
+
+
+
+
     let forwardProcessError: ((err: Error) => void) | null = null;
     let pendingProcessError: Error | null = null;
     childProcess.on('error', (err: Error) => {
@@ -331,11 +331,11 @@ export class TerminalManager {
       }
     });
 
-    // Ensure childProcess.pid is defined before proceeding
+
     if (!childProcess.pid) {
-      // Return a consistent error object instead of throwing
+
       return {
-        pid: -1,  // Use -1 to indicate an error state
+        pid: -1,
         output: 'Error: Failed to get process ID. The command could not be executed.',
         isBlocked: false
       };
@@ -344,8 +344,8 @@ export class TerminalManager {
     const session: TerminalSession = {
       pid: childProcess.pid,
       process: childProcess,
-      outputLines: [],           // Line-based buffer
-      lastReadIndex: 0,          // Track where "new" output starts
+      outputLines: [],
+      lastReadIndex: 0,
       isBlocked: false,
       startTime: new Date(),
       bufferedChars: 0,
@@ -355,7 +355,7 @@ export class TerminalManager {
 
     this.sessions.set(childProcess.pid, session);
 
-    // Timing telemetry
+
     const startTime = Date.now();
     let firstOutputTime: number | undefined;
     let lastOutputTime: number | undefined;
@@ -368,7 +368,7 @@ export class TerminalManager {
    let commandTimeout: NodeJS.Timeout | null = null;
    let probeTimeout: NodeJS.Timeout | null = null;
    let probeReady = !encodingSession.probeRequired;
-      // Quick prompt patterns for immediate detection
+
       const quickPromptPatterns = />>>\s*$|>\s*$|\$\s*$|#\s*$/;
 
       const resolveOnce = (result: CommandExecutionResult) => {
@@ -378,7 +378,7 @@ export class TerminalManager {
     if (commandTimeout) clearTimeout(commandTimeout);
     if (probeTimeout) clearTimeout(probeTimeout);
 
-        // Add timing info if requested
+
         if (collectTiming) {
           const endTime = Date.now();
           result.timingInfo = {
@@ -416,9 +416,9 @@ export class TerminalManager {
    } else {
     startCommandTimeout();
    }
-      // Now that resolveOnce exists, route process errors into it: an error after
-      // a successful spawn means the process is gone, so the caller must not sit
-      // waiting for output that will never arrive.
+
+
+
       forwardProcessError = (err: Error) => {
         this.sessions.delete(childProcess.pid!);
         exitReason = 'process_exit';
@@ -428,8 +428,8 @@ export class TerminalManager {
           isBlocked: false
         });
       };
-      // An error emitted between spawn and here (the common case — spawn errors
-      // land on the next tick) is replayed rather than dropped.
+
+
       if (pendingProcessError) {
         forwardProcessError(pendingProcessError);
       }
@@ -466,18 +466,18 @@ export class TerminalManager {
         if (!firstOutputTime) firstOutputTime = now;
         lastOutputTime = now;
 
-        // `output` only feeds the wait-phase result and prompt/state detection,
-        // so stop growing it once resolved and keep only a bounded tail.
+
+
         if (!resolved) {
           output += text;
           if (output.length > MAX_WAIT_OUTPUT_CHARS) {
             output = output.slice(-Math.floor(MAX_WAIT_OUTPUT_CHARS / 2));
           }
         }
-        // Append to line-based buffer
+
         this.appendToLineBuffer(session, text);
 
-        // Record output event if collecting timing
+
         if (collectTiming) {
           outputEvents.push({
             timestamp: now,
@@ -488,7 +488,7 @@ export class TerminalManager {
           });
         }
 
-        // Immediate check for obvious prompts
+
         if (quickPromptPatterns.test(text)) {
           session.isBlocked = true;
           exitReason = 'early_exit_quick_pattern';
@@ -525,10 +525,10 @@ export class TerminalManager {
             output = output.slice(-Math.floor(MAX_WAIT_OUTPUT_CHARS / 2));
           }
         }
-        // Append to line-based buffer
+
         this.appendToLineBuffer(session, text);
 
-        // Record output event if collecting timing
+
         if (collectTiming) {
           outputEvents.push({
             timestamp: now,
@@ -540,7 +540,7 @@ export class TerminalManager {
         }
       });
 
-      // Periodic comprehensive check every 100ms
+
       periodicCheck = setInterval(() => {
         if (output.trim()) {
           const processState = analyzeProcessState(output, childProcess.pid);
@@ -556,13 +556,13 @@ export class TerminalManager {
         }
       }, 100);
 
-      // 'exit' can fire before stdout/stderr drain; 'close' fires after both pipes close.
+
       childProcess.on('close', (code: any) => {
         if (childProcess.pid) {
-          // Store completed session before removing active session
+
           this.completedSessions.set(childProcess.pid, {
             pid: childProcess.pid,
-            outputLines: [...session.outputLines], // Copy line buffer
+            outputLines: [...session.outputLines],
             exitCode: code,
             startTime: session.startTime,
             endTime: new Date(),
@@ -570,7 +570,7 @@ export class TerminalManager {
             evictedChars: session.evictedChars
           });
 
-          // Keep only last 100 completed sessions
+
           if (this.completedSessions.size > 100) {
             const oldestKey = Array.from(this.completedSessions.keys())[0];
             this.completedSessions.delete(oldestKey);
@@ -595,7 +595,7 @@ export class TerminalManager {
   private appendToLineBuffer(session: TerminalSession, text: string): void {
     if (!text) return;
 
-    // Split text into lines, keeping track of whether text ends with newline
+
     const lines = text.split('\n');
 
     for (let i = 0; i < lines.length; i++) {
@@ -604,23 +604,23 @@ export class TerminalManager {
       const endsWithNewline = text.endsWith('\n');
 
       if (session.outputLines.length === 0) {
-        // First line ever
+
         session.outputLines.push(line);
       } else if (i === 0) {
-        // First fragment - append to last line (might be partial)
+
         session.outputLines[session.outputLines.length - 1] += line;
       } else {
-        // Subsequent lines - add as new lines
+
         session.outputLines.push(line);
       }
     }
-    // Appended text contributes exactly its length to the joined buffer
-    // (its newlines become the join separators).
+
+
     session.bufferedChars += text.length;
 
-    // A process printing without newlines grows a single line forever, which
-    // eviction can't bound — force-split so no line exceeds MAX_LINE_CHARS.
-    // Each inserted break adds one separator to the joined length.
+
+
+
     let lastIndex = session.outputLines.length - 1;
     while (session.outputLines[lastIndex].length > MAX_LINE_CHARS) {
       const overlong = session.outputLines[lastIndex];
@@ -630,12 +630,12 @@ export class TerminalManager {
       lastIndex++;
     }
 
-    // Enforce the per-session cap by evicting the oldest lines. Keeps the
-    // buffer far below V8's max string length so concatenation and join()
-    // can never throw "Invalid string length" and kill the server.
+
+
+
     while (session.bufferedChars > MAX_BUFFERED_OUTPUT_CHARS && session.outputLines.length > 1) {
       const dropped = session.outputLines.shift()!;
-      const droppedJoinedChars = dropped.length + 1; // +1 for its join separator
+      const droppedJoinedChars = dropped.length + 1; 
       session.bufferedChars -= droppedJoinedChars;
       session.evictedChars += droppedJoinedChars;
       session.evictedLines++;
@@ -651,7 +651,7 @@ export class TerminalManager {
    * @param updateReadIndex Whether to update lastReadIndex (default: true for offset=0)
    */
   readOutputPaginated(pid: number, offset: number = 0, length: number = 1000): PaginatedOutputResult | null {
-    // First check active sessions
+
     const session = this.sessions.get(pid);
     if (session) {
       const result = this.readFromLineBuffer(
@@ -667,7 +667,7 @@ export class TerminalManager {
       return result;
     }
 
-    // Then check completed sessions
+
     const completedSession = this.completedSessions.get(pid);
     if (completedSession) {
       const runtimeMs = completedSession.endTime.getTime() - completedSession.startTime.getTime();
@@ -675,8 +675,8 @@ export class TerminalManager {
         completedSession.outputLines,
         offset,
         length,
-        0,  // Completed sessions don't track read position
-        () => {},  // No-op for completed sessions
+        0,
+        () => {},
         true,
         completedSession.exitCode,
         runtimeMs
@@ -706,23 +706,23 @@ export class TerminalManager {
     let linesToRead: string[];
 
     if (offset < 0) {
-      // Negative offset = start position from end, then read 'length' lines forward
-      // e.g., offset=-50, length=10 means: start 50 lines from end, read 10 lines
+
+
       const fromEnd = Math.abs(offset);
       startIndex = Math.max(0, totalLines - fromEnd);
       linesToRead = lines.slice(startIndex, startIndex + length);
-      // Don't update lastReadIndex for tail reads
+
     } else if (offset === 0) {
-      // offset=0 means "from where I last read" (like getNewOutput)
+
       startIndex = lastReadIndex;
       linesToRead = lines.slice(startIndex, startIndex + length);
-      // Update lastReadIndex for "new output" behavior
+
       updateLastRead(Math.min(startIndex + linesToRead.length, totalLines));
     } else {
-      // Positive offset = absolute position
+
       startIndex = offset;
       linesToRead = lines.slice(startIndex, startIndex + length);
-      // Don't update lastReadIndex for absolute position reads
+
     }
 
     const readCount = linesToRead.length;
@@ -770,7 +770,7 @@ export class TerminalManager {
 
     const output = result.lines.join('\n').trim();
 
-    // For completed sessions, append completion info with runtime
+
     if (result.isComplete) {
       const runtimeStr = result.runtimeMs !== undefined 
         ? `\nRuntime: ${(result.runtimeMs / 1000).toFixed(2)}s` 
@@ -782,7 +782,7 @@ export class TerminalManager {
       }
     }
 
-    // Add truncation warning if there's more output
+
     if (result.remaining > 0) {
       return `${output}\n\n[Output truncated: ${result.remaining} more lines available. Use read_process_output with offset/length for full output.]`;
     }
@@ -799,9 +799,9 @@ export class TerminalManager {
     if (session) {
       const fullOutput = session.outputLines.join('\n');
       return {
-        // Absolute since process start (includes evicted output), so the
-        // offset stays valid even if the cap evicts lines between
-        // snapshot and read.
+
+
+
         totalChars: session.evictedChars + fullOutput.length,
         lineCount: session.evictedLines + session.outputLines.length
       };
@@ -815,13 +815,13 @@ export class TerminalManager {
    * Also checks completed sessions in case process finished between snapshot and poll.
    */
   getOutputSinceSnapshot(pid: number, snapshot: { totalChars: number; lineCount: number }): string | null {
-    // Check active session first
+
     const session = this.sessions.get(pid);
     if (session) {
       return TerminalManager.outputSinceSnapshot(session.outputLines, session.evictedChars, snapshot.totalChars);
     }
 
-    // Fallback to completed sessions - process may have finished between snapshot and poll
+
     const completedSession = this.completedSessions.get(pid);
     if (completedSession) {
       return TerminalManager.outputSinceSnapshot(completedSession.outputLines, completedSession.evictedChars, snapshot.totalChars);
@@ -839,7 +839,7 @@ export class TerminalManager {
     const fullOutput = outputLines.join('\n');
     const newChars = evictedChars + fullOutput.length - snapshotTotalChars;
     if (newChars <= 0) {
-      return ''; // No new output
+      return ''; 
     }
     return fullOutput.substring(Math.max(0, fullOutput.length - newChars));
   }
@@ -868,7 +868,7 @@ export class TerminalManager {
         }, 1000);
         return true;
       } catch (error) {
-        // Convert error to string, handling both Error objects and other types
+
         const errorMessage = error instanceof Error ? error.message : String(error);
         this.capture('server_request_error', {error: errorMessage, message: `Failed to terminate process ${pid}:`});
         return false;

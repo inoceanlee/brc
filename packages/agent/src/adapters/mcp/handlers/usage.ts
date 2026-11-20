@@ -7,7 +7,7 @@ import type { UsageTracker } from '../../telemetry/usageTracker.js';
 export async function getUsageStats(usageTracker: UsageTracker): Promise<ServerResult> {
   try {
     const summary = await usageTracker.getUsageSummary();
-    
+
     return {
       content: [{
         type: "text",
