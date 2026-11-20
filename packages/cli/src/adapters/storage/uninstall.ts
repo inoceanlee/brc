@@ -165,7 +165,7 @@ export async function removeGlobalBrcPackage(manager?: GlobalPackageManager): Pr
   await writeFile(reportPath, JSON.stringify({
     package: PACKAGE_NAME, manager, status: 'pending', scheduledAt: new Date().toISOString(),
   }));
-  const workerPath = fileURLToPath(new URL('./uninstall-worker.js', import.meta.url));
+  const workerPath = fileURLToPath(new URL('../package/uninstall-worker.js', import.meta.url));
   const worker = spawn(process.execPath, [workerPath, String(process.pid), reportPath, PACKAGE_NAME, manager], {
     detached: true,
     stdio: 'ignore',
