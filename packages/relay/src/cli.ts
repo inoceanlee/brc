@@ -5,7 +5,7 @@ import path from 'node:path';
 import express from 'express';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FileDiagnosticLog, FileSnapshotStore, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveSettings, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
 import { mountRelayRoutes } from './adapters/http/app.js';
 import { loadConfig } from './adapters/http/config.js';
 import { RelayOAuthProvider, RelayClientsStore } from './adapters/http/oauth-provider.js';
@@ -40,13 +40,17 @@ const probe = functionTiming ? installFunctionProbe(functionTiming) : undefined;
 const resourceSampler = diagnosticsEnabled
   ? new NodeResourceSampler({ intervalMs: settings.diagnostics.resourceSampleMs }) : undefined;
 const diagnosticStore = diagnosticsEnabled
-  ? new FileSnapshotStore({ directory: diagnosticsDirectory!, staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000) })
+  ? new SqliteDiagnosticsStore({
+    databasePath: resolveDiagnosticsDbPath(path.dirname(path.resolve(cfg.dbFile)), process.env),
+    config: diagnosticsRetentionConfig(settings),
+    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+  })
   : undefined;
 const diagnosticSession = functionTiming && resourceSampler && diagnosticStore
   ? new DiagnosticSession({
     service: 'relay',
     instanceId: process.env.BRC_MANAGED_ID ?? String(process.pid),
-    store: diagnosticStore,
+    store: diagnosticStore.snapshots,
     functions: functionTiming,
     resources: resourceSampler,
     snapshotIntervalMs: settings.diagnostics.functionSnapshotMs,
@@ -58,11 +62,7 @@ const diagnostics = createDiagnosticsRuntime({
   functions: functionTiming,
   resources: resourceSampler,
   session: diagnosticSession,
-  log: diagnosticsEnabled && process.env.BRC_LOG_FILE
-    ? new FileDiagnosticLog(path.join(path.dirname(process.env.BRC_LOG_FILE), 'relay-diagnostics.log'), {
-      maxRecordBytes: settings.diagnostics.maxRecordBytes,
-      maxBytes: settings.logs.rotateMiB * 1024 * 1024,
-    }) : undefined,
+  log: diagnosticStore?.log,
 });
 const managedLogFile = process.env.BRC_LOG_FILE;
 let pendingLogWrites = Promise.resolve();
@@ -77,6 +77,7 @@ async function closeLogs(): Promise<void> {
   const errors: unknown[] = [];
   await pendingLogWrites;
   try { await diagnostics.stop(); } catch (error) { errors.push(error); }
+  try { diagnosticStore?.close(); } catch (error) { errors.push(error); }
   try { probe?.uninstall(); } catch (error) { errors.push(error); }
   if (managedLogFailure) errors.push(managedLogFailure);
   if (errors.length === 1) throw errors[0];

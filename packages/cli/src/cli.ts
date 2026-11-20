@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { appendTraceSummary, createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FileDiagnosticLog, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, FileSnapshotStore, cliSuccess, cliFailure, renderCliResult, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
+import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
 import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
@@ -57,25 +57,26 @@ async function createProcessDiagnostics(
       } catch {}
     }
   }
+  const store = new SqliteDiagnosticsStore({
+    databasePath: resolveDiagnosticsDbPath(paths.data, process.env),
+    config: diagnosticsRetentionConfig(settings),
+    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+  });
   const probe = functions ? installFunctionProbe(functions) : undefined;
   const resources = functions ? new NodeResourceSampler({ intervalMs: settings.diagnostics.resourceSampleMs }) : undefined;
-  const store = functions ? new FileSnapshotStore({
-    directory: paths.diagnostics,
-    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
-  }) : undefined;
-  const session = functions && resources && store ? new DiagnosticSession({
-    service: component, instanceId, store, functions, resources,
+  const session = functions && resources ? new DiagnosticSession({
+    service: component, instanceId, store: store.snapshots, functions, resources,
     snapshotIntervalMs: settings.diagnostics.functionSnapshotMs,
   }) : undefined;
-  const log = functions ? new FileDiagnosticLog(path.join(paths.logs, `${component}-diagnostics.log`), {
-    maxRecordBytes: settings.diagnostics.maxRecordBytes,
-    maxBytes: settings.logs.rotateMiB * 1024 * 1024,
-  }) : undefined;
-  const runtime = createDiagnosticsRuntime({ enabled, component, instanceId, functions, resources, session, log });
+  const runtime = createDiagnosticsRuntime({
+    enabled, component, instanceId, functions, resources, session, log: enabled ? store.log : undefined,
+  });
   return {
     ...runtime,
+    snapshots: store.snapshots,
+    recordTrace: (summary: TraceSummary) => store.recordTrace(summary),
     async stop() {
-      try { await runtime.stop(); } finally { probe?.uninstall(); }
+      try { await runtime.stop(); } finally { probe?.uninstall(); store.close(); }
     },
   };
 }
@@ -196,13 +197,19 @@ async function dispatch(
         const rows = await readDiagnosticLogs(deps.paths, parsed.diagnoseFilter ?? {});
         return renderOutput(cliSuccess(rows), parsed, deps);
       }
-      if (parsed.diagnose === 'functions') {
-        const rows = await readFunctionDiagnostics(await snapshotStore(deps.paths));
-        return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No function statistics are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
-      }
-      if (parsed.diagnose === 'resources') {
-        const rows = await readResourceDiagnostics(await snapshotStore(deps.paths));
-        return renderOutput(cliSuccess(rows.length ? rows : [{ message: 'No resource samples are available. Start a managed service with diagnostics enabled.' }]), parsed, deps);
+      if (parsed.diagnose === 'functions' || parsed.diagnose === 'resources') {
+        const store = await snapshotStore(deps.paths);
+        try {
+          const rows = parsed.diagnose === 'functions'
+            ? await readFunctionDiagnostics(store.snapshots)
+            : await readResourceDiagnostics(store.snapshots);
+          const message = parsed.diagnose === 'functions'
+            ? 'No function statistics are available. Start a managed service with diagnostics enabled.'
+            : 'No resource samples are available. Start a managed service with diagnostics enabled.';
+          return renderOutput(cliSuccess(rows.length ? rows : [{ message }]), parsed, deps);
+        } finally {
+          store.close();
+        }
       }
       const result = parsed.diagnose === 'lifecycle'
         ? await readLatestLifecycle(deps.paths)
@@ -410,11 +417,11 @@ function traefikSettingsChanged(previous: Readonly<BrcSettings>, next: Readonly<
 }
 
 
-async function snapshotStore(paths: BrcPaths): Promise<FileSnapshotStore> {
+async function snapshotStore(paths: BrcPaths): Promise<SqliteDiagnosticsStore> {
   const { settings } = await readSettings(paths, process.env);
-  const directory = paths.diagnostics ?? path.join(paths.root, 'diagnostics');
-  return new FileSnapshotStore({
-    directory,
+  return new SqliteDiagnosticsStore({
+    databasePath: resolveDiagnosticsDbPath(paths.data, process.env),
+    config: diagnosticsRetentionConfig(settings),
     staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
     isSameProcess: async (snapshot: DiagnosticSnapshot) => {
       if (snapshot.service === 'cli') return snapshot.pid === process.pid;
@@ -465,15 +472,24 @@ async function main(): Promise<void> {
   const clean = async (cleanPaths: BrcPaths) => {
     const { settings: cleanupSettings } = await readSettings(cleanPaths, process.env);
     const lockStore = new LockStore(cleanPaths);
-    return cleanRuntime(cleanPaths, { settings: cleanupSettings }, {
-      lockStore,
-      lifecycleLock: new LifecycleLock(cleanPaths, lockStore, {
-        waitMs: cleanupSettings.runtime.lockWaitMs,
-        pollMs: cleanupSettings.runtime.lockPollMs,
-      }),
-      snapshotStore: new FileSnapshotStore({ directory: cleanPaths.diagnostics }),
-      createProcessManager: cleanupProcessManagerFactory(cleanPaths),
+    const diagnosticsStore = new SqliteDiagnosticsStore({
+      databasePath: resolveDiagnosticsDbPath(cleanPaths.data, process.env),
+      config: diagnosticsRetentionConfig(cleanupSettings),
     });
+    try {
+      return await cleanRuntime(cleanPaths, { settings: cleanupSettings }, {
+        lockStore,
+        lifecycleLock: new LifecycleLock(cleanPaths, lockStore, {
+          waitMs: cleanupSettings.runtime.lockWaitMs,
+          pollMs: cleanupSettings.runtime.lockPollMs,
+        }),
+        snapshotStore: diagnosticsStore.snapshots,
+        diagnosticsStore,
+        createProcessManager: cleanupProcessManagerFactory(cleanPaths),
+      });
+    } finally {
+      diagnosticsStore.close();
+    }
   };
   if (lightweight) {
     process.exitCode = await runCli(args, {
@@ -670,9 +686,7 @@ async function main(): Promise<void> {
     statusJson: async () => ({ services: await serviceManager.status() }),
     trace,
     timing: args.includes('--timing'),
-    onTrace: async (summary) => appendTraceSummary(path.join(paths.logs, 'cli.log'), summary, {
-      maxBytes: settings.logs.rotateMiB * 1024 * 1024,
-    }),
+    onTrace: async (summary) => { diagnostics.recordTrace(summary); },
     signal: commandController.signal,
   };
   let commandPromise: Promise<number> | undefined;
@@ -714,7 +728,7 @@ if (isMainModule()) {
       'traefik', process.env.BRC_MANAGED_ID ?? String(process.pid), settings, paths,
     );
     try {
-      const snapshots = settings.diagnostics.enabled ? new FileSnapshotStore({ directory: paths.diagnostics }) : undefined;
+      const snapshots = settings.diagnostics.enabled ? diagnostics.snapshots : undefined;
       const createBinaryResourceMonitor = snapshots ? async (pid: number, instanceId: string) => {
         const identity = await inspectProcess(pid);
         if (!identity) throw new Error('Traefik binary process identity could not be verified for resource sampling.');
