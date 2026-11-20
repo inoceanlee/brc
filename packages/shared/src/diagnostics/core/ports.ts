@@ -1,9 +1,39 @@
 import type { FunctionTimingSnapshot } from './functions.js';
-import type { DiagnosticEvent, DiagnosticEventInput } from './event.js';
+import type { DiagnosticComponent, DiagnosticEvent, DiagnosticEventInput, DiagnosticLevel } from './event.js';
 
 export interface DiagnosticLogPort {
   write(input: DiagnosticEventInput): Promise<void>;
   flush(): Promise<void>;
+}
+
+export interface DiagnosticQueryFilter {
+  since?: string;
+  until?: string;
+  source?: string;
+  runId?: string;
+  level?: DiagnosticLevel;
+  component?: DiagnosticComponent;
+  limit?: number;
+}
+
+export interface DiagnosticQueryPort {
+  query(filter?: DiagnosticQueryFilter): Promise<DiagnosticEvent[]>;
+}
+
+export interface RelayAuditEntry {
+  ts: number;
+  userId?: string | null;
+  deviceId?: string | null;
+  client?: string | null;
+  tool: string;
+  argsHash?: string | null;
+  ok: boolean;
+  ms?: number | null;
+  error?: string | null;
+}
+
+export interface RelayAuditPort {
+  append(entry: RelayAuditEntry): Promise<void>;
 }
 
 export interface ResourcePeak {
