@@ -1,5 +1,22 @@
 export const DEFAULT_LOG_ROTATE_BYTES = 4 * 1024 * 1024;
 
+export const FILE_SIZE_LIMITS = Object.freeze({
+  LINE_COUNT_LIMIT: 10 * 1024 * 1024,
+});
+
+export const RESOURCE_SAMPLE_INTERVAL_MIN_MS = 100;
+export const RESOURCE_SAMPLE_INTERVAL_DEFAULT_MS = 1_000;
+export const RESOURCE_SAMPLE_INTERVAL_MAX_MS = 60_000;
+export const DIAGNOSTIC_SINGLE_SAMPLE_MAX_MS = 1_000;
+
+export const FUNCTION_SNAPSHOT_MIN_MS = 1_000;
+export const FUNCTION_SNAPSHOT_DEFAULT_MS = 10_000;
+export const FUNCTION_SNAPSHOT_MAX_MS = 3_600_000;
+
+export const DEFAULT_AGENT_FILE_READ_LINE_LIMIT = 1_000;
+export const DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT = 50;
+export const DEFAULT_AGENT_COMMAND_TIMEOUT_MS = 1_000;
+
 export interface BrcSettings {
   version: 1;
   proxy: {
@@ -164,12 +181,18 @@ export const DEFAULT_SETTINGS: Readonly<BrcSettings> = Object.freeze({
   }),
   services: Object.freeze({ relayPort: 3000, proxyPort: 13001, healthPort: 13002, publicUrl: '' }),
   logs: Object.freeze({ retentionDays: 7, maxTotalMiB: 50, rotateMiB: DEFAULT_LOG_ROTATE_BYTES / (1024 * 1024) }),
-  diagnostics: Object.freeze({ enabled: true, resourceSampleMs: 1_000, functionSnapshotMs: 10_000, maxRecordBytes: 65_536, retentionDays: 7 }),
+  diagnostics: Object.freeze({
+    enabled: true,
+    resourceSampleMs: RESOURCE_SAMPLE_INTERVAL_DEFAULT_MS,
+    functionSnapshotMs: FUNCTION_SNAPSHOT_DEFAULT_MS,
+    maxRecordBytes: 65_536,
+    retentionDays: 7,
+  }),
   audit: Object.freeze({ retentionDays: 30, maxEntries: 50_000 }),
   agent: Object.freeze({
-    fileReadLineLimit: 1_000,
-    fileWriteLineLimit: 50,
-    commandTimeoutMs: 1_000,
+    fileReadLineLimit: DEFAULT_AGENT_FILE_READ_LINE_LIMIT,
+    fileWriteLineLimit: DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT,
+    commandTimeoutMs: DEFAULT_AGENT_COMMAND_TIMEOUT_MS,
     defaultShell: '',
     blockedCommands: Object.freeze([
       'mkfs', 'format', 'mount', 'umount', 'fdisk', 'dd', 'parted', 'diskpart',
@@ -275,11 +298,13 @@ function validateSettingValue(key: BrcSettingKey, value: unknown): number | stri
     if (value < 1 || value > 65535) throw new Error(`${key} must be an integer from 1 to 65535.`);
     return value;
   }
-  if (key === 'diagnostics.resourceSampleMs' && (value < 100 || value > 60_000)) {
-    throw new Error('diagnostics.resourceSampleMs must be between 100 and 60000.');
+  if (key === 'diagnostics.resourceSampleMs'
+      && (value < RESOURCE_SAMPLE_INTERVAL_MIN_MS || value > RESOURCE_SAMPLE_INTERVAL_MAX_MS)) {
+    throw new Error(`diagnostics.resourceSampleMs must be between ${RESOURCE_SAMPLE_INTERVAL_MIN_MS} and ${RESOURCE_SAMPLE_INTERVAL_MAX_MS}.`);
   }
-  if (key === 'diagnostics.functionSnapshotMs' && (value < 1000 || value > 3_600_000)) {
-    throw new Error('diagnostics.functionSnapshotMs must be between 1000 and 3600000.');
+  if (key === 'diagnostics.functionSnapshotMs'
+      && (value < FUNCTION_SNAPSHOT_MIN_MS || value > FUNCTION_SNAPSHOT_MAX_MS)) {
+    throw new Error(`diagnostics.functionSnapshotMs must be between ${FUNCTION_SNAPSHOT_MIN_MS} and ${FUNCTION_SNAPSHOT_MAX_MS}.`);
   }
   if (key === 'diagnostics.maxRecordBytes' && (value < 256 || value > 65_536)) {
     throw new Error('diagnostics.maxRecordBytes must be between 256 and 65536.');

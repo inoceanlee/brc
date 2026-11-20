@@ -26,9 +26,22 @@ export interface ResourceSample {
   unavailable?: string;
 }
 
-export interface ResourceSamplePort {
-  sample(): Promise<ResourceSample>;
+export interface ManagedProcessIdentity {
+  pid: number;
+  createdAt: string;
+  executablePath: string;
+  commandLine: string;
 }
+
+export interface ManagedProcessResourcePort {
+  sample(identity: Readonly<ManagedProcessIdentity>): Promise<ResourceSample>;
+}
+
+export interface ResourceSamplePort {
+  sample(identity?: Readonly<ManagedProcessIdentity>): Promise<ResourceSample>;
+}
+
+export type LegacyResourceSamplePort = ResourceSamplePort;
 
 export type SnapshotState = 'current' | 'exited' | 'stale' | 'missing' | 'corrupt';
 
