@@ -345,8 +345,9 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
           'uninstall',
           '--yes',
         ], { cwd: root, env: isolatedEnv });
-      const reportMatch = command.match(/completion report: (.+)/);
+      const reportMatch = command.match(/completion report: (.+?)(?: Review the residual paths above\.)?$/m);
       assert.ok(reportMatch, `${shell} uninstall did not report its completion file:\n${command}`);
+      assert.doesNotMatch(command, /Review the residual paths above\./);
       const removalReport = await waitForRemovalReport(reportMatch[1].trim());
 
       assert.equal(removalReport.status, 'completed', JSON.stringify(removalReport));

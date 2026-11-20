@@ -57,26 +57,26 @@ async function createProcessDiagnostics(
       } catch {}
     }
   }
-  const store = new SqliteDiagnosticsStore({
+  const store = enabled ? new SqliteDiagnosticsStore({
     databasePath: resolveDiagnosticsDbPath(paths.data, process.env),
     config: diagnosticsRetentionConfig(settings),
     staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
-  });
+  }) : undefined;
   const probe = functions ? installFunctionProbe(functions) : undefined;
   const resources = functions ? new NodeResourceSampler({ intervalMs: settings.diagnostics.resourceSampleMs }) : undefined;
-  const session = functions && resources ? new DiagnosticSession({
+  const session = functions && resources && store ? new DiagnosticSession({
     service: component, instanceId, store: store.snapshots, functions, resources,
     snapshotIntervalMs: settings.diagnostics.functionSnapshotMs,
   }) : undefined;
   const runtime = createDiagnosticsRuntime({
-    enabled, component, instanceId, functions, resources, session, log: enabled ? store.log : undefined,
+    enabled, component, instanceId, functions, resources, session, log: store?.log,
   });
   return {
     ...runtime,
-    snapshots: store.snapshots,
-    recordTrace: (summary: TraceSummary) => store.recordTrace(summary),
+    ...(store ? { snapshots: store.snapshots } : {}),
+    recordTrace: store ? (summary: TraceSummary) => store.recordTrace(summary) : () => 0,
     async stop() {
-      try { await runtime.stop(); } finally { probe?.uninstall(); store.close(); }
+      try { await runtime.stop(); } finally { probe?.uninstall(); store?.close(); }
     },
   };
 }
