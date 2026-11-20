@@ -1,4 +1,3 @@
-import path from 'node:path';
 import type { BrcPaths } from '../config/paths.js';
 import { readManagedLog } from '../adapters/storage/logs.js';
 import {
@@ -7,6 +6,7 @@ import {
   type DiagnosticQueryFilter,
   type DiagnosticSnapshotPort,
   type SnapshotReadResult,
+  type TraceSummary,
 } from 'brc-shared';
 
 interface SharedQueryModule {
@@ -14,11 +14,11 @@ interface SharedQueryModule {
     query(filter: DiagnosticQueryFilter): Promise<DiagnosticEvent[]>;
     close(): void;
   };
-  SqliteDiagnosticsStore: new (options: { databasePath: string }) => {
-    queryTraces(filter: { commands?: readonly string[]; limit?: number }): Array<Record<string, unknown>>;
-    close(): void;
-  };
   resolveDiagnosticsDbPath(directory: string, env?: NodeJS.ProcessEnv): string;
+}
+
+export interface DiagnosticQueryLike {
+  queryTraces(filter: { commands?: readonly string[]; limit?: number }): TraceSummary[];
 }
 
 let sharedQueryModule: Promise<SharedQueryModule> | undefined;
@@ -36,7 +36,7 @@ function loadSharedQueryModule(): Promise<SharedQueryModule> {
 
 export interface StartupDiagnosticResult {
   state: 'missing' | 'recorded';
-  summary: Record<string, unknown> | null;
+  summary: Record<string, unknown> | TraceSummary | null;
 }
 
 export interface FunctionDiagnosticRow {
@@ -97,28 +97,22 @@ async function readLatestTraceFile(paths: BrcPaths, acceptedCommands: readonly s
   return { state: 'missing', summary: null };
 }
 
-async function readLatestTrace(paths: BrcPaths, acceptedCommands: readonly string[]): Promise<StartupDiagnosticResult> {
-  const shared = await loadSharedQueryModule();
-  const dataDirectory = paths.data ?? path.join(paths.root, 'data');
-  const store = new shared.SqliteDiagnosticsStore({
-    databasePath: shared.resolveDiagnosticsDbPath(dataDirectory, process.env),
-  });
-  let summary: Record<string, unknown> | undefined;
-  try {
-    [summary] = store.queryTraces({ commands: acceptedCommands, limit: 1 });
-  } finally {
-    store.close();
-  }
+async function readLatestTrace(
+  paths: BrcPaths,
+  acceptedCommands: readonly string[],
+  query: DiagnosticQueryLike,
+): Promise<StartupDiagnosticResult> {
+  const [summary] = query.queryTraces({ commands: acceptedCommands, limit: 1 });
   if (summary && summary.traceSchema === 1) return { state: 'recorded', summary };
   return readLatestTraceFile(paths, acceptedCommands);
 }
 
-export function readLatestStartup(paths: BrcPaths): Promise<StartupDiagnosticResult> {
-  return readLatestTrace(paths, ['start']);
+export function readLatestStartup(paths: BrcPaths, query: DiagnosticQueryLike): Promise<StartupDiagnosticResult> {
+  return readLatestTrace(paths, ['start'], query);
 }
 
-export function readLatestLifecycle(paths: BrcPaths): Promise<StartupDiagnosticResult> {
-  return readLatestTrace(paths, ['start', 'stop', 'restart']);
+export function readLatestLifecycle(paths: BrcPaths, query: DiagnosticQueryLike): Promise<StartupDiagnosticResult> {
+  return readLatestTrace(paths, ['start', 'stop', 'restart'], query);
 }
 
 export async function readFunctionDiagnostics(store: Pick<DiagnosticSnapshotPort, 'list'>): Promise<FunctionDiagnosticRow[]> {

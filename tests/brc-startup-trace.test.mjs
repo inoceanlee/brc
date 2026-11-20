@@ -36,7 +36,15 @@ test('trace saves failed stage without storing sensitive exception content', asy
   assert.doesNotMatch(JSON.stringify(summary), /my-secret/);
 });
 
-test('lifecycle diagnosis reports the latest stop or restart trace', async (t) => {
+test('lifecycle diagnosis reads the injected trace query', async () => {
+  const { readLatestLifecycle } = await import('../packages/cli/dist/commands/diagnostics.js');
+  const injected = { traceSchema: 1, command: 'restart', runId: 'injected-restart' };
+  const query = { queryTraces: () => [injected] };
+  const result = await readLatestLifecycle({ root: '', logs: '' }, query);
+  assert.deepEqual(result, { state: 'recorded', summary: injected });
+});
+
+test('lifecycle diagnosis falls back to cli.log when the injected query has no trace', async (t) => {
   const { mkdtemp, mkdir, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const path = await import('node:path');
@@ -51,7 +59,7 @@ test('lifecycle diagnosis reports the latest stop or restart trace', async (t) =
     await trace.span(command + '-operation', async () => {});
     await appendTraceSummary(path.join(paths.logs, 'cli.log'), trace.finish('ok'));
   }
-  const result = await readLatestLifecycle(paths);
+  const result = await readLatestLifecycle(paths, { queryTraces: () => [] });
   assert.equal(result.state, 'recorded');
   assert.equal(result.summary.command, 'restart');
   assert.equal(result.summary.runId, 'run-restart');

@@ -1,6 +1,4 @@
-export const ARCHITECTURE_BASELINE = Object.freeze(new Set([
-  'cli/commands/diagnostics.ts: nested service construction SqliteDiagnosticsStore@readLatestTrace:store',
-]));
+export const ARCHITECTURE_BASELINE = Object.freeze(new Set([]));
 
 export function compareWithBaseline(actual, baseline = ARCHITECTURE_BASELINE) {
   const found = new Set(actual);

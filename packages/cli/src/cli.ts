@@ -211,15 +211,22 @@ async function dispatch(
           store.close();
         }
       }
-      const result = parsed.diagnose === 'lifecycle'
-        ? await readLatestLifecycle(deps.paths)
-        : await readLatestStartup(deps.paths);
-      return renderOutput(cliSuccess(result.summary ? result : {
-        ...result,
-        message: parsed.diagnose === 'lifecycle'
-          ? 'No lifecycle diagnosis has been recorded.'
-          : 'No startup diagnosis has been recorded.',
-      }), parsed, deps);
+      const query = new SqliteDiagnosticsStore({
+        databasePath: resolveDiagnosticsDbPath(deps.paths.data, process.env),
+      });
+      try {
+        const result = parsed.diagnose === 'lifecycle'
+          ? await readLatestLifecycle(deps.paths, query)
+          : await readLatestStartup(deps.paths, query);
+        return renderOutput(cliSuccess(result.summary ? result : {
+          ...result,
+          message: parsed.diagnose === 'lifecycle'
+            ? 'No lifecycle diagnosis has been recorded.'
+            : 'No startup diagnosis has been recorded.',
+        }), parsed, deps);
+      } finally {
+        query.close();
+      }
     }
     case 'setup': {
       if (existsSync(path.join(deps.paths.data, 'relay.sqlite'))) {
