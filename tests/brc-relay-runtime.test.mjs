@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
+import { SqliteDiagnosticQuery, SqliteDiagnosticsStore } from '../packages/shared/dist/index.js';
 
 const cli = path.resolve(import.meta.dirname, '../packages/relay/dist/cli.js');
 
@@ -27,6 +29,7 @@ test('relay CLI isolated start, health, managed logs, diagnostic snapshot and sh
     BRC_LOG_FILE: path.join(dir, 'relay.log'),
     BRC_DIAGNOSTICS_ENABLED: 'true',
     BRC_DIAGNOSTICS_DIR: path.join(dir, 'diag'),
+    BRC_DIAGNOSTICS_DB: path.join(dir, 'relay-diagnostics.sqlite'),
     PORT: String(port),
     HOST: '127.0.0.1',
     PUBLIC_URL: `http://127.0.0.1:${port}`,
@@ -73,11 +76,15 @@ test('relay CLI isolated start, health, managed logs, diagnostic snapshot and sh
     assert.equal(code, 0, stdout + stderr);
     child = undefined;
     assert.match(readFileSync(path.join(dir, 'relay.log'), 'utf8'), /brc-relay listening/);
-    const events = readFileSync(path.join(dir, 'relay-diagnostics.log'), 'utf8');
-    assert.match(events, /brc-relay listening/);
-    const snapshotFile = readdirSync(path.join(dir, 'diag')).find((name) => name.startsWith('relay-'));
-    assert.ok(snapshotFile);
-    const snapshot = JSON.parse(readFileSync(path.join(dir, 'diag', snapshotFile), 'utf8'));
+    const query = new SqliteDiagnosticQuery({ databasePath: env.BRC_DIAGNOSTICS_DB });
+    const events = await query.query({});
+    query.close();
+    assert.ok(events.some((event) => /brc-relay listening/.test(event.message)));
+    const snapshotStore = new SqliteDiagnosticsStore({ databasePath: env.BRC_DIAGNOSTICS_DB });
+    const snapshots = (await snapshotStore.snapshots.list('relay')).filter((item) => item.snapshot?.status === 'exited');
+    snapshotStore.close();
+    const snapshot = snapshots.at(-1)?.snapshot;
+    assert.ok(snapshot);
     assert.equal(snapshot.status, 'exited');
     assert.equal(snapshot.service, 'relay');
     assert.ok(snapshot.resources);
@@ -101,6 +108,7 @@ test('running relay reports degraded when diagnostic log writes fail', { timeout
     BRC_LOG_FILE: path.join(dir, 'relay.log'),
     BRC_DIAGNOSTICS_ENABLED: 'true',
     BRC_DIAGNOSTICS_DIR: path.join(dir, 'diag'),
+    BRC_DIAGNOSTICS_DB: path.join(dir, 'relay-diagnostics.sqlite'),
     PORT: String(port), HOST: '127.0.0.1', PUBLIC_URL: `http://127.0.0.1:${port}`,
     BRC_CONTROL_TOKEN: 'test-control-token',
     BRC_CONTROL_READY_FILE: path.join(dir, 'control.json'),
@@ -113,7 +121,11 @@ test('running relay reports degraded when diagnostic log writes fail', { timeout
       encoding: 'utf8', timeout: 10_000,
     });
     assert.equal(init.status, 0, init.stderr);
-    mkdirSync(path.join(dir, 'relay-diagnostics.log'));
+    const seedStore = new SqliteDiagnosticsStore({ databasePath: env.BRC_DIAGNOSTICS_DB });
+    seedStore.close();
+    const setupDatabase = new DatabaseSync(env.BRC_DIAGNOSTICS_DB);
+    setupDatabase.exec("CREATE TRIGGER block_relay_diagnostics BEFORE INSERT ON diagnostic_events BEGIN SELECT RAISE(ABORT, 'relay diagnostic writes blocked by test'); END;");
+    setupDatabase.close();
     child = spawn(process.execPath, [cli], { env, stdio: ['ignore', 'ignore', 'pipe'] });
     child.stderr.resume();
     for (let attempt = 0; attempt < 200 && !existsSync(env.BRC_CONTROL_READY_FILE); attempt++) {

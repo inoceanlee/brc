@@ -9,6 +9,8 @@ import { test } from 'node:test';
 const cli = fileURLToPath(new URL('../packages/cli/dist/cli.js', import.meta.url));
 const shared = new URL('../packages/shared/dist/index.js', import.meta.url).href;
 const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
+const firstEventAt = new Date(Date.now() - 60_000);
+const secondEventAt = new Date();
 
 function run(root, ...args) {
   return spawnSync(process.execPath, [cli, ...args], {
@@ -22,11 +24,11 @@ async function seed(root) {
   const log = new SqliteDiagnosticLog({ databasePath: resolveDiagnosticsDbPath(path.join(root, 'data'), {}) });
   await log.write({
     level: 'info', component: 'cli', source: { file: 'cli.ts', function: 'main' },
-    message: 'first event', runId: 'run-a', now: new Date('2026-01-01T00:00:00.000Z'),
+    message: 'first event', runId: 'run-a', now: firstEventAt,
   });
   await log.write({
     level: 'error', component: 'relay', source: { file: 'relay.ts', function: 'serve' },
-    message: 'second event', runId: 'run-b', now: new Date('2026-01-02T00:00:00.000Z'),
+    message: 'second event', runId: 'run-b', now: secondEventAt,
   });
   await log.flush();
   log.close();
@@ -43,7 +45,7 @@ test('diagnose logs queries unified SQLite events with structured filters', asyn
   assert.equal(rows.length, 2);
   assert.equal(rows[0].message, 'first event');
 
-  const filtered = run(root, 'diagnose', 'logs', '--json', '--since', '2026-01-02T00:00:00.000Z', '--level', 'error', '--run-id', 'run-b');
+  const filtered = run(root, 'diagnose', 'logs', '--json', '--since', secondEventAt.toISOString(), '--level', 'error', '--run-id', 'run-b');
   assert.equal(filtered.status, 0, filtered.stderr);
   const selected = JSON.parse(filtered.stdout);
   assert.equal(selected.length, 1);

@@ -228,6 +228,7 @@ test('direct connection stores enabled diagnostic snapshots under its data root'
       ...env, DO_NOT_TRACK: '1', BRC_DATA_ROOT: root,
       BRC_RELAY: 'http://127.0.0.1:1', BRC_DEVICE_ID: 'device', BRC_TOKEN: 'token',
       BRC_DIAGNOSTICS_ENABLED: 'true', BRC_DIAGNOSTICS_FUNCTION_SNAPSHOT_MS: '1000',
+      BRC_DIAGNOSTICS_DB: path.join(root, 'data', 'brc-diagnostics.sqlite'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -241,10 +242,10 @@ test('direct connection stores enabled diagnostic snapshots under its data root'
     }
     rmSync(root, { recursive: true, force: true });
   });
-  const directory = path.join(root, 'diagnostics');
+  const databasePath = path.join(root, 'data', 'brc-diagnostics.sqlite');
   const deadline = Date.now() + 7000;
-  while (!existsSync(directory) && Date.now() < deadline && child.exitCode === null) {
+  while (!existsSync(databasePath) && Date.now() < deadline && child.exitCode === null) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  assert.ok(existsSync(directory), errors);
+  assert.ok(existsSync(databasePath), errors);
 });
