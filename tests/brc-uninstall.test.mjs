@@ -5,8 +5,8 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { uninstallBrc } from '../packages/cli/dist/maintenance/uninstall.js';
-import { identifyGlobalPackageManager, packageRemovalArguments, BRC_PACKAGE_NAME } from '../packages/cli/dist/maintenance/global-package.js';
+import { uninstallBrc } from '../packages/cli/dist/adapters/storage/uninstall.js';
+import { identifyGlobalPackageManager, packageRemovalArguments, BRC_PACKAGE_NAME } from '../packages/cli/dist/adapters/package/global-package.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
 import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { inspectProcess, ProcessManager } from '../packages/cli/dist/adapters/process/controller.js';
@@ -28,6 +28,7 @@ function cleanRuntime(paths, options = {}) {
       pollMs: options.settings?.runtime.lockPollMs,
     }),
     snapshotStore: new FileSnapshotStore({ directory: paths.diagnostics ?? path.join(paths.root, 'diagnostics') }),
+    createProcessManager: (options) => new ProcessManager(paths, options),
   });
 }
 

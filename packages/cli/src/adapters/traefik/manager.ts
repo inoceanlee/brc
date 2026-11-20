@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
-import type { BrcPaths } from '../config/paths.js';
-import type { BrcSettings } from '../config/settings.js';
-import type { LockedServiceOperations, ServiceManager } from '../core/lifecycle/workflow.js';
-import { isStartable } from '../core/lifecycle/policy.js';
-import { processArchive, readChecksum, renderConfig, type TraefikRelease, type VersionManifest } from './core.js';
+import type { BrcPaths } from '../../config/paths.js';
+import type { BrcSettings } from '../../config/settings.js';
+import type { LockedServiceOperations, ServiceManager } from '../../core/lifecycle/workflow.js';
+import { isStartable } from '../../core/lifecycle/policy.js';
+import { readChecksum, renderConfig, type TraefikRelease, type VersionManifest } from '../../core/traefik/rules.js';
+import { processArchive } from './archive.js';
 import { readManifest, TraefikInput, type TraefikInputOptions } from './input.js';
 import { ensureSafeDirectory, TraefikOutput } from './output.js';
 import { runHealthProbe, verifyExecutable, waitForConfigGeneration } from './runtime.js';

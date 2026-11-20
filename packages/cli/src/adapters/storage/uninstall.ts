@@ -6,10 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { allowsInteractiveInput, type InteractiveTerminal } from '../adapters/terminal/interaction.js';
-import type { BrcPaths } from '../config/paths.js';
-import { removeBrcData, type CleanupReport } from '../adapters/storage/cleanup.js';
-import { GlobalPackageRemoval, type GlobalPackageManager, BRC_PACKAGE_NAME as PACKAGE_NAME } from './global-package.js';
+import { allowsInteractiveInput, type InteractiveTerminal } from '../terminal/interaction.js';
+import type { BrcPaths } from '../../config/paths.js';
+import { removeBrcData, type CleanupReport } from './cleanup.js';
+import { GlobalPackageRemoval, type GlobalPackageManager, BRC_PACKAGE_NAME as PACKAGE_NAME } from '../package/global-package.js';
+import { packageRemovalStatus, uninstallCompletionMessage } from '../../core/maintenance/uninstall.js';
+import type { PackageRemovalResult } from '../../core/maintenance/ports.js';
+
+export type { PackageRemovalResult } from '../../core/maintenance/ports.js';
 
 // Global shims preserve the launch path; pnpm can resolve imported modules into its content store.
 const globalPackageRemoval = new GlobalPackageRemoval(process.argv[1] ?? fileURLToPath(import.meta.url));
@@ -22,11 +26,6 @@ const PACKAGE_MANAGER_ENV_PATHS = [
   'PNPM_CONFIG_STATE_DIR',
   'NPM_CONFIG_PREFIX',
 ] as const;
-
-export interface PackageRemovalResult {
-  scheduled: boolean;
-  reportPath?: string;
-}
 
 export interface UninstallOptions {
   yes: boolean;
@@ -136,7 +135,7 @@ export async function uninstallBrc(options: UninstallOptions): Promise<void | Cl
   await options.clean();
   const report = await removeBrcData(options.paths);
   const result = await options.removePackage(manager);
-  const packageRemoval = result?.scheduled ? 'scheduled' : 'removed';
+  const packageRemoval = packageRemovalStatus(result);
   if (options.structuredOutput) {
     return cliSuccess({
       command: 'uninstall',
@@ -148,12 +147,7 @@ export async function uninstallBrc(options: UninstallOptions): Promise<void | Cl
     });
   }
   const hasResiduals = writeRemovalReport(report, options.write);
-  const packageMessage = result?.scheduled && result.reportPath
-    ? `BRC package removal scheduled; completion report: ${result.reportPath}`
-    : 'BRC package removed.';
-  options.write(hasResiduals
-    ? `${packageMessage} Review the residual paths above.`
-    : `BRC data removed. ${packageMessage}`);
+  options.write(uninstallCompletionMessage(result, hasResiduals));
 }
 
 export function detectGlobalBrcPackageManager(): GlobalPackageManager {

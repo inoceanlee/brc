@@ -396,12 +396,17 @@ test('architecture gate detects Agent core path imports', async () => {
   );
 });
 
-test('architecture gate detects CLI cleanup adapter service construction', async () => {
+test('CLI cleanup adapter receives its process manager from the entrypoint', async () => {
   const violations = await architectureViolations();
-  assert.ok(
+  assert.equal(
     violations.some((entry) => entry.startsWith('cli/adapters/storage/cleanup.ts: nested service construction ProcessManager@')),
-    'CLI cleanup adapter service construction must be reported',
+    false,
   );
+  const source = await readFile(path.join(cliSrc, 'adapters/storage/cleanup.ts'), 'utf8');
+  assert.match(source, /createProcessManager/);
+  assert.doesNotMatch(source, /new ProcessManager/);
+  const entry = await readFile(path.join(cliSrc, 'cli.ts'), 'utf8');
+  assert.match(entry, /new ProcessManager/);
 });
 
 test('architecture baseline matches current violations without stale entries', async () => {

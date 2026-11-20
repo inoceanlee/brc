@@ -18,12 +18,12 @@ import { PlatformEnvironment } from '../packages/cli/dist/config/platform-enviro
 import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { SettingsManager } from '../packages/cli/dist/config/manager.js';
-import { TraefikManager } from '../packages/cli/dist/traefik/manager.js';
-import { runManagedTraefikService, waitForConfigGeneration } from '../packages/cli/dist/traefik/runtime.js';
+import { TraefikManager } from '../packages/cli/dist/adapters/traefik/manager.js';
+import { runManagedTraefikService, waitForConfigGeneration } from '../packages/cli/dist/adapters/traefik/runtime.js';
 import { createDiagnosticsRuntime } from '../packages/shared/dist/diagnostics/runtime.js';
-import { renderConfig } from '../packages/cli/dist/traefik/core.js';
-import { TraefikInput } from '../packages/cli/dist/traefik/input.js';
-import { TraefikOutput } from '../packages/cli/dist/traefik/output.js';
+import { renderConfig } from '../packages/cli/dist/core/traefik/rules.js';
+import { TraefikInput } from '../packages/cli/dist/adapters/traefik/input.js';
+import { TraefikOutput } from '../packages/cli/dist/adapters/traefik/output.js';
 
 function LifecycleLock(paths, options) {
   return new LifecycleLockImpl(paths, new LockStore(paths), options);
@@ -1093,7 +1093,7 @@ test('Traefik input, processing, and output keep isolated responsibilities', asy
   ]);
   assert.deepEqual(await (await import('node:fs/promises')).readdir(brcPaths.root), []);
 
-  const { processArchive } = await import('../packages/cli/dist/traefik/core.js');
+  const { processArchive } = await import('../packages/cli/dist/adapters/traefik/archive.js');
   const executable = await processArchive(archive, createHash('sha256').update(release.archive).digest('hex'), archiveName, traefikBinary);
   assert.equal(executable.path, traefikBinary);
   assert.deepEqual(await (await import('node:fs/promises')).readdir(brcPaths.root), []);
@@ -1178,7 +1178,7 @@ test('configuration and rollback emit their own phase events', async (t) => {
 
 test('asynchronous progress output failure preserves checksum failure and staging cleanup', async (t) => {
   const { Writable } = await import('node:stream');
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const { paths: brcPaths } = await makeRoot(t);
   const output = new Writable({
     write(_chunk, _encoding, callback) {
@@ -1197,7 +1197,7 @@ test('asynchronous progress output failure preserves checksum failure and stagin
 });
 
 test('ArchiveExtractorFactory creates ZipArchiveExtractor and TarGzArchiveExtractor', async () => {
-  const { ArchiveExtractorFactory, ZipArchiveExtractor, TarGzArchiveExtractor } = await import('../packages/cli/dist/traefik/extractor.js');
+  const { ArchiveExtractorFactory, ZipArchiveExtractor, TarGzArchiveExtractor } = await import('../packages/cli/dist/adapters/traefik/archive.js');
   const zipExtractor = ArchiveExtractorFactory.create('zip');
   assert.ok(zipExtractor instanceof ZipArchiveExtractor);
   const tarExtractor = ArchiveExtractorFactory.create('tar.gz');
@@ -1206,7 +1206,7 @@ test('ArchiveExtractorFactory creates ZipArchiveExtractor and TarGzArchiveExtrac
 });
 
 test('ZipArchiveExtractor extracts executable with stream and validates safety', async () => {
-  const { ZipArchiveExtractor } = await import('../packages/cli/dist/traefik/extractor.js');
+  const { ZipArchiveExtractor } = await import('../packages/cli/dist/adapters/traefik/archive.js');
   const extractor = new ZipArchiveExtractor();
   const validZip = makeZip([
     { name: 'traefik.exe', contents: 'binary-zip-content' },
@@ -1227,7 +1227,7 @@ test('ZipArchiveExtractor extracts executable with stream and validates safety',
 });
 
 test('TarGzArchiveExtractor extracts executable with stream and validates safety', async () => {
-  const { TarGzArchiveExtractor } = await import('../packages/cli/dist/traefik/extractor.js');
+  const { TarGzArchiveExtractor } = await import('../packages/cli/dist/adapters/traefik/archive.js');
   const extractor = new TarGzArchiveExtractor();
   const validTarGz = makeTarGz([
     { name: 'traefik', contents: 'binary-targz-content' },
@@ -1255,7 +1255,7 @@ test('TarGzArchiveExtractor extracts executable with stream and validates safety
 
 test('TraefikOutput stages ArchiveBinaryEntry with openStream and sets file permissions', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
-  const { TraefikOutput } = await import('../packages/cli/dist/traefik/output.js');
+  const { TraefikOutput } = await import('../packages/cli/dist/adapters/traefik/output.js');
   const { Readable } = await import('node:stream');
   const output = new TraefikOutput(brcPaths);
   const binaryContent = Buffer.from('traefik-staged-binary');

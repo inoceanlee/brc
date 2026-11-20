@@ -20,7 +20,7 @@ import { readSettings } from './config/reader.js';
 import type { BrcSettings } from './config/settings.js';
 import { LifecycleLock } from './adapters/storage/lock.js';
 import { LockStore } from './adapters/storage/lock-store.js';
-import { ProcessManager } from './adapters/process/controller.js';
+import { ProcessManager, type ProcessInspector } from './adapters/process/controller.js';
 import { inspectProcess } from './adapters/process/identity.js';
 import { ManagedProcessResourceSampler } from './adapters/process/resources.js';
 import { ServiceManager } from './core/lifecycle/workflow.js';
@@ -29,12 +29,12 @@ import { startRejection, shouldWriteTraefikConfig } from './core/lifecycle/polic
 import { cleanRuntime, type CleanupReport } from './adapters/storage/cleanup.js';
 import { assertNoLegacyIdentity, runEntryMigration, type LegacyIdentityCandidate } from './adapters/storage/migration.js';
 import { createMaintenanceCommands } from './commands/maintenance.js';
-import { confirmBrcUninstall } from './maintenance/uninstall.js';
-import { readManagedLog } from './maintenance/logs.js';
-import { TraefikManager } from './traefik/manager.js';
-import { runManagedTraefikService } from './traefik/runtime.js';
+import { confirmBrcUninstall } from './adapters/storage/uninstall.js';
+import { readManagedLog } from './adapters/storage/logs.js';
+import { TraefikManager } from './adapters/traefik/manager.js';
+import { runManagedTraefikService } from './adapters/traefik/runtime.js';
 import { RelayDatabase } from './adapters/storage/relay-database.js';
-import { TraefikProgress } from './progress.js';
+import { TraefikProgress } from './adapters/terminal/progress.js';
 
 async function createProcessDiagnostics(
   component: 'cli' | 'traefik',
@@ -109,6 +109,11 @@ export interface CliDependencies {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function cleanupProcessManagerFactory(cleanPaths: BrcPaths) {
+  return (options: { inspectProcess: ProcessInspector }) =>
+    new ProcessManager(cleanPaths, { inspectProcess: options.inspectProcess });
 }
 
 function errorExitCode(error: unknown): number {
@@ -465,6 +470,7 @@ async function main(): Promise<void> {
         pollMs: cleanupSettings.runtime.lockPollMs,
       }),
       snapshotStore: new FileSnapshotStore({ directory: cleanPaths.diagnostics }),
+      createProcessManager: cleanupProcessManagerFactory(cleanPaths),
     });
   };
   if (lightweight) {

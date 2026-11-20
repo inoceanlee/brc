@@ -2,7 +2,7 @@ import { lstat, mkdir, readdir, readFile, rmdir, unlink } from 'node:fs/promises
 import path from 'node:path';
 import type { BrcPaths } from '../../config/paths.js';
 import { DEFAULT_SETTINGS, type BrcSettings } from '../../config/settings.js';
-import { inspectProcess, isStaleFromPreviousBoot, processDefinitelyExited, ProcessManager, type ManagedServiceName, type ProcessIdentity } from '../process/controller.js';
+import { inspectProcess, isStaleFromPreviousBoot, processDefinitelyExited, type ManagedServiceName, type ProcessIdentity, type ProcessInspector, type ProcessManager } from '../process/controller.js';
 import { snapshotStateLabel, type DiagnosticSnapshotPort } from 'brc-shared';
 import { inspectProcesses } from '../process/identity.js';
 import type { LifecycleLock } from './lock.js';
@@ -28,10 +28,15 @@ export interface CleanupOptions {
   settings?: Readonly<BrcSettings>;
 }
 
+export interface CleanupProcessManagerFactory {
+  (options: { inspectProcess: ProcessInspector }): Pick<ProcessManager, 'statusMany'>;
+}
+
 export interface CleanupDependencies {
   lockStore: Pick<LockStore, 'readOwner' | 'reclaimExpired'>;
   lifecycleLock: Pick<LifecycleLock, 'runExclusive'>;
   snapshotStore: Pick<DiagnosticSnapshotPort, 'read' | 'list'>;
+  createProcessManager: CleanupProcessManagerFactory;
 }
 
 interface ServiceRuntime {
@@ -233,9 +238,9 @@ async function removeUnchangedRecord(
   return await removeFile(paths.root, filename, report, dryRun);
 }
 
-async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dryRun: boolean, snapshot: IdentitySnapshot): Promise<Map<ManagedServiceName, ServiceRuntime>> {
+async function inspectServiceRecords(paths: BrcPaths, report: CleanupReport, dryRun: boolean, snapshot: IdentitySnapshot, createProcessManager: CleanupProcessManagerFactory): Promise<Map<ManagedServiceName, ServiceRuntime>> {
   const result = new Map<ManagedServiceName, ServiceRuntime>();
-  const manager = new ProcessManager(paths, { inspectProcess: (pid) => snapshotIdentity(snapshot, pid) });
+  const manager = createProcessManager({ inspectProcess: (pid) => snapshotIdentity(snapshot, pid) });
   const runtimeExists = await safeDirectory(paths.root, paths.runtime, report);
   if (!runtimeExists) {
     for (const name of SERVICE_NAMES) result.set(name, { state: 'inactive' });
@@ -766,7 +771,7 @@ export async function cleanRuntime(paths: BrcPaths, options: CleanupOptions, dep
   try {
     await dependencies.lifecycleLock.runExclusive(async () => {
       const snapshot = await runtimeSnapshot(paths, report);
-      const runtimes = await inspectServiceRecords(paths, report, dryRun, snapshot);
+      const runtimes = await inspectServiceRecords(paths, report, dryRun, snapshot, dependencies.createProcessManager);
       await cleanReadyFiles(paths, report, dryRun, snapshot);
       await cleanTraefikChildRecord(paths, report, dryRun, snapshot);
       await cleanLogs(paths, runtimes, report, dryRun, cutoff, settings.logs.maxTotalMiB * 1024 * 1024, candidatesCheck.logs);

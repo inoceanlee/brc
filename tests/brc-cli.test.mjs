@@ -691,7 +691,7 @@ test('first setup without a terminal or supplied password refuses to initialize'
 });
 
 test('Traefik progress renders real byte percentages and stops on completion', async () => {
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const output = { isTTY: true, text: '', write(value) { this.text += value; } };
   const progress = new TraefikProgress(output);
   progress.report({ operation: 'setup', stage: 'download', status: 'started' });
@@ -707,7 +707,7 @@ test('Traefik progress renders real byte percentages and stops on completion', a
 });
 
 test('non-TTY progress reports stages once without ANSI or percentages', async () => {
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const output = { isTTY: false, text: '', write(value) { this.text += value; } };
   const progress = new TraefikProgress(output);
   progress.report({ operation: 'update', stage: 'download', status: 'started' });
@@ -718,7 +718,7 @@ test('non-TTY progress reports stages once without ANSI or percentages', async (
 });
 
 test('failed progress stops animation', async () => {
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const output = { isTTY: true, text: '', write(value) { this.text += value; } };
   const progress = new TraefikProgress(output);
   progress.report({ operation: 'setup', stage: 'health', status: 'started' });
@@ -729,7 +729,7 @@ test('failed progress stops animation', async () => {
 });
 
 test('interrupt cleanup stops an active progress animation', async () => {
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const output = { isTTY: true, text: '', write(value) { this.text += value; } };
   const progress = new TraefikProgress(output);
   progress.report({ operation: 'setup', stage: 'download', status: 'started' });
@@ -740,7 +740,7 @@ test('interrupt cleanup stops an active progress animation', async () => {
 });
 
 test('byte updates do not redraw until the animation timer fires', async () => {
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const output = { isTTY: true, text: '', write(value) { this.text += value; } };
   const progress = new TraefikProgress(output);
   progress.report({ operation: 'setup', stage: 'download', status: 'started' });
@@ -755,7 +755,7 @@ test('byte updates do not redraw until the animation timer fires', async () => {
 });
 
 test('SIGINT clears a live progress line and preserves interrupt exit semantics', { skip: process.platform === 'win32', timeout: 5000 }, async () => {
-  const progressUrl = JSON.stringify(new URL('../packages/cli/dist/progress.js', import.meta.url).href);
+  const progressUrl = JSON.stringify(new URL('../packages/cli/dist/adapters/terminal/progress.js', import.meta.url).href);
   const source = `import { TraefikProgress, installProgressInterruptHandler } from ${progressUrl};
     const output = { isTTY: true, write: (text, callback) => process.stdout.write(text, callback) };
     const progress = new TraefikProgress(output);
@@ -781,7 +781,7 @@ test('SIGINT clears a live progress line and preserves interrupt exit semantics'
 });
 
 test('asynchronous progress stream errors do not change command outcome', async () => {
-  const progressUrl = JSON.stringify(new URL('../packages/cli/dist/progress.js', import.meta.url).href);
+  const progressUrl = JSON.stringify(new URL('../packages/cli/dist/adapters/terminal/progress.js', import.meta.url).href);
   const source = `import { Writable } from 'node:stream';
     import { TraefikProgress } from ${progressUrl};
     const output = new Writable({ write(_chunk, _encoding, callback) { callback(Object.assign(new Error('closed'), { code: 'EPIPE' })); } });
@@ -795,7 +795,7 @@ test('asynchronous progress stream errors do not change command outcome', async 
 
 test('backpressure flushes the final clear after drain', async () => {
   const { EventEmitter } = await import('node:events');
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   class Output extends EventEmitter {
     isTTY = true;
     text = '';
@@ -822,7 +822,7 @@ test('backpressure flushes the final clear after drain', async () => {
 
 test('interrupt cleanup is bounded when a blocked stream never drains', async () => {
   const { EventEmitter } = await import('node:events');
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   class Output extends EventEmitter {
     isTTY = true;
     write(_text, callback) { callback?.(); return false; }
@@ -837,7 +837,7 @@ test('interrupt cleanup is bounded when a blocked stream never drains', async ()
 
 test('backpressure retains the latest progress frame until drain', async () => {
   const { EventEmitter } = await import('node:events');
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   class Output extends EventEmitter {
     isTTY = true;
     text = '';
@@ -860,7 +860,7 @@ test('backpressure retains the latest progress frame until drain', async () => {
 
 test('non-TTY stages remain ordered across backpressure and drain', async () => {
   const { EventEmitter } = await import('node:events');
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   class Output extends EventEmitter {
     isTTY = false;
     text = '';
@@ -888,7 +888,7 @@ test('non-TTY stages remain ordered across backpressure and drain', async () => 
 
 test('non-TTY output error during backpressure permits interrupt cleanup', async () => {
   const { EventEmitter } = await import('node:events');
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   class Output extends EventEmitter {
     isTTY = false;
     write(_text, callback) { queueMicrotask(() => callback?.()); return false; }
@@ -903,7 +903,7 @@ test('non-TTY output error during backpressure permits interrupt cleanup', async
 });
 
 test('no-color progress avoids ANSI and quiet progress emits nothing', async () => {
-  const { TraefikProgress } = await import('../packages/cli/dist/progress.js');
+  const { TraefikProgress } = await import('../packages/cli/dist/adapters/terminal/progress.js');
   const output = { isTTY: true, text: '', write(value) { this.text += value; } };
   const plain = new TraefikProgress(output, { color: false });
   plain.report({ operation: 'setup', stage: 'download', status: 'started' });

@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import path from 'node:path';
-import type { BrcPaths } from '../config/paths.js';
+import type { BrcPaths } from '../../config/paths.js';
 
 export type LogComponent = 'relay' | 'agent' | 'traefik' | 'cli';
 

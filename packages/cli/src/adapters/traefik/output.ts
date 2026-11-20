@@ -3,9 +3,9 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { chmod, lstat, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import type { ArchiveBinaryEntry } from './extractor.js';
-import type { BrcPaths } from '../config/paths.js';
-import { errorCode, type TraefikRelease, type TraefikTemplates, type VersionManifest } from './core.js';
+import type { ArchiveBinaryEntry } from './archive.js';
+import type { BrcPaths } from '../../config/paths.js';
+import { errorCode, type TraefikRelease, type TraefikTemplates, type VersionManifest } from '../../core/traefik/rules.js';
 
 
 export class TraefikOutput {

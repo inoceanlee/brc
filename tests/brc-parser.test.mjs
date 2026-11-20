@@ -28,6 +28,13 @@ test('per-command help and version are explicit commands', () => {
   assert.throws(() => parseCommand(['version', '--extra']), UsageError);
 });
 
+test('config missing arguments are named usage errors', () => {
+  assert.throws(() => parseCommand(['config']), (error) => error.exitCode === 2 && /subcommand/i.test(error.message));
+  assert.throws(() => parseCommand(['config', 'get']), (error) => error.exitCode === 2 && /<key>/.test(error.message));
+  assert.throws(() => parseCommand(['config', 'set', 'proxy.rate.average']), (error) => error.exitCode === 2 && /<value>/.test(error.message));
+  assert.throws(() => parseCommand(['config', 'nope']), (error) => error.exitCode === 2 && /nope/.test(error.message));
+});
+
 test('invalid syntax reports usage errors instead of running commands', () => {
   for (const argv of [['unknown'], ['start', 'extra'], ['logs', 'nope'], ['diagnose'], ['config', 'set', 'nope', '1'], ['status', 'extra']]) {
     assert.throws(() => parseCommand(argv), UsageError, argv.join(' '));

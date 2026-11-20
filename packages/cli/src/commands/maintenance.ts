@@ -1,6 +1,6 @@
 import type { BrcPaths } from '../config/paths.js';
-import { showLogs, type LogComponent } from '../maintenance/logs.js';
-import { confirmBrcUninstall, detectGlobalBrcPackageManager, removeGlobalBrcPackage, uninstallBrc } from '../maintenance/uninstall.js';
+import { showLogs, type LogComponent } from '../adapters/storage/logs.js';
+import { confirmBrcUninstall, detectGlobalBrcPackageManager, removeGlobalBrcPackage, uninstallBrc } from '../adapters/storage/uninstall.js';
 
 export function createMaintenanceCommands(
   paths: BrcPaths,

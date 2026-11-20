@@ -136,7 +136,7 @@ test('offline Traefik update fails before querying remote metadata', async (t) =
 });
 
 test('structured uninstall returns its outcome without writing human text', async (t) => {
-  const { uninstallBrc } = await import('../packages/cli/dist/maintenance/uninstall.js');
+  const { uninstallBrc } = await import('../packages/cli/dist/adapters/storage/uninstall.js');
   const root = await mkdtemp(path.join(tmpdir(), 'brc-uninstall-result-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const paths = Object.fromEntries(['traefik', 'config', 'data', 'runtime', 'logs', 'tmp'].map((name) => [name, path.join(root, name)]));

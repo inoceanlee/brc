@@ -1,11 +1,4 @@
-import { createHash } from 'node:crypto';
-import unzipper from 'unzipper';
-import type { BrcSettings } from '../config/settings.js';
-import type { ZipEntry } from 'unzipper';
-import { PlatformEnvironment, type PlatformTarget } from '../config/platform-environment.js';
-import { ArchiveExtractorFactory, type ArchiveBinaryEntry } from './extractor.js';
-
-export type { PlatformTarget };
+import type { BrcSettings } from '../../config/settings.js';
 
 export interface VersionManifest {
   version: 1;
@@ -18,6 +11,17 @@ export interface TraefikRelease {
   archiveUrl: string;
   checksumUrl: string;
   archiveName: string;
+}
+
+export interface TraefikTemplates {
+  staticConfig: string;
+  dynamicConfig: string;
+}
+
+export interface ArchiveEntryLike {
+  path: string;
+  type: string;
+  uncompressedSize: number;
 }
 
 export const MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024;
@@ -47,13 +51,11 @@ export function parseManifest(value: unknown): VersionManifest {
   return { version: 1, current: manifest.current, previous: manifest.previous };
 }
 
-
 export function safeArchivePath(value: string): boolean {
   if (!value || value.includes('\\') || value.includes('\0') || value.startsWith('/') || /^[a-z]:/i.test(value)) return false;
   const segments = value.endsWith('/') ? value.slice(0, -1).split('/') : value.split('/');
   return segments.length > 0 && segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
-
 
 export function quoteYaml(value: string): string {
   return JSON.stringify(value.replaceAll('\\', '/'));
@@ -64,11 +66,6 @@ export function renderTemplate(template: string, replacements: Record<string, st
   for (const [placeholder, value] of Object.entries(replacements)) result = result.replaceAll(placeholder, value);
   if (/@@BRC_[A-Z_]+@@/.test(result)) throw new Error('Traefik configuration has an unresolved template value.');
   return result;
-}
-
-export interface TraefikTemplates {
-  staticConfig: string;
-  dynamicConfig: string;
 }
 
 export function renderConfig({ templates, dynamicSettings, staticSettings, dynamicPath, generation }: {
@@ -94,6 +91,7 @@ export function renderConfig({ templates, dynamicSettings, staticSettings, dynam
     }),
   };
 }
+
 export function readChecksum(contents: string, filename: string): string {
   for (const line of contents.split(/\r?\n/)) {
     const match = line.trim().match(/^([a-f\d]{64})\s+\*?(.+)$/i);
@@ -102,33 +100,9 @@ export function readChecksum(contents: string, filename: string): string {
   throw new Error(`Official Traefik checksum file does not contain ${filename}.`);
 }
 
-export function parseRelease(value: unknown, target?: PlatformTarget): TraefikRelease {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Official Traefik release metadata is malformed.');
-  const release = value as Record<string, unknown>;
-  if (release.draft !== false || release.prerelease !== false || typeof release.tag_name !== 'string') {
-    throw new Error('The latest Traefik release is not a stable release.');
-  }
-  const match = release.tag_name.match(/^v(\d+\.\d+\.\d+)$/);
-  if (!match) throw new Error(`Official Traefik release tag is invalid: ${release.tag_name}`);
-  const version = match[1];
-  const resolvedTarget = target ?? new PlatformEnvironment().resolveTraefikTarget();
-  const archiveName = `traefik_v${version}_${resolvedTarget.platform}_${resolvedTarget.arch}.${resolvedTarget.archiveExt}`;
-  const checksumName = `traefik_v${version}_checksums.txt`;
-  if (!Array.isArray(release.assets)) throw new Error('Official Traefik release has no asset list.');
-  const assets = release.assets as unknown[];
-  const findAsset = (name: string): string => {
-    const asset = assets.find((item) => item && typeof item === 'object' && (item as Record<string, unknown>).name === name) as Record<string, unknown> | undefined;
-    const url = asset?.browser_download_url;
-    const expected = `https://github.com/traefik/traefik/releases/download/v${version}/${name}`;
-    if (url !== expected) throw new Error(`Official Traefik asset is missing or has an unexpected URL: ${name}`);
-    return expected;
-  };
-  return { version, archiveName, archiveUrl: findAsset(archiveName), checksumUrl: findAsset(checksumName) };
-}
-
-export function validateArchiveEntries(entries: ZipEntry[]): ZipEntry {
+export function validateArchiveEntries(entries: ArchiveEntryLike[]): ArchiveEntryLike {
   const names = new Set<string>();
-  let executable: ZipEntry | undefined;
+  let executable: ArchiveEntryLike | undefined;
   for (const entry of entries) {
     if (!safeArchivePath(entry.path)) throw new Error(`Traefik ZIP contains an unsafe path: ${entry.path}`);
     if (names.has(entry.path)) throw new Error(`Traefik ZIP contains a duplicate path: ${entry.path}`);
@@ -144,25 +118,4 @@ export function validateArchiveEntries(entries: ZipEntry[]): ZipEntry {
 
 export function verifyChecksum(actual: string, expected: string): void {
   if (actual !== expected) throw new Error('Official Traefik ZIP SHA-256 checksum does not match.');
-}
-export async function processArchive(
-  archive: Buffer,
-  expectedChecksum: string,
-  archiveNameOrFormat: string = 'windows_amd64.zip',
-  expectedExecutableName: string = process.platform === 'win32' ? 'traefik.exe' : 'traefik',
-): Promise<ArchiveBinaryEntry> {
-  const actualChecksum = createHash('sha256').update(archive).digest('hex');
-  verifyChecksum(actualChecksum, expectedChecksum);
-
-  const format: 'zip' | 'tar.gz' = archiveNameOrFormat.endsWith('.tar.gz') ? 'tar.gz' : 'zip';
-  const extractor = ArchiveExtractorFactory.create(format);
-  const entry = await extractor.extractExecutable(archive, expectedExecutableName);
-  return {
-    name: entry.name,
-    size: entry.size,
-    openStream: () => entry.openStream(),
-    path: entry.name,
-    uncompressedSize: entry.size,
-    stream: () => entry.openStream(),
-  };
 }

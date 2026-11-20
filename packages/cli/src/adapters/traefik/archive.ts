@@ -1,7 +1,8 @@
+import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
 import unzipper, { type ZipEntry } from 'unzipper';
-import { MAX_EXECUTABLE_BYTES, safeArchivePath } from './core.js';
+import { MAX_EXECUTABLE_BYTES, safeArchivePath, verifyChecksum } from '../../core/traefik/rules.js';
 
 export interface ArchiveBinaryEntry {
   readonly name: string;
@@ -249,4 +250,26 @@ export class ArchiveExtractorFactory {
     }
     throw new Error(`Unsupported archive format: ${archiveExt as string}`);
   }
+}
+
+export async function processArchive(
+  archive: Buffer,
+  expectedChecksum: string,
+  archiveNameOrFormat: string = 'windows_amd64.zip',
+  expectedExecutableName: string = process.platform === 'win32' ? 'traefik.exe' : 'traefik',
+): Promise<ArchiveBinaryEntry> {
+  const actualChecksum = createHash('sha256').update(archive).digest('hex');
+  verifyChecksum(actualChecksum, expectedChecksum);
+
+  const format: 'zip' | 'tar.gz' = archiveNameOrFormat.endsWith('.tar.gz') ? 'tar.gz' : 'zip';
+  const extractor = ArchiveExtractorFactory.create(format);
+  const entry = await extractor.extractExecutable(archive, expectedExecutableName);
+  return {
+    name: entry.name,
+    size: entry.size,
+    openStream: () => entry.openStream(),
+    path: entry.name,
+    uncompressedSize: entry.size,
+    stream: () => entry.openStream(),
+  };
 }

@@ -8,12 +8,13 @@ import path from 'node:path';
 
 import { PlatformEnvironment } from '../packages/cli/dist/config/platform-environment.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
-import { parseRelease, MAX_EXECUTABLE_BYTES } from '../packages/cli/dist/traefik/core.js';
+import { parseRelease } from '../packages/cli/dist/adapters/traefik/release.js';
+import { MAX_EXECUTABLE_BYTES } from '../packages/cli/dist/core/traefik/rules.js';
 import {
   ArchiveExtractorFactory,
   ZipArchiveExtractor,
   TarGzArchiveExtractor,
-} from '../packages/cli/dist/traefik/extractor.js';
+} from '../packages/cli/dist/adapters/traefik/archive.js';
 import {
   ShellEncodingCoordinator,
   DefaultShellEncodingSession,

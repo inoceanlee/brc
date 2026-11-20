@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import path from 'node:path';
 import { PlatformEnvironment } from '../packages/cli/dist/config/platform-environment.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
-import { parseRelease } from '../packages/cli/dist/traefik/core.js';
+import { parseRelease } from '../packages/cli/dist/adapters/traefik/release.js';
 
 test('PlatformEnvironment resolves Windows paths with LOCALAPPDATA and default homedir', () => {
   const customLocal = new PlatformEnvironment({

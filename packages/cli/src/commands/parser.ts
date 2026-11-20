@@ -261,6 +261,16 @@ function parseConfigArgs(args: string[]): { args: string[]; json: boolean } {
     || (subcommand === 'set' && rest.length === 3 && validKey)
   );
   if (!shapeValid) {
+    const subcommands = ['show', 'get', 'set', 'apply', 'path'];
+    if (!subcommand) throw new UsageError(`Missing config subcommand. Expected: ${subcommands.join(', ')}.`);
+    if (!subcommands.includes(subcommand)) throw new UsageError(`Unknown config subcommand "${subcommand}". Expected: ${subcommands.join(', ')}.`);
+    if ((subcommand === 'get' || subcommand === 'set') && key === undefined) {
+      throw new UsageError(`Missing required <key> for brc config ${subcommand}.`);
+    }
+    if ((subcommand === 'get' || subcommand === 'set') && !validKey) {
+      throw new UsageError(`Invalid setting key "${key}" for brc config ${subcommand}.`);
+    }
+    if (subcommand === 'set' && value === undefined) throw new UsageError(`Missing required <value> for brc config set ${key}.`);
     throw new UsageError(`Usage: ${specFor('config').usage}`);
   }
   if (subcommand === 'set') parseSettingArgument(key as Parameters<typeof parseSettingArgument>[0], value as string);

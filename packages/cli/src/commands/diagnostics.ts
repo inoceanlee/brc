@@ -1,5 +1,5 @@
 import type { BrcPaths } from '../config/paths.js';
-import { readManagedLog } from '../maintenance/logs.js';
+import { readManagedLog } from '../adapters/storage/logs.js';
 import {
   snapshotStateLabel,
   type DiagnosticEvent,
