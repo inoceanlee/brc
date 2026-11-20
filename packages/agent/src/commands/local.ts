@@ -26,7 +26,7 @@ const HELP = [
   '  brc-agent credentials logout --preview',
   '  brc-agent service install --yes',
   '',
-  'Docs: https://github.com/inoceanlee/brc',
+  'Docs: https://github.com/inoceanlee/brc/tree/v' + VERSION,
 ].join('\n');
 
 function invalid(message: string, run: string): CliResult<never> {

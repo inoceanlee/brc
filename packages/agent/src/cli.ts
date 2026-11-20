@@ -5,9 +5,9 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import type { AgentConnectionServices } from './adapters/transport/connection.js';
-import { parseAgentInvocation, AgentUsageError } from './commands/parser.js';
+import { parseAgentInvocation } from './commands/parser.js';
 import { runAgentLocalCommand } from './commands/local.js';
-import { TokenInputError } from './adapters/terminal/secret-input.js';
+import { toCliError } from './commands/errors.js';
 import { existsSync, realpathSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { BRC_SETTING_KEYS, FileSettingsLock, YamlSettingsStore } from 'brc-shared';
@@ -46,10 +46,7 @@ export function createAgentCredentials(env: NodeJS.ProcessEnv): AgentCredentials
   return {
     filename: paths.credentialsFile,
     load: () => {
-      const defaultRoot = resolveAgentPaths({ ...env, BRC_DATA_ROOT: undefined }).root;
-      if (path.normalize(paths.root).toLowerCase() === path.normalize(defaultRoot).toLowerCase()) {
-        migrateCredentialFile(path.join(paths.legacyDirectory, 'device.json'), path.dirname(paths.credentialsFile), legacyStore, credentialStore);
-      }
+      migrateCredentialFile(path.join(paths.legacyDirectory, 'device.json'), path.dirname(paths.credentialsFile), legacyStore, credentialStore);
       return credentialStore.load();
     },
     save: (value) => credentialStore.save(value),
@@ -234,14 +231,7 @@ try {
   });
 } catch (error) {
   const primary = error instanceof AggregateError && error.cause ? error.cause : error;
-  const usage = primary instanceof AgentUsageError || primary instanceof TokenInputError;
-  const result = cliFailure({
-    code: usage ? 'INVALID_USAGE' : 'AGENT_ERROR',
-    exitCode: usage ? 2 : 1,
-    message: sanitizeError(error instanceof Error ? error.message : String(error)),
-    run: usage ? 'brc-agent help' : 'brc-agent connect --no-browser',
-    retryable: !usage,
-  });
+  const result = cliFailure(toCliError(primary, sanitizeError(error instanceof Error ? error.message : String(error))));
   process.exitCode = renderCliResult(result, { format, quiet, verbose, stringifyYaml: yaml }, {
     stdout: (data) => process.stdout.write(data),
     stderr: (data) => process.stderr.write(data),
