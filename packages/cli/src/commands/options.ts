@@ -1,6 +1,30 @@
 import { UsageError } from './parser.js';
 import type { CliOutputFormat } from 'brc-shared';
 
+export interface GlobalFlagDefinition {
+  readonly long: string;
+  readonly short?: string;
+  readonly description: string;
+}
+
+export const GLOBAL_FLAGS: readonly GlobalFlagDefinition[] = [
+  { long: '--help', short: '-h', description: 'Show help.' },
+  { long: '--quiet', short: '-q', description: 'Suppress progress output.' },
+  { long: '--verbose', short: '-v', description: 'Include additional diagnostics.' },
+  { long: '--debug', description: 'Include error stack details.' },
+  { long: '--no-color', description: 'Disable terminal control sequences.' },
+  { long: '--no-input', description: 'Never prompt.' },
+  { long: '--interactive', description: 'Allow prompts in CI when stdin and stderr are TTYs.' },
+  { long: '--output <table|plain|json|yaml>', short: '-o', description: 'Select the output format.' },
+  { long: '--json', description: 'Output JSON data.' },
+  { long: '--plain', description: 'Output headerless plain records.' },
+  { long: '--timeout <duration>', description: 'Bound command waits (for example 1500ms, 15s, 2m).' },
+  { long: '--offline', description: 'Prevent network release lookups and downloads.' },
+  { long: '--no-telemetry', description: 'Set DO_NOT_TRACK=1 for managed child processes.' },
+  { long: '--preview', description: 'Preview supported config and Traefik update changes.' },
+  { long: '--yes', short: '-y', description: 'Confirm an unrecoverable operation.' },
+];
+
 export interface GlobalOptions {
   args: string[];
   output: CliOutputFormat;

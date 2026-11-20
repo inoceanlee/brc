@@ -118,7 +118,7 @@ export class LockStore {
       await rmdir(moved);
     } catch (error) {
       if (!safe) {
-        try { await rename(moved, this.lockPath); } catch { /* Preserve isolated contents for investigation. */ }
+        try { await rename(moved, this.lockPath); } catch {}
       }
       throw error;
     }

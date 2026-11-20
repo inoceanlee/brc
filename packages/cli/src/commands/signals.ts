@@ -28,7 +28,7 @@ export function installCancellationHandlers(options: CancellationOptions): () =>
       options.exit(code);
       return;
     }
-    try { options.abort?.(signal); } catch { /* cancellation must still flush */ }
+    try { options.abort?.(signal); } catch {}
     flushing = options.flush().catch(() => undefined);
     void flushing.then(() => options.exit(code));
   };

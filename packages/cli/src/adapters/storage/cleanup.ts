@@ -189,7 +189,7 @@ async function runtimeSnapshot(paths: BrcPaths, report: CleanupReport): Promise<
       const value = JSON.parse((await readRegularFile(entryPath)).contents) as unknown;
       if (value && typeof value === 'object' && 'pid' in value
           && typeof value.pid === 'number' && Number.isSafeInteger(value.pid) && value.pid > 0) pids.add(value.pid);
-    } catch { /* Individual records are reported by their owner. */ }
+    } catch {}
   }));
   try {
     return await inspectProcesses([...pids]);
