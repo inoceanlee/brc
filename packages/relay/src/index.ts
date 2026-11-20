@@ -4,3 +4,4 @@ export { DeviceHub, type DeviceSummary, type ConnectedDevice } from './adapters/
 export { SqliteStore } from './adapters/storage/sqlite.js';
 export { RelayAuditLog, RELAY_DIAGNOSTICS_SCHEMA_VERSION } from './adapters/storage/relay-audit.js';
 export { importLegacyIdentityDatabase } from './adapters/storage/legacy-import.js';
+export { legacyIdentitySourceKey, markLegacyIdentityImported } from './adapters/storage/legacy-import-marker.js';

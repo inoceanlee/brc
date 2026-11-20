@@ -95,14 +95,15 @@ if (process.argv.includes('--initialize')) {
       administrator = { username: candidate.username, password: candidate.password };
     }
     const legacyFile = process.env.BRC_LEGACY_RELAY_DB;
-    SqliteStore.initialize(cfg.dbFile, legacyFile || undefined);
+    const hadLegacy = Boolean(legacyFile && existsSync(legacyFile));
     let importedLegacy = false;
-    if (legacyFile && existsSync(legacyFile)) {
+    if (hadLegacy && legacyFile) {
       const audit = RelayAuditLog.open({ dbFile: cfg.dbFile, env: process.env, settings });
       try { await audit.importLegacyAudit(legacyFile); }
       finally { audit.close(); }
       importedLegacy = true;
     }
+    SqliteStore.initialize(cfg.dbFile, legacyFile || undefined);
     if (administrator && !importedLegacy) {
       const store = SqliteStore.open(cfg.dbFile);
       try { store.bootstrapAdministrator(administrator.username, administrator.password); }

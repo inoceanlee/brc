@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,6 +38,29 @@ test('entry migration detects a legacy identity database outside the active root
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].kind, 'identity-database');
   assert.equal(candidates[0].path, path.join(legacy, 'data', 'relay.sqlite'));
+});
+
+test('entry migration skips a migrated legacy identity recorded by the import marker', async (t) => {
+  const home = await makeHome(t);
+  const legacy = path.join(home, '.brc');
+  await mkdir(path.join(legacy, 'data'), { recursive: true });
+  const legacyFile = path.join(legacy, 'data', 'relay.sqlite');
+  await writeFile(legacyFile, 'legacy identity');
+  const root = path.join(home, 'new-root');
+  const paths = { root, data: path.join(root, 'data'), config: path.join(root, 'config') };
+  await mkdir(paths.data, { recursive: true });
+  const diagnostics = new DatabaseSync(path.join(paths.data, 'brc-diagnostics.sqlite'));
+  try {
+    diagnostics.exec('CREATE TABLE relay_identity_imports (source_key TEXT PRIMARY KEY, imported_at INTEGER NOT NULL)');
+    const key = createHash('sha256').update(path.resolve(legacyFile)).digest('hex');
+    diagnostics.prepare('INSERT INTO relay_identity_imports (source_key, imported_at) VALUES (?, ?)').run(key, Date.now());
+  } finally {
+    diagnostics.close();
+  }
+  const { discoverLegacyIdentityCandidates, assertNoLegacyIdentity } = await import(migrationUrl);
+  const candidates = discoverLegacyIdentityCandidates(paths, {}, home);
+  assert.deepEqual(candidates, []);
+  assert.doesNotThrow(() => assertNoLegacyIdentity(candidates));
 });
 
 test('entry migration refuses a silent new identity when legacy data is present', async () => {

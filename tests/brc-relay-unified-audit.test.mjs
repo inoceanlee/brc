@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { RelayAuditLog, RELAY_DIAGNOSTICS_SCHEMA_VERSION } from '../packages/relay/dist/adapters/storage/relay-audit.js';
@@ -115,7 +115,9 @@ test('legacy identity database imports across paths with users devices and token
     const result = importLegacyIdentityDatabase(legacyFile, targetFile);
     assert.deepEqual({ users: result.users, devices: result.devices, tokens: result.tokens }, before);
     assert.equal(existsSync(targetFile), true);
-    assert.equal(existsSync(legacyFile), true);
+    assert.equal(existsSync(legacyFile), false, 'verified import removes the legacy identity database');
+    assert.equal(result.legacyRemoved, true);
+    assert.deepEqual(result.warnings, []);
 
     const store = SqliteStore.open(targetFile);
     try {
@@ -146,6 +148,93 @@ test('failed legacy import preserves the source and never creates a replacement 
     assert.throws(() => importLegacyIdentityDatabase(legacyFile, targetFile), /required tables|integrity/i);
     assert.deepEqual(readFileSync(legacyFile), before);
     assert.equal(existsSync(targetFile), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('identity import removes legacy write-ahead and shared-memory companions', () => {
+  const directory = tempDirectory();
+  try {
+    const legacyFile = path.join(directory, 'legacy.sqlite');
+    const targetFile = path.join(directory, 'new', 'relay.sqlite');
+    createLegacyIdentity(legacyFile);
+    writeFileSync(`${legacyFile}-wal`, 'wal');
+    writeFileSync(`${legacyFile}-shm`, 'shm');
+    const result = importLegacyIdentityDatabase(legacyFile, targetFile);
+    assert.equal(result.legacyRemoved, true);
+    assert.deepEqual(result.warnings, []);
+    assert.equal(existsSync(legacyFile), false);
+    assert.equal(existsSync(`${legacyFile}-wal`), false);
+    assert.equal(existsSync(`${legacyFile}-shm`), false);
+    assert.equal(existsSync(targetFile), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('failed legacy file removal keeps the imported identity and records a warning', () => {
+  const directory = tempDirectory();
+  try {
+    const legacyFile = path.join(directory, 'legacy.sqlite');
+    const targetFile = path.join(directory, 'new', 'relay.sqlite');
+    const original = createLegacyIdentity(legacyFile);
+    const result = importLegacyIdentityDatabase(legacyFile, targetFile, {
+      removeLegacyArtifacts: () => { throw new Error('simulated removal failure'); },
+    });
+    assert.equal(result.legacyRemoved, false);
+    assert.match(result.warnings.join('\n'), /simulated removal failure/);
+    assert.equal(existsSync(legacyFile), true);
+    assert.equal(existsSync(targetFile), true);
+    const store = SqliteStore.open(targetFile);
+    try {
+      assert.equal(store.getUser(original.userId)?.password_hash, original.passwordHash);
+      assert.equal(store.getDeviceByToken(original.deviceToken)?.device_id, 'dev-legacy');
+    } finally {
+      store.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('audit import from the legacy database completes before identity import removes it', async () => {
+  const directory = tempDirectory();
+  try {
+    const legacyFile = path.join(directory, 'legacy.sqlite');
+    createLegacyIdentity(legacyFile);
+    const legacy = new DatabaseSync(legacyFile);
+    legacy.exec('CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, user_id TEXT, device_id TEXT, client TEXT, tool TEXT NOT NULL, args_hash TEXT, ok INTEGER NOT NULL, ms INTEGER, error TEXT)');
+    legacy.prepare('INSERT INTO audit (ts,user_id,tool,ok,ms) VALUES (?,?,?,?,?)')
+      .run(Date.now(), 'audit-user', 'read_file', 1, 3);
+    legacy.close();
+
+    const targetFile = path.join(directory, 'new', 'relay.sqlite');
+    const beforeImport = RelayAuditLog.open({ dbFile: targetFile, env: {} });
+    try {
+      assert.equal(await beforeImport.importLegacyAudit(legacyFile), 1);
+    } finally {
+      beforeImport.close();
+    }
+
+    const result = importLegacyIdentityDatabase(legacyFile, targetFile);
+    assert.equal(result.legacyRemoved, true);
+    assert.equal(existsSync(legacyFile), false);
+    assert.equal(existsSync(path.join(directory, 'new', 'brc-diagnostics.sqlite')), true);
+
+    const afterImport = RelayAuditLog.open({ dbFile: targetFile, env: {} });
+    try {
+      assert.deepEqual(afterImport.auditStats('audit-user'), { total: 1, failed: 0, last24h: 1 });
+      assert.equal(afterImport.recentAudit('audit-user')[0].tool, 'read_file');
+    } finally {
+      afterImport.close();
+    }
+    const store = SqliteStore.open(targetFile);
+    try {
+      assert.equal(store.getAdministrator().username, 'admin');
+    } finally {
+      store.close();
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

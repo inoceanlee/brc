@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -88,6 +89,11 @@ test('relay initializer imports the discovered legacy identity into a fresh data
   const user = legacy.getUserByName('legacy-admin');
   const deviceToken = legacy.issueDeviceToken('legacy-device', user.id, 'Legacy PC', 'win32');
   legacy.close();
+  const auditSource = new DatabaseSync(legacyFile);
+  auditSource.exec('CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, user_id TEXT, device_id TEXT, client TEXT, tool TEXT NOT NULL, args_hash TEXT, ok INTEGER NOT NULL, ms INTEGER, error TEXT)');
+  auditSource.prepare('INSERT INTO audit (ts,user_id,device_id,tool,ok,ms) VALUES (?,?,?,?,?,?)')
+    .run(Date.now(), user.id, 'legacy-device', 'read_file', 1, 4);
+  auditSource.close();
 
   const relay = createDefaultServices(paths, settings, { BRC_DATA_ROOT: root }, legacyFile)
     .find((service) => service.name === 'relay');
@@ -95,12 +101,19 @@ test('relay initializer imports the discovered legacy identity into a fresh data
     cwd: relay.cwd, env: relay.env, encoding: 'utf8', input: '', timeout: 30_000, windowsHide: true,
   });
   assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(legacyFile), false, 'initializer removes the legacy identity after importing it');
   const imported = SqliteStore.open(path.join(paths.data, 'relay.sqlite'));
   try {
     assert.equal(imported.getAdministrator().username, 'legacy-admin');
     assert.equal(imported.getDeviceByToken(deviceToken)?.device_id, 'legacy-device');
   } finally {
     imported.close();
+  }
+  const diagnostics = new DatabaseSync(path.join(paths.data, 'brc-diagnostics.sqlite'));
+  try {
+    assert.equal(diagnostics.prepare('SELECT COUNT(*) n FROM relay_audit WHERE user_id = ?').get(user.id).n, 1);
+  } finally {
+    diagnostics.close();
   }
 });
 
