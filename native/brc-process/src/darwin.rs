@@ -28,6 +28,6 @@ pub fn sample(pid: u32) -> Result<Option<RawSample>, &'static str> {
         rss_bytes: buffer[1],
         system_peak_bytes: None,
         window_ms: started.elapsed().as_millis() as u64,
-        source: "sampled",
+        source: "system",
     }))
 }

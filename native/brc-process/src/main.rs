@@ -4,6 +4,8 @@ mod darwin;
 mod identity;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "linux", test))]
+mod proc_status;
 mod sample;
 #[cfg(windows)]
 mod windows;

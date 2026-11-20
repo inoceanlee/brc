@@ -16,9 +16,12 @@ use winapi::um::psapi::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
 use winapi::um::winbase::QueryFullProcessImageNameW;
 use winapi::um::handleapi::CloseHandle;
 use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::winnt::{HANDLE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ};
+use winapi::um::winnt::{HANDLE, PROCESS_QUERY_LIMITED_INFORMATION};
 use winapi::um::oaidl::VARIANT;
 use winapi::um::unknwnbase::IUnknown;
+
+const ERROR_INVALID_PARAMETER: DWORD = 87;
+const STILL_ACTIVE: DWORD = 259;
 
 struct OwnedHandle(HANDLE);
 impl Drop for OwnedHandle {
@@ -45,12 +48,12 @@ fn handle_identity(pid: u32) -> Result<Option<(OwnedHandle, String, String)>, &'
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if handle.is_null() {
             // ERROR_INVALID_PARAMETER denotes a nonexistent PID; access denied is not absence.
-            return if GetLastError() == 87 { Ok(None) } else { Err("OPEN_PROCESS") };
+            return if GetLastError() == ERROR_INVALID_PARAMETER { Ok(None) } else { Err("OPEN_PROCESS") };
         }
         let owned = OwnedHandle(handle);
         let mut code: DWORD = 0;
         if GetExitCodeProcess(handle, &mut code) == 0 { return Err("PROCESS_STATE"); }
-        if code != 259 { return Ok(None); }
+        if code != STILL_ACTIVE { return Ok(None); }
         let mut created: FILETIME = std::mem::zeroed();
         let mut exit: FILETIME = std::mem::zeroed();
         let mut kernel: FILETIME = std::mem::zeroed();
@@ -72,7 +75,7 @@ fn terminated(handle: HANDLE) -> bool {
     let _timer = crate::diagnostics::ScopeTimer::new("windows::terminated");
     unsafe {
         let mut code: DWORD = 0;
-        GetExitCodeProcess(handle, &mut code) != 0 && code != 259
+        GetExitCodeProcess(handle, &mut code) != 0 && code != STILL_ACTIVE
     }
 }
 fn alive_and_same(handle: HANDLE, expected: &str) -> Result<bool, &'static str> {
@@ -80,7 +83,7 @@ fn alive_and_same(handle: HANDLE, expected: &str) -> Result<bool, &'static str> 
     unsafe {
         let mut code: DWORD = 0;
         if GetExitCodeProcess(handle, &mut code) == 0 { return Err("PROCESS_STATE"); }
-        if code != 259 { return Ok(false); }
+        if code != STILL_ACTIVE { return Ok(false); }
         let mut created: FILETIME = std::mem::zeroed();
         let mut exit: FILETIME = std::mem::zeroed();
         let mut kernel: FILETIME = std::mem::zeroed();
@@ -204,14 +207,14 @@ pub fn sample(pid: u32) -> Result<Option<crate::sample::RawSample>, &'static str
     let _timer = crate::diagnostics::ScopeTimer::new("windows::sample");
     let started = std::time::Instant::now();
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pid);
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if handle.is_null() {
-            return if GetLastError() == 87 { Ok(None) } else { Err("OPEN_PROCESS") };
+            return if GetLastError() == ERROR_INVALID_PARAMETER { Ok(None) } else { Err("OPEN_PROCESS") };
         }
         let _owned = OwnedHandle(handle);
         let mut code: DWORD = 0;
         if GetExitCodeProcess(handle, &mut code) == 0 { return Err("PROCESS_STATE"); }
-        if code != 259 { return Ok(None); }
+        if code != STILL_ACTIVE { return Ok(None); }
         let mut creation: FILETIME = std::mem::zeroed();
         let mut exit: FILETIME = std::mem::zeroed();
         let mut kernel: FILETIME = std::mem::zeroed();
