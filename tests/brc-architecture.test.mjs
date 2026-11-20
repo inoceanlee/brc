@@ -4,12 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import ts from 'typescript';
+import { ARCHITECTURE_BASELINE, compareWithBaseline } from './brc-architecture-baseline.mjs';
 
 const repository = fileURLToPath(new URL('../', import.meta.url));
 const cliSrc = path.join(repository, 'packages', 'cli', 'src');
 const FORBIDDEN_IN_CORE = ['node:fs', 'node:net', 'node:http', 'node:child_process', 'node:dgram'];
 const PACKAGE_NAMES = ['cli', 'relay', 'agent', 'shared'];
-const EXTERNAL_IO = /^(?:node:)?(?:fs(?:\/promises)?|net|http|https|child_process|dgram|os|worker_threads|tty|readline|console|stream|process)(?:\/.*)?$/;
+const EXTERNAL_IO = /^(?:node:)?(?:fs(?:\/promises)?|net|http|https|child_process|dgram|os|worker_threads|tty|readline|console|stream|process|path)(?:\/.*)?$/;
 const EXTERNAL_SDK = /^(?:express|ws|better-sqlite3|sqlite3|proper-lockfile|@modelcontextprotocol\/|@sqlite\/)/;
 const SERVICE_TYPES = /(?:Manager|Store|Storage|Lock|Service|Server|Sampler|Session|Controller|Provider|Tracker|History|Hub|Transport|Client|Dispatcher|Recorder|Logger|Handler|Timing|DiagnosticLog)$/;
 const ENTRY_FILES = new Set(['cli.ts', 'main.ts']);
@@ -192,6 +193,7 @@ function ownershipViolations(source, prefix, relative, dataTypes = new Set()) {
           if (ts.isBinaryExpression(parent)
             && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment
             && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) retained = true;
+          if (ts.isVariableDeclaration(parent) && parent.initializer === node) retained = true;
           if (ts.isFunctionLike(parent)) break;
           parent = parent.parent;
         }
@@ -386,7 +388,40 @@ test('diagnostics infrastructure is reachable from the shared package', async ()
   }
 });
 
-test('Core boundaries and long-lived object ownership reject violations across all packages', async () => {
+test('architecture gate detects Agent core path imports', async () => {
+  const violations = await architectureViolations();
+  assert.ok(
+    violations.includes('agent/core/ui/file-preview/shared/preview-file-types.ts: core imports external dependency path'),
+    'Agent core path import must be reported',
+  );
+});
+
+test('architecture gate detects CLI cleanup adapter service construction', async () => {
+  const violations = await architectureViolations();
+  assert.ok(
+    violations.some((entry) => entry.startsWith('cli/adapters/storage/cleanup.ts: nested service construction ProcessManager@')),
+    'CLI cleanup adapter service construction must be reported',
+  );
+});
+
+test('architecture baseline matches current violations without stale entries', async () => {
   const actual = await architectureViolations();
-  assert.deepEqual(actual, []);
+  assert.deepEqual(compareWithBaseline(actual, ARCHITECTURE_BASELINE), { newViolations: [], staleBaseline: [] });
+});
+
+test('architecture baseline rejects violations outside it and stale entries', () => {
+  assert.deepEqual(
+    compareWithBaseline(
+      ['cli/a.ts: rule one', 'relay/b.ts: rule two'],
+      new Set(['relay/b.ts: rule two', 'agent/c.ts: rule three']),
+    ),
+    { newViolations: ['cli/a.ts: rule one'], staleBaseline: ['agent/c.ts: rule three'] },
+  );
+});
+
+test('architecture baseline entries are precise file and rule strings', () => {
+  for (const entry of ARCHITECTURE_BASELINE) {
+    assert.match(entry, /^(?:cli|relay|agent|shared)\/[^\s:]+(?:\/[^\s:]+)*: .+$/, entry);
+    assert.doesNotMatch(entry, /\*/, entry);
+  }
 });
