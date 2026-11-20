@@ -18,3 +18,4 @@ export * from './diagnostics/adapters/logging.js';
 export * from './diagnostics/adapters/log-lock.js';
 export * from './diagnostics/adapters/snapshots.js';
 export * from './diagnostics/adapters/resources-node.js';
+export * from './diagnostics/adapters/sqlite-log.js';
