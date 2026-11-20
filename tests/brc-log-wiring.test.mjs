@@ -110,7 +110,7 @@ test('multiple processes write diagnostics to one SQLite database without loss',
   const { databasePath } = await makeRoot(t);
   const entry = pathToFileURL(path.resolve('packages/shared/dist/diagnostics/adapters/sqlite-log.js')).href;
   const tasks = Array.from({ length: 3 }, (_, child) => new Promise((resolve, reject) => {
-    const process = spawn(process.execPath, ['--input-type=module', '-e', `
+    const childProcess = spawn(process.execPath, ['--input-type=module', '-e', `
       import { SqliteDiagnosticsStore } from '${entry}';
       const store = new SqliteDiagnosticsStore({ databasePath: ${JSON.stringify(databasePath)} });
       for (let index = 0; index < 5; index += 1) {
@@ -120,9 +120,9 @@ test('multiple processes write diagnostics to one SQLite database without loss',
       store.close();
     `], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     let errors = '';
-    process.stderr.on('data', (chunk) => { errors += chunk.toString(); });
-    process.once('error', reject);
-    process.once('exit', (code) => code === 0 ? resolve() : reject(new Error(errors)));
+    childProcess.stderr.on('data', (chunk) => { errors += chunk.toString(); });
+    childProcess.once('error', reject);
+    childProcess.once('exit', (code) => code === 0 ? resolve() : reject(new Error(errors)));
   }));
   await Promise.all(tasks);
   const { SqliteDiagnosticsStore } = await import(storeModule);

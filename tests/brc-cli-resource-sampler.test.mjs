@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { ManagedProcessResourceSampler } from '../packages/cli/dist/adapters/process/resources.js';
 import { inspectProcess } from '../packages/cli/dist/adapters/process/identity.js';
-import { FileSnapshotStore } from '../packages/shared/dist/index.js';
+import { SqliteDiagnosticsStore, resolveDiagnosticsDbPath } from '../packages/shared/dist/index.js';
 
 test('Traefik binary sampler writes bounded snapshots and marks the final sample exited', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'brc-traefik-resource-'));
@@ -63,8 +63,10 @@ test('resource diagnostics distinguish the Traefik binary from its Node wrapper'
     path.join(runtime, 'traefik-child.json'),
     JSON.stringify({ schema: 1, instanceId, ...identity }),
   ));
-  const store = new FileSnapshotStore({ directory: diagnostics });
-  await store.write({
+  const store = new SqliteDiagnosticsStore({
+    databasePath: resolveDiagnosticsDbPath(path.join(root, 'data')),
+  });
+  await store.snapshots.write({
     schema: 1,
     service: 'traefik',
     instanceId,
@@ -85,6 +87,7 @@ test('resource diagnostics distinguish the Traefik binary from its Node wrapper'
       peak: { source: 'sampled', rssBytes: 2 * 1024 * 1024, windowMs: 1000 },
     },
   });
+  store.close();
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BRC_')));
   const result = spawnSync(process.execPath, [
     fileURLToPath(new URL('../packages/cli/dist/cli.js', import.meta.url)),
