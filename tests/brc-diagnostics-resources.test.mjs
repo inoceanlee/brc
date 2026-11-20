@@ -37,7 +37,8 @@ test('sampling window accumulates CPU percentage and sampled peak', async (t) =>
 });
 
 test('short-lived sampling helper returns a usable sample without timers left behind', async () => {
-  const sample = await sampleNodeResources(150);
+  const sampler = new NodeResourceSampler({ intervalMs: 150 });
+  const sample = await sampleNodeResources(sampler, 150);
   assert.ok(sample.capturedAt);
   assert.ok(sample.rssBytes > 0);
   const handles = process.getActiveResourcesInfo?.() ?? [];

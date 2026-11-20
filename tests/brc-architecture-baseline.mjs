@@ -1,7 +1,4 @@
-export const ARCHITECTURE_BASELINE = Object.freeze(new Set([
-  'agent/core/ui/file-preview/shared/preview-file-types.ts: core imports external dependency path',
-  'shared/diagnostics/adapters/resources-node.ts: nested service construction NodeResourceSampler@sampleNodeResources:sampler',
-]));
+export const ARCHITECTURE_BASELINE = Object.freeze(new Set());
 
 export function compareWithBaseline(actual, baseline = ARCHITECTURE_BASELINE) {
   const found = new Set(actual);

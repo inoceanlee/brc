@@ -102,8 +102,7 @@ export class NodeResourceSampler implements ResourceSamplePort {
 }
 
 /** Runs one short-lived sampling window; used by CLI and build scripts. */
-export async function sampleNodeResources(windowMs = 0): Promise<ResourceSample> {
-  const sampler = new NodeResourceSampler({ intervalMs: Math.max(100, Math.min(60_000, windowMs || 1_000)) });
+export async function sampleNodeResources(sampler: NodeResourceSampler, windowMs = 0): Promise<ResourceSample> {
   if (windowMs > 0) {
     sampler.start();
     const { promise, resolve } = Promise.withResolvers<void>();

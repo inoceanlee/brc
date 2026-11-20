@@ -388,11 +388,11 @@ test('diagnostics infrastructure is reachable from the shared package', async ()
   }
 });
 
-test('architecture gate detects Agent core path imports', async () => {
+test('Agent core file preview keeps external path imports out', async () => {
   const violations = await architectureViolations();
-  assert.ok(
-    violations.includes('agent/core/ui/file-preview/shared/preview-file-types.ts: core imports external dependency path'),
-    'Agent core path import must be reported',
+  assert.equal(
+    violations.some((entry) => entry.startsWith('agent/core/ui/file-preview/shared/preview-file-types.ts: core imports external dependency path')),
+    false,
   );
 });
 
