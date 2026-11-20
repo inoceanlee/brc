@@ -98,3 +98,31 @@ test('path validation exposes cache invalidation and reuses resolved paths', asy
     syncBuiltinESMExports();
   }
 });
+
+test('history append preserves records containing multibyte characters', async () => {
+  const { ToolHistoryStorage } = await import(storageUrl);
+  const directory = path.join(root, 'storage-multibyte');
+  const storage = new ToolHistoryStorage(directory);
+  const chinese = '\u4e2d'.repeat(100);
+  const emoji = '\u{1F600}'.repeat(20);
+  storage.withLock(() => storage.rewriteText([
+    JSON.stringify({ n: 1, v: chinese }),
+    JSON.stringify({ n: 2, v: emoji }),
+  ].join('\n')));
+
+  storage.withLock(() => storage.appendLinesIncrementally(JSON.stringify({ n: 3, v: 'new' }) + '\n'));
+
+  const persisted = JSON.parse(await fsp.readFile(storage.file, 'utf8'));
+  assert.deepEqual(persisted.map((record) => record.n), [1, 2, 3]);
+  assert.equal(persisted[0].v, chinese);
+  assert.equal(persisted[1].v, emoji);
+  assert.equal(persisted[2].v, 'new');
+});
+
+test('corrupt history returns null without throwing', async () => {
+  const { ToolHistoryStorage } = await import(storageUrl);
+  const directory = path.join(root, 'storage-corrupt');
+  const storage = new ToolHistoryStorage(directory);
+  await fsp.writeFile(storage.file, '[{"n":1},');
+  assert.equal(storage.readText(), null);
+});

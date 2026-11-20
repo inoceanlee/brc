@@ -19,6 +19,26 @@ function resolveHistoryFile(file: string): string {
   }
 }
 
+function isJsonWhitespace(byte: number): boolean {
+  return byte === 0x20 || byte === 0x09 || byte === 0x0A || byte === 0x0D;
+}
+
+function writeFully(descriptor: number, buffer: Buffer, position: number): void {
+  let written = 0;
+  while (written < buffer.length) {
+    written += fs.writeSync(descriptor, buffer, written, buffer.length - written, position + written);
+  }
+}
+
+function readFully(descriptor: number, buffer: Buffer, length: number, position: number): void {
+  let read = 0;
+  while (read < length) {
+    const count = fs.readSync(descriptor, buffer, read, length - read, position + read);
+    if (count === 0) throw new Error('Unexpected end of tool history during verification.');
+    read += count;
+  }
+}
+
 export class ToolHistoryStorage {
   readonly file: string;
   private readonly target: string;
@@ -81,7 +101,8 @@ export class ToolHistoryStorage {
       return persisted.length === 0 ? '' : persisted.map((value) => typeof value === 'string' ? value : JSON.stringify(value)).join('\n') + '\n';
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw error;
+      process.stderr.write(`Ignoring unreadable tool history: ${(error as Error).message}\n`);
+      return null;
     }
   }
 
@@ -121,13 +142,12 @@ export class ToolHistoryStorage {
       if (scanLength > 0) {
         const buffer = Buffer.alloc(scanLength);
         fs.readSync(descriptor, buffer, 0, scanLength, size - scanLength);
-        const tail = buffer.toString('utf8');
-        const bracket = tail.lastIndexOf(']');
+        const bracket = buffer.lastIndexOf(0x5D);
         if (bracket >= 0) {
           closePosition = size - scanLength + bracket;
           let cursor = bracket - 1;
-          while (cursor >= 0 && /\s/.test(tail[cursor])) cursor -= 1;
-          isEmpty = cursor >= 0 && tail[cursor] === '[';
+          while (cursor >= 0 && isJsonWhitespace(buffer[cursor])) cursor -= 1;
+          isEmpty = cursor >= 0 && buffer[cursor] === 0x5B;
         }
       }
 
@@ -138,11 +158,22 @@ export class ToolHistoryStorage {
         return;
       }
 
+      const tailLength = size - closePosition;
+      const originalTail = Buffer.alloc(tailLength);
+      fs.readSync(descriptor, originalTail, 0, tailLength, closePosition);
+
       fs.ftruncateSync(descriptor, closePosition);
       const payload = Buffer.from(`${isEmpty ? '' : ','}${entries.join(',')}]`, 'utf8');
-      let written = 0;
-      while (written < payload.length) {
-        written += fs.writeSync(descriptor, payload, written, payload.length - written, closePosition + written);
+      writeFully(descriptor, payload, closePosition);
+
+      try {
+        const finalSize = closePosition + payload.length;
+        const committed = Buffer.alloc(finalSize);
+        readFully(descriptor, committed, finalSize, 0);
+        JSON.parse(committed.toString('utf8'));
+      } catch {
+        fs.ftruncateSync(descriptor, closePosition);
+        writeFully(descriptor, originalTail, closePosition);
       }
     } finally {
       if (descriptor >= 0) fs.closeSync(descriptor);
