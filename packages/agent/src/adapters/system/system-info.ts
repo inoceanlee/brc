@@ -498,7 +498,7 @@ function detectPythonInfo(): SystemInfo['pythonInfo'] {
 /**
  * Get comprehensive system information for tool prompts
  */
-export function getSystemInfo(): SystemInfo {
+function computeSystemInfo(): SystemInfo {
     const platform = os.platform();
     const isWindows = platform === 'win32';
     const isMacOS = platform === 'darwin';
@@ -624,6 +624,19 @@ export function getSystemInfo(): SystemInfo {
         processInfo,
         examplePaths
     };
+}
+
+let cachedSystemInfo: SystemInfo | undefined;
+
+export function getSystemInfo(): SystemInfo {
+    if (!cachedSystemInfo) {
+        cachedSystemInfo = computeSystemInfo();
+    }
+    return cachedSystemInfo;
+}
+
+export function clearSystemInfoCache(): void {
+    cachedSystemInfo = undefined;
 }
 
 /**

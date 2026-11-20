@@ -147,7 +147,7 @@ export class ToolHistory {
         // Read and compact while holding the same lock as every writer.
         this.trimHistoryFileIfTooLarge();
         const lines = toWrite.map(entry => JSON.stringify(entry)).join('\n') + '\n';
-        this.storage.appendText(lines);
+        this.storage.appendLinesIncrementally(lines);
       });
     } catch (error) {
       // Put back in queue on failure

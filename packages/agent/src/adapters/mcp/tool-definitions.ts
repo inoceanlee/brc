@@ -18,9 +18,6 @@ import {
   GetRecentToolCallsArgsSchema, WritePdfArgsSchema,
 } from '../../core/tools/schemas.js';
 
-const SYSTEM_INFO = getSystemInfo();
-const OS_GUIDANCE = getOSSpecificGuidance(SYSTEM_INFO);
-const PATH_GUIDANCE = `IMPORTANT: ${getPathGuidance(SYSTEM_INFO)} Relative paths may fail as they depend on the current working directory. Tilde paths (~/...) might not work in all contexts. Unless the user explicitly asks for relative paths, use absolute paths.`;
 const CMD_PREFIX_DESCRIPTION = `This command can be referenced as "BRC: ..." or "use Better Remote Commander (BRC) to ..." in your instructions.`;
 
 export interface ToolDefinition {
@@ -34,6 +31,9 @@ export interface ToolDefinition {
 export const EXCLUDED_TOOLS = new Set(['give_feedback_to_desktop_commander', 'get_prompts', 'track_ui_event']);
 
 export function buildToolDefinitions(): ToolDefinition[] {
+  const systemInfo = getSystemInfo();
+  const osGuidance = getOSSpecificGuidance(systemInfo);
+  const pathGuidance = `IMPORTANT: ${getPathGuidance(systemInfo)} Relative paths may fail as they depend on the current working directory. Tilde paths (~/...) might not work in all contexts. Unless the user explicitly asks for relative paths, use absolute paths.`;
   const allTools: ToolDefinition[] = [
     // Configuration tools
     {
@@ -142,7 +142,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                   * For BULK changes (translation, mass replacements): use start_process with Python
                     zipfile module to find/replace all <w:t> elements at once.
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(ReadFileArgsSchema),
         annotations: {
@@ -163,7 +163,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 Failed reads for individual files won't stop the entire operation.
                 Only works within allowed directories.
                 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(ReadMultipleFilesArgsSchema),
         annotations: {
@@ -209,7 +209,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 Files over 50 lines will generate performance notes but are still written successfully.
                 Only works within allowed directories.
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(WriteFileArgsSchema),
         annotations: {
@@ -271,7 +271,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 
                 Only works within allowed directories.
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(WritePdfArgsSchema),
         annotations: {
@@ -289,7 +289,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 Can create multiple nested directories in one operation.
                 Only works within allowed directories.
                 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(CreateDirectoryArgsSchema),
         annotations: {
@@ -329,7 +329,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 If a path does not exist, it will show [NOT_FOUND] instead.
                 Only works within allowed directories.
                 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(ListDirectoryArgsSchema),
         annotations: {
@@ -345,7 +345,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 Can move files between directories and rename them in a single operation.
                 Both source and destination must be within allowed directories.
                 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(MoveFileArgsSchema),
         annotations: {
@@ -392,7 +392,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 
                 Run prepare_file_transfer on the destination first and pass its recipientPublicKey here.
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(SendFileTransferArgsSchema),
         annotations: {
@@ -412,7 +412,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 AES-GCM authentication, expected size, and SHA-256 are verified before the destination
                 file is committed. Existing files are not replaced unless overwrite=true.
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(ReceiveFileTransferArgsSchema),
         annotations: {
@@ -501,7 +501,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 Perfect for large directories where you want to see results immediately and
                 have the option to cancel if the search takes too long or you find what you need.
                 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(StartSearchArgsSchema),
         annotations: {
@@ -591,7 +591,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
 
                 Only works within allowed directories.
                 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(GetFileInfoArgsSchema),
         annotations: {
@@ -655,7 +655,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 if the edited file exceeds this limit. If this happens, consider breaking your edits into
                 smaller, more focused changes.
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(EditBlockArgsSchema),
         annotations: {
@@ -678,7 +678,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 
                 CRITICAL RULE: For ANY local file work, ALWAYS use this tool + interact_with_process, NEVER use analysis/REPL tool.
                 
-                ${OS_GUIDANCE}
+                ${osGuidance}
                 
                 REQUIRED WORKFLOW FOR LOCAL FILES:
                 1. start_process("python3 -i") - Start Python REPL for data analysis
@@ -730,7 +730,7 @@ export function buildToolDefinitions(): ToolDefinition[] {
                 ALWAYS USE FOR: Local file analysis, CSV processing, data exploration, system commands
                 NEVER USE ANALYSIS TOOL FOR: Local file access (analysis tool is browser-only and WILL FAIL)
 
-                ${PATH_GUIDANCE}
+                ${pathGuidance}
                 ${CMD_PREFIX_DESCRIPTION}`,
         inputSchema: zodToJsonSchema(StartProcessArgsSchema),
         annotations: {

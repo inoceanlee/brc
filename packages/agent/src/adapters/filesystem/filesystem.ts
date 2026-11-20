@@ -144,6 +144,40 @@ function expandHome(filepath: string): string {
     return filepath;
 }
 
+const realpathCache = new Map<string, string | null>();
+
+async function resolveRealPath(requested: string): Promise<string | null> {
+    if (realpathCache.has(requested)) return realpathCache.get(requested) ?? null;
+    try {
+        const resolved = await fs.realpath(requested, { encoding: 'utf8' });
+        realpathCache.set(requested, resolved);
+        return resolved;
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') {
+            realpathCache.set(requested, null);
+            return null;
+        }
+        throw error;
+    }
+}
+
+async function resolveRealPathOrNull(requested: string): Promise<string | null> {
+    try {
+        return await resolveRealPath(requested);
+    } catch {
+        return null;
+    }
+}
+
+export function invalidateRealpathCache(target?: string): void {
+    if (target === undefined) {
+        realpathCache.clear();
+        return;
+    }
+    realpathCache.delete(target);
+}
+
 /**
  * Recursively validates parent directories until it finds a valid one
  * This function handles the case where we need to create nested directories
@@ -160,14 +194,8 @@ async function validateParentDirectories(directoryPath: string): Promise<boolean
         return false;
     }
 
-    try {
-        // Check if the parent directory exists
-        await fs.realpath(parentDir);
-        return true;
-    } catch {
-        // Parent doesn't exist, recursively check its parent
-        return validateParentDirectories(parentDir);
-    }
+    if ((await resolveRealPathOrNull(parentDir)) !== null) return true;
+    return validateParentDirectories(parentDir);
 }
 
 /**
@@ -190,11 +218,8 @@ async function isPathAllowed(configManager: AgentConfigManager, pathToCheck: str
 
     const resolvedAllowed = await Promise.all(
         allowedDirectories.map(async (allowedDir) => {
-            try {
-                return await fs.realpath(allowedDir, { encoding: 'utf8' });
-            } catch {
-                return allowedDir;
-            }
+            const resolved = await resolveRealPathOrNull(allowedDir);
+            return resolved ?? allowedDir;
         }),
     );
 
@@ -256,44 +281,39 @@ export async function validatePath(dependencies: FilesystemDependencies, request
         //   - A symlink exists but points to a non-existent target (broken symlink)
         let resolvedRealPath: string | null = null;
         try {
-            resolvedRealPath = await fs.realpath(absoluteOriginal, { encoding: 'utf8' });
+            resolvedRealPath = await resolveRealPath(absoluteOriginal);
         } catch (error) {
             const err = error as NodeJS.ErrnoException;
-            // Only throw for non-ENOENT errors (e.g., permission denied, I/O errors)
-            if (!err.code || err.code !== 'ENOENT') {
-                capture('server_path_realpath_error', {
-                    error: err.message,
-                    path: absoluteOriginal
-                });
-                throw new Error(`Failed to resolve symlink for path: ${absoluteOriginal}. Error: ${err.message}`);
-            }
+            capture('server_path_realpath_error', {
+                error: err.message,
+                path: absoluteOriginal
+            });
+            throw new Error(`Failed to resolve symlink for path: ${absoluteOriginal}. Error: ${err.message}`);
+        }
 
+        if (resolvedRealPath === null) {
             // SECURITY FIX: When the full path doesn't exist (e.g., writing a new file),
             // resolve the parent directory to detect symlinks in the path chain.
             // Without this, an attacker could create a symlink inside an allowed directory
             // pointing to a restricted location, then write to a non-existent file through
             // that symlink — bypassing the directory restriction check.
-            try {
-                const parentDir = path.dirname(absoluteOriginal);
-                const resolvedParent = await fs.realpath(parentDir, { encoding: 'utf8' });
-                const basename = path.basename(absoluteOriginal);
+            const parentDir = path.dirname(absoluteOriginal);
+            const basename = path.basename(absoluteOriginal);
+            const resolvedParent = await resolveRealPathOrNull(parentDir);
+            if (resolvedParent !== null) {
                 resolvedRealPath = path.join(resolvedParent, basename);
-            } catch {
-                // Parent also doesn't exist — walk up the tree to find
-                // the deepest existing ancestor and resolve it
+            } else {
                 let current = absoluteOriginal;
-                let remaining: string[] = [];
+                const remaining: string[] = [];
                 while (true) {
                     const parent = path.dirname(current);
-                    if (parent === current) break; // reached filesystem root
+                    if (parent === current) break;
                     remaining.unshift(path.basename(current));
                     current = parent;
-                    try {
-                        const resolvedAncestor = await fs.realpath(current, { encoding: 'utf8' });
+                    const resolvedAncestor = await resolveRealPathOrNull(current);
+                    if (resolvedAncestor !== null) {
                         resolvedRealPath = path.join(resolvedAncestor, ...remaining);
                         break;
-                    } catch {
-                        // keep walking up
                     }
                 }
             }
@@ -676,6 +696,7 @@ export async function writeFile(dependencies: FilesystemDependencies, filePath: 
 
     // Use handler to write the file
     await handler.write(validPath, content, mode);
+    invalidateRealpathCache();
 }
 
 export interface MultiFileResult {
@@ -733,6 +754,7 @@ export async function readMultipleFiles(dependencies: FilesystemDependencies, pa
 export async function createDirectory(dependencies: FilesystemDependencies, dirPath: string): Promise<void> {
     const validPath = await validatePath(dependencies, dirPath);
     await fs.mkdir(validPath, { recursive: true });
+    invalidateRealpathCache();
 }
 
 export async function listDirectory(dependencies: FilesystemDependencies, dirPath: string, depth: number = 2): Promise<string[]> {
@@ -807,6 +829,7 @@ export async function moveFile(dependencies: FilesystemDependencies, sourcePath:
     const validSourcePath = await validatePath(dependencies, sourcePath);
     const validDestPath = await validatePath(dependencies, destinationPath);
     await fs.rename(validSourcePath, validDestPath);
+    invalidateRealpathCache();
 }
 
 export async function searchFiles(dependencies: FilesystemDependencies, searchManager: SearchManager, rootPath: string, pattern: string): Promise<string[]> {
@@ -1045,6 +1068,7 @@ export async function writePdf(
         // Use outputPath if provided, otherwise overwrite input file
         const targetPath = outputPath ? await validatePath(dependencies, outputPath) : validPath;
         await fs.writeFile(targetPath, pdfBuffer);
+        invalidateRealpathCache();
     } else if (Array.isArray(content)) {
 
         // Use outputPath if provided, otherwise overwrite input file
@@ -1075,6 +1099,7 @@ export async function writePdf(
 
         // Write the modified PDF to the output path
         await fs.writeFile(targetPath, modifiedPdfBuffer);
+        invalidateRealpathCache();
     } else {
         throw new Error('Invalid content type for writePdf. Expected string (markdown) or array of operations.');
     }

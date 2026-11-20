@@ -98,6 +98,57 @@ export class ToolHistoryStorage {
     this.rewriteText((this.readText() ?? '') + text);
   }
 
+  appendLinesIncrementally(text: string): void {
+    const entries = text.split('\n').filter((line) => line.length > 0);
+    if (entries.length === 0) return;
+
+    let descriptor: number;
+    try {
+      descriptor = fs.openSync(this.target, 'r+');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.rewriteText(entries.join('\n'));
+        return;
+      }
+      throw error;
+    }
+
+    try {
+      const size = fs.fstatSync(descriptor).size;
+      const scanLength = Math.min(size, 64);
+      let closePosition = -1;
+      let isEmpty = false;
+      if (scanLength > 0) {
+        const buffer = Buffer.alloc(scanLength);
+        fs.readSync(descriptor, buffer, 0, scanLength, size - scanLength);
+        const tail = buffer.toString('utf8');
+        const bracket = tail.lastIndexOf(']');
+        if (bracket >= 0) {
+          closePosition = size - scanLength + bracket;
+          let cursor = bracket - 1;
+          while (cursor >= 0 && /\s/.test(tail[cursor])) cursor -= 1;
+          isEmpty = cursor >= 0 && tail[cursor] === '[';
+        }
+      }
+
+      if (closePosition < 0) {
+        fs.closeSync(descriptor);
+        descriptor = -1;
+        this.rewriteText((this.readText() ?? '') + entries.join('\n') + '\n');
+        return;
+      }
+
+      fs.ftruncateSync(descriptor, closePosition);
+      const payload = Buffer.from(`${isEmpty ? '' : ','}${entries.join(',')}]`, 'utf8');
+      let written = 0;
+      while (written < payload.length) {
+        written += fs.writeSync(descriptor, payload, written, payload.length - written, closePosition + written);
+      }
+    } finally {
+      if (descriptor >= 0) fs.closeSync(descriptor);
+    }
+  }
+
   rewriteText(text: string): void {
     const records = text.split('\n').filter((line) => line.length > 0).map((line) => {
       try { return JSON.parse(line) as unknown; } catch { return line; }
