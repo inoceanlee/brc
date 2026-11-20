@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
   type BrcSettings,
@@ -29,6 +30,7 @@ export interface RelayAuditLogOptions {
 }
 
 interface LegacyAuditRow {
+  id: number;
   ts: number;
   user_id: string | null;
   device_id: string | null;
@@ -41,7 +43,14 @@ interface LegacyAuditRow {
 }
 
 function initializeSchema(database: DiagnosticDatabase): void {
-  database.connection.exec('CREATE TABLE IF NOT EXISTS relay_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+  database.connection.exec(`
+    CREATE TABLE IF NOT EXISTS relay_schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS relay_audit_imports (
+      source_key TEXT NOT NULL,
+      source_id INTEGER NOT NULL,
+      PRIMARY KEY (source_key, source_id)
+    );
+  `);
   const row = database.connection.prepare("SELECT value FROM relay_schema_meta WHERE key = 'schema_version'").get() as { value: string } | undefined;
   if (!row) {
     database.connection.prepare("INSERT INTO relay_schema_meta (key, value) VALUES ('schema_version', ?)").run(String(RELAY_DIAGNOSTICS_SCHEMA_VERSION));
@@ -115,40 +124,48 @@ export class RelayAuditLog {
   }
 
   async importLegacyAudit(legacyFile: string): Promise<number> {
-    const legacy = new DatabaseSync(path.resolve(legacyFile));
-    let entries: RelayAuditEntry[] = [];
+    const source = path.resolve(legacyFile);
+    const sourceKey = createHash('sha256').update(source).digest('hex');
+    const legacy = new DatabaseSync(source);
+    let rows: LegacyAuditRow[] = [];
     try {
       const table = legacy.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'audit'").get();
       if (!table) return 0;
-      const rows = legacy.prepare('SELECT ts,user_id,device_id,client,tool,args_hash,ok,ms,error FROM audit ORDER BY id').all() as unknown as LegacyAuditRow[];
-      entries = rows.map((row) => ({
-        ts: Number.isFinite(row.ts) ? row.ts : Date.now(),
-        userId: row.user_id ?? undefined,
-        deviceId: row.device_id ?? undefined,
-        client: row.client ?? undefined,
-        tool: row.tool,
-        argsHash: row.args_hash ?? undefined,
-        ok: row.ok !== 0,
-        ms: row.ms ?? undefined,
-        error: row.error ?? undefined,
-      }));
+      rows = legacy.prepare('SELECT id,ts,user_id,device_id,client,tool,args_hash,ok,ms,error FROM audit ORDER BY id').all() as unknown as LegacyAuditRow[];
     } finally {
       legacy.close();
     }
-    this.database.transaction(() => {
+    return this.database.transaction((): number => {
+      const mark = this.database.connection.prepare(
+        'INSERT OR IGNORE INTO relay_audit_imports (source_key, source_id) VALUES (?, ?)',
+      );
       const insert = this.database.connection.prepare(
         'INSERT INTO relay_audit (ts,epoch_ms,user_id,device_id,client,tool,args_hash,ok,ms,error,payload) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
       );
-      for (const entry of entries) {
+      let imported = 0;
+      for (const row of rows) {
+        if (Number(mark.run(sourceKey, row.id).changes) === 0) continue;
+        const entry: RelayAuditEntry = {
+          ts: Number.isFinite(row.ts) ? row.ts : Date.now(),
+          userId: row.user_id ?? undefined,
+          deviceId: row.device_id ?? undefined,
+          client: row.client ?? undefined,
+          tool: row.tool,
+          argsHash: row.args_hash ?? undefined,
+          ok: row.ok !== 0,
+          ms: row.ms ?? undefined,
+          error: row.error ?? undefined,
+        };
         const ts = Number.isFinite(entry.ts) ? entry.ts : Date.now();
         insert.run(
           ts, ts, entry.userId ?? null, entry.deviceId ?? null, entry.client ?? null,
           entry.tool, entry.argsHash ?? null, entry.ok ? 1 : 0, entry.ms ?? null,
           entry.error ?? null, JSON.stringify(entry),
         );
+        imported += 1;
       }
+      return imported;
     });
-    return entries.length;
   }
 
   prune(retention: RelayAuditRetention): number {

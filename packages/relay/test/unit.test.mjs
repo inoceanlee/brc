@@ -237,6 +237,35 @@ test('store: device token issue / lookup / revoke, pairing codes, and unified au
   rmSync(auditDirectory, { recursive: true, force: true });
 });
 
+test('legacy audit import is idempotent across repeated runs', async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'brc-relay-import-idempotent-'));
+  try {
+    const legacyFile = path.join(directory, 'old.sqlite');
+    const legacy = new DatabaseSync(legacyFile);
+    legacy.exec('CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, user_id TEXT, device_id TEXT, client TEXT, tool TEXT NOT NULL, args_hash TEXT, ok INTEGER NOT NULL, ms INTEGER, error TEXT)');
+    const insert = legacy.prepare('INSERT INTO audit (ts,user_id,device_id,client,tool,args_hash,ok,ms,error) VALUES (?,?,?,?,?,?,?,?,?)');
+    insert.run(Date.now(), 'u1', null, 'c', 'read_file', null, 1, 3, null);
+    insert.run(Date.now(), 'u1', null, 'c', 'write_file', null, 0, 4, 'denied');
+
+    const audit = RelayAuditLog.open({ dbFile: path.join(directory, 'relay.sqlite'), env: {} });
+    try {
+      assert.equal(await audit.importLegacyAudit(legacyFile), 2);
+      assert.equal(await audit.importLegacyAudit(legacyFile), 0, 'a repeated import adds no rows');
+      assert.deepEqual(audit.auditStats('u1'), { total: 2, failed: 1, last24h: 2 });
+      assert.equal(audit.recentAudit('u1').length, 2);
+
+      insert.run(Date.now(), 'u1', null, 'c', 'new_tool', null, 1, 1, null);
+      assert.equal(await audit.importLegacyAudit(legacyFile), 1, 'new legacy rows still import');
+      assert.deepEqual(audit.auditStats('u1'), { total: 3, failed: 1, last24h: 3 });
+    } finally {
+      legacy.close();
+      audit.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('store: tokens expire and revoke', () => {
   const s = SqliteStore.open(':memory:');
   const now = Date.now();
