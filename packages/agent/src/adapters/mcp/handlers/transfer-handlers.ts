@@ -2,7 +2,7 @@ import {
   PrepareFileTransferArgsSchema,
   ReceiveFileTransferArgsSchema,
   SendFileTransferArgsSchema,
-} from '../../../core/tools/schemas.js';
+} from '../schemas.js';
 import {
   prepareFileReceive,
   receiveFileTransfer,

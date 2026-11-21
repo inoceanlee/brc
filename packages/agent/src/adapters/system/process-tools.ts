@@ -2,7 +2,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import { ProcessInfo, ServerResult } from '../../core/types.js';
-import { KillProcessArgsSchema } from '../../core/tools/schemas.js';
+import { KillProcessArgsSchema } from '../mcp/schemas.js';
 
 const execAsync = promisify(exec);
 

@@ -20,7 +20,7 @@ import fs from 'fs/promises';
 import { ServerResult } from '../../core/types.js';
 import { runFuzzySearchInWorker, getSimilarityRatio } from './fuzzy-search.js';
 import { createErrorResponse } from '../mcp/error-handlers.js';
-import { EditBlockArgsSchema } from "../../core/tools/schemas.js";
+import { EditBlockArgsSchema } from "../mcp/schemas.js";
 import path from 'path';
 import { detectLineEnding, normalizeLineEndings } from './line-endings.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';

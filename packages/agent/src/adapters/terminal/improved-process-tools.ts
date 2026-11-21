@@ -1,6 +1,6 @@
 import { MAX_BUFFERED_OUTPUT_CHARS, type TerminalManager } from './terminal-manager.js';
 import type { CommandManager } from './command-manager.js';
-import { StartProcessArgsSchema, ReadProcessOutputArgsSchema, InteractWithProcessArgsSchema, ForceTerminateArgsSchema, ListSessionsArgsSchema } from '../../core/tools/schemas.js';
+import { StartProcessArgsSchema, ReadProcessOutputArgsSchema, InteractWithProcessArgsSchema, ForceTerminateArgsSchema, ListSessionsArgsSchema } from '../mcp/schemas.js';
 import { ServerResult } from '../../core/types.js';
 import { analyzeProcessState, cleanProcessOutput, formatProcessStateMessage, ProcessState } from '../system/process-detection.js';
 import * as os from 'os';

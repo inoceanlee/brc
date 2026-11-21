@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 import type { PDFDocument as PDFDocumentType, PDFPage } from 'pdf-lib';
 import { normalizePageIndexes } from './utils.js';
 import { parseMarkdownToPdf } from './markdown.js';
-import type { PdfInsertOperationSchema, PdfDeleteOperationSchema, PdfOperationSchema } from '../../../core/tools/schemas.js';
+import type { PdfInsertOperationSchema, PdfDeleteOperationSchema, PdfOperationSchema } from '../../mcp/schemas.js';
 import { z } from 'zod';
 
 

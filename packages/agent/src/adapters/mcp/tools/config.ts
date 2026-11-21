@@ -1,5 +1,5 @@
 import type { AgentConfigManager } from '../../storage/config-manager.js';
-import { SetConfigValueArgsSchema } from '../../../core/tools/schemas.js';
+import { SetConfigValueArgsSchema } from '../schemas.js';
 import { getSystemInfo } from '../../system/system-info.js';
 import { access, readFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';

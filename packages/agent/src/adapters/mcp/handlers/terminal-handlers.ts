@@ -13,7 +13,7 @@ import {
     InteractWithProcessArgsSchema,
     ForceTerminateArgsSchema,
     ListSessionsArgsSchema
-} from '../../../core/tools/schemas.js';
+} from '../schemas.js';
 
 import { ServerResult } from '../../../core/types.js';
 

@@ -1,6 +1,6 @@
 import {
     EditBlockArgsSchema
-} from '../../../core/tools/schemas.js';
+} from '../schemas.js';
 
 import { handleEditBlock } from '../../filesystem/edit.js';
 
