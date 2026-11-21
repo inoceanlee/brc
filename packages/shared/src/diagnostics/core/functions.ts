@@ -19,6 +19,7 @@ export interface FunctionTimingSnapshot {
   entries: FunctionTimingEntry[];
   truncated: boolean;
   droppedIds: number;
+  failures: FunctionFailureSample[];
 }
 
 export interface FunctionDescriptor {
@@ -51,6 +52,19 @@ interface Aggregate {
   errors: number;
 }
 
+const MAX_FAILURE_TEXT = 512;
+
+function describeFailure(id: string, error: unknown): FunctionFailureSample {
+  const err = error instanceof Error ? error : undefined;
+  const message = err?.message ?? (typeof error === 'string' ? error : String(error));
+  const rawStack = err?.stack ?? '';
+  return {
+    id,
+    message: message.slice(0, MAX_FAILURE_TEXT),
+    stack: rawStack.slice(0, MAX_FAILURE_TEXT),
+  };
+}
+
 /**
  * Bounded in-memory aggregation of own function calls. Only the outermost
  * invocation of a given function contributes time, so recursive and
@@ -61,6 +75,7 @@ export class FunctionTiming {
   private readonly aggregates = new Map<string, Aggregate>();
   private readonly descriptors = new Map<string, FunctionDescriptor>();
   private readonly active = new Map<string, Set<FunctionTimingToken>>();
+  private readonly failures = new Map<string, FunctionFailureSample>();
   private readonly maxEntries: number;
   private readonly clock: () => number;
   private readonly describe?: (id: string) => FunctionDescriptor | undefined;
@@ -92,7 +107,7 @@ export class FunctionTiming {
     return token;
   }
 
-  end(token: FunctionTimingToken | undefined, failed = false): void {
+  end(token: FunctionTimingToken | undefined, failed = false, error?: unknown): void {
     if (!token) return;
     const tokens = this.active.get(token.id);
     if (tokens) {
@@ -101,12 +116,21 @@ export class FunctionTiming {
     }
     const aggregate = this.aggregates.get(token.id);
     if (!aggregate) return;
-    if (failed) aggregate.errors += 1;
+    if (failed) {
+      aggregate.errors += 1;
+      if (!this.failures.has(token.id)) {
+        this.failures.set(token.id, describeFailure(token.id, error));
+      }
+    }
     if (!token.root) return;
     const duration = Math.max(0, this.clock() - token.started);
     aggregate.totalMs += duration;
     if (duration > aggregate.maxMs) aggregate.maxMs = duration;
     if (token.kind === 'async') aggregate.asyncWallMs += duration;
+  }
+
+  failureSamples(): FunctionFailureSample[] {
+    return [...this.failures.values()];
   }
 
   snapshot(limit = this.maxEntries): FunctionTimingSnapshot {
@@ -139,6 +163,7 @@ export class FunctionTiming {
       entries: truncated ? entries.slice(0, limit) : entries,
       truncated,
       droppedIds: this.droppedIds,
+      failures: this.failureSamples(),
     };
   }
 
@@ -155,7 +180,12 @@ export class FunctionTiming {
     }
     aggregate.calls += 1;
     this.totalCalls += 1;
-    if (record.failed) aggregate.errors += 1;
+    if (record.failed) {
+      aggregate.errors += 1;
+      if (!this.failures.has(record.id)) {
+        this.failures.set(record.id, describeFailure(record.id, record.error));
+      }
+    }
     aggregate.totalMs += record.durationMs;
     if (record.durationMs > aggregate.maxMs) aggregate.maxMs = record.durationMs;
     if (record.kind === 'async') aggregate.asyncWallMs += record.durationMs;
@@ -174,9 +204,15 @@ export class FunctionTiming {
   }
 }
 
+export interface FunctionFailureSample {
+  id: string;
+  message: string;
+  stack: string;
+}
+
 export interface FunctionProbeHost {
   __brcDiagBegin?: (id: string, kind?: string) => FunctionTimingToken | undefined;
-  __brcDiagEnd?: (token: FunctionTimingToken | undefined, failed?: boolean) => void;
+  __brcDiagEnd?: (token: FunctionTimingToken | undefined, failed?: boolean, error?: unknown) => void;
 }
 
 export interface FunctionProbeInstallation {
@@ -193,11 +229,12 @@ interface EarlyRecord {
   started: number;
   durationMs: number;
   failed: boolean;
+  error?: unknown;
 }
 
 export interface EarlyFunctionBuffer {
   begin(id: string, kind: FunctionKind, clock: number): { id: string; kind: FunctionKind; started: number };
-  end(token: { id: string; kind: FunctionKind; started: number }, failed: boolean, clock: number): void;
+  end(token: { id: string; kind: FunctionKind; started: number }, failed: boolean, clock: number, error?: unknown): void;
   drain(): EarlyRecord[];
   fork(): EarlyFunctionBuffer;
   readonly count: number;
@@ -209,7 +246,7 @@ function createEarlyBuffer(): EarlyFunctionBuffer {
     begin(id, kind, clock) {
       return { id, kind, started: clock };
     },
-    end(token, failed, clock) {
+    end(token, failed, clock, error) {
       if (records.length >= EARLY_BUFFER_LIMIT) return;
       records.push({
         id: token.id,
@@ -217,6 +254,7 @@ function createEarlyBuffer(): EarlyFunctionBuffer {
         started: token.started,
         durationMs: Math.max(0, clock - token.started),
         failed,
+        error,
       });
     },
     drain() {
@@ -251,7 +289,7 @@ export function installFunctionProbe(
 ): FunctionProbeInstallation {
   for (const record of earlyBuffer().drain()) timing.recordEarly(record);
   host.__brcDiagBegin = (id, kind) => timing.begin(id, kind === 'async' ? 'async' : 'sync');
-  host.__brcDiagEnd = (token, failed) => timing.end(token, failed === true);
+  host.__brcDiagEnd = (token, failed, error) => timing.end(token, failed === true, error);
   return {
     timing,
     uninstall: () => {
@@ -268,10 +306,10 @@ function installEarlyProbe(host: FunctionProbeHost): void {
     const token = buffer.begin(id, kind === 'async' ? 'async' : 'sync', performance.now());
     return token as unknown as FunctionTimingToken;
   };
-  host.__brcDiagEnd = (token, failed) => {
+  host.__brcDiagEnd = (token, failed, error) => {
     if (!token) return;
     const record = token as unknown as { id: string; kind: FunctionKind; started: number };
-    earlyBuffer().end(record, failed === true, performance.now());
+    earlyBuffer().end(record, failed === true, performance.now(), error);
   };
 }
 

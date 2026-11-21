@@ -377,6 +377,7 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
   private readonly isAlive: (pid: number) => boolean;
   private readonly isSameProcess?: (snapshot: DiagnosticSnapshot) => Promise<boolean>;
   private readonly now: () => Date;
+  private readonly writtenFailures = new Set<string>();
 
   constructor(options: SqliteSnapshotStoreOptions = {}) {
     const resolved = resolveDatabase(options);
@@ -413,6 +414,29 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
           snapshot.capturedAt, Number.isFinite(captured) ? captured : 0, snapshot.service,
           snapshot.instanceId, entry.id, entry.name, entry.file, entry.line, entry.kind,
           entry.calls, entry.totalMs, entry.maxMs, entry.asyncWallMs, entry.errors,
+        );
+      }
+      const insertEvent = this.database.connection.prepare(
+        'INSERT INTO diagnostic_events (ts,epoch_ms,level,component,run_id,instance_id,source_file,source_function,error_code,payload) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      );
+      for (const failure of snapshot.functions.failures ?? []) {
+        const key = `${snapshot.instanceId}:${failure.id}:${failure.message}`;
+        if (this.writtenFailures.has(key)) continue;
+        this.writtenFailures.add(key);
+        const event = createDiagnosticEvent({
+          level: 'error',
+          component: snapshot.service,
+          instanceId: snapshot.instanceId,
+          source: { file: snapshot.service, function: failure.id },
+          message: failure.message,
+          errorCode: 'FUNCTION_ERROR',
+          stack: failure.stack,
+          now: new Date(snapshot.capturedAt),
+        });
+        insertEvent.run(
+          event.ts, Number.isFinite(captured) ? captured : 0, event.level, event.component,
+          optional(event.runId), optional(event.instanceId), event.source.file,
+          optional(event.source.function), optional(event.errorCode), boundedPayload(event, this.database.config.maxRecordBytes),
         );
       }
     });
