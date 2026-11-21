@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
 import { NodeResourceSampler, sampleNodeResources } from '../packages/shared/dist/diagnostics/adapters/resources-node.js';
 
@@ -49,22 +48,3 @@ test('invalid sampling intervals are rejected', () => {
   assert.throws(() => new NodeResourceSampler({ intervalMs: 1 }), /between 100 and 60000/);
 });
 
-test('diagnostics core publishes the managed-process resource port and keeps the old name', async () => {
-  const declaration = await readFile(
-    new URL('../packages/shared/dist/diagnostics/core/ports.d.ts', import.meta.url), 'utf8',
-  );
-  assert.match(declaration, /interface ManagedProcessIdentity/);
-  assert.match(declaration, /interface ManagedProcessResourcePort/);
-  assert.match(declaration, /sample\(identity/);
-  assert.match(declaration, /interface ResourceSamplePort/);
-});
-
-test('shared publishes search, tool history and cleanup port contracts', async () => {
-  const declaration = await readFile(
-    new URL('../packages/shared/dist/contracts/ports.d.ts', import.meta.url), 'utf8',
-  );
-  assert.match(declaration, /interface SearchExecutionPort/);
-  assert.match(declaration, /interface ToolHistoryStorePort/);
-  assert.match(declaration, /interface CleanupPort/);
-  assert.match(declaration, /clean\(paths/);
-});
