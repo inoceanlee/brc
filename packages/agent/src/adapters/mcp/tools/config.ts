@@ -1,3 +1,5 @@
+import type { TextLogPort } from 'brc-shared';
+import { textLogToStderr } from '../../telemetry/logger.js';
 import type { AgentConfigManager } from '../../storage/config-manager.js';
 import { SetConfigValueArgsSchema } from '../../../core/tools/schemas.js';
 import { getSystemInfo } from '../../system/system-info.js';
@@ -14,6 +16,7 @@ export interface ConfigToolDependencies {
   configManager: AgentConfigManager;
   featureFlagManager: FeatureFlagManager;
   currentClient: { name: string; version: string };
+  log?: TextLogPort;
 }
 
 const ALLOWED_CONFIG_KEYS = new Set(CONFIG_FIELD_KEYS);
@@ -92,7 +95,7 @@ async function detectAvailableShells(systemInfo: ReturnType<typeof getSystemInfo
 /**
  * Get the entire config including system information
  */
-export async function getConfig({ configManager, featureFlagManager, currentClient }: ConfigToolDependencies) {
+export async function getConfig({ configManager, featureFlagManager, currentClient, log }: ConfigToolDependencies) {
   try {
     const config = await configManager.getConfig();
 
@@ -143,8 +146,8 @@ export async function getConfig({ configManager, featureFlagManager, currentClie
       },
     };
   } catch (error) {
-    console.error(`Error in getConfig: ${error instanceof Error ? error.message : String(error)}`);
-    console.error(error instanceof Error && error.stack ? error.stack : 'No stack trace available');
+    (log ?? textLogToStderr()).error(`Error in getConfig: ${error instanceof Error ? error.message : String(error)}`);
+    (log ?? textLogToStderr()).error(error instanceof Error && error.stack ? error.stack : 'No stack trace available');
     return {
       content: [{
         type: "text",
@@ -158,11 +161,11 @@ export async function getConfig({ configManager, featureFlagManager, currentClie
 /**
  * Set a specific config value
  */
-export async function setConfigValue(args: unknown, configManager: AgentConfigManager) {
+export async function setConfigValue(args: unknown, configManager: AgentConfigManager, log: TextLogPort = textLogToStderr()) {
   try {
     const parsed = SetConfigValueArgsSchema.safeParse(args);
     if (!parsed.success) {
-      console.error(`Invalid arguments for set_config_value: ${parsed.error}`);
+      log.error(`Invalid arguments for set_config_value: ${parsed.error}`);
       return {
         content: [{
           type: "text",
@@ -187,7 +190,7 @@ export async function setConfigValue(args: unknown, configManager: AgentConfigMa
       const valueToStore = await configManager.getValue(parsed.data.key);
 
       const updatedConfig = await configManager.getConfig();
-      console.error(`setConfigValue updated ${parsed.data.key}`);
+      log.info(`setConfigValue updated ${parsed.data.key}`);
       return {
         content: [{
           type: "text",
@@ -195,7 +198,7 @@ export async function setConfigValue(args: unknown, configManager: AgentConfigMa
         }],
       };
     } catch (saveError: any) {
-      console.error(`Error saving config: ${saveError.message}`);
+      log.error(`Error saving config: ${saveError.message}`);
       return {
         content: [{
           type: "text",
@@ -205,8 +208,8 @@ export async function setConfigValue(args: unknown, configManager: AgentConfigMa
       };
     }
   } catch (error) {
-    console.error(`Error in setConfigValue: ${error instanceof Error ? error.message : String(error)}`);
-    console.error(error instanceof Error && error.stack ? error.stack : 'No stack trace available');
+    log.error(`Error in setConfigValue: ${error instanceof Error ? error.message : String(error)}`);
+    log.error(error instanceof Error && error.stack ? error.stack : 'No stack trace available');
     return {
       content: [{
         type: "text",

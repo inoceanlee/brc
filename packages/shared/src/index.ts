@@ -1,4 +1,6 @@
 export * from './protocol.js';
+export * from './progress/core.js';
+export * from './concurrency/core.js';
 export * from './config/core/settings.js';
 export * from './config/core/ports.js';
 export * from './config/adapters/yaml-store.js';

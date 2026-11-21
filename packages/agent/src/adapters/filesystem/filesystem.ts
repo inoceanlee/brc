@@ -14,11 +14,14 @@ import type { ReadOptions, FileResult, PdfPageItem } from './files/base.js';
 import { isPdfFile } from "../../core/tools/mime-types.js";
 import { parsePdfToMarkdown, editPdf, PdfOperations, PdfMetadata, parseMarkdownToPdf } from './pdf/index.js';
 import { isBinaryFile } from 'isbinaryfile';
+import { DEFAULT_FILE_READ_CONCURRENCY, mapWithConcurrency, type TextLogPort } from 'brc-shared';
+import { textLogToStderr } from '../telemetry/logger.js';
 
 export interface FilesystemDependencies {
     configManager: AgentConfigManager;
     capture: Capture;
     fileHandlers: FileHandlerFactory;
+    log?: TextLogPort;
 }
 
 
@@ -532,7 +535,7 @@ export async function readFileFromDisk(
             fileSize: stats.size
         });
     } catch (error) {
-        console.error('error catch ' + error);
+        (dependencies.log ?? textLogToStderr()).error('error catch ' + error);
         const errorMessage = error instanceof Error ? error.message : String(error);
         capture('server_read_file_error', { error: errorMessage, fileExtension: fileExtension });
 
@@ -710,8 +713,7 @@ export interface MultiFileResult {
 }
 
 export async function readMultipleFiles(dependencies: FilesystemDependencies, paths: string[]): Promise<MultiFileResult[]> {
-    return Promise.all(
-        paths.map(async (filePath: string) => {
+    return mapWithConcurrency(paths, DEFAULT_FILE_READ_CONCURRENCY, async (filePath: string) => {
             try {
                 const validPath = await validatePath(dependencies, filePath);
                 const fileResult = await readFile(dependencies, validPath);
@@ -747,8 +749,7 @@ export async function readMultipleFiles(dependencies: FilesystemDependencies, pa
                     error: errorMessage
                 };
             }
-        }),
-    );
+    });
 }
 
 export async function createDirectory(dependencies: FilesystemDependencies, dirPath: string): Promise<void> {

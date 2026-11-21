@@ -15,7 +15,8 @@ import type { FuzzySearchLogger } from '../telemetry/fuzzySearchLogger.js';
 import type { FilesystemDependencies } from '../filesystem/filesystem.js';
 import type { TerminalDependencies } from '../terminal/improved-process-tools.js';
 import type { TransferDependencies } from './handlers/transfer-handlers.js';
-import type { ToolResult } from 'brc-shared';
+import type { TextLogPort, ToolResult } from 'brc-shared';
+import { textLogToStderr } from '../telemetry/logger.js';
 
 type Args = Record<string, unknown>;
 type Handler = (args: Args) => Promise<unknown>;
@@ -38,6 +39,7 @@ export interface ToolDispatcherDependencies {
   terminal: TerminalDependencies;
   transfer: TransferDependencies;
   currentClient: { name: string; version: string };
+  log?: TextLogPort;
   logHistoryFailure: () => void;
   trackToolCall: (name: string) => Promise<void>;
 }
@@ -49,7 +51,7 @@ const usageFailures: unknown[] = [];
 let additionalUsageFailures = 0;
 function trackUsage(operation: Promise<unknown>): void {
   const tracked = operation.then(() => undefined, () => {
-    console.error('Agent usage storage write failed.');
+    (deps.log ?? textLogToStderr()).error('Agent usage storage write failed.');
     if (usageFailures.length < 16) usageFailures.push(new Error('Agent usage storage write failed.'));
     else additionalUsageFailures++;
   });
@@ -59,7 +61,7 @@ function trackUsage(operation: Promise<unknown>): void {
 let stopping = false;
 const TOOL_HANDLERS: Record<string, Handler> = {
   get_config: () => getConfig(deps),
-  set_config_value: (a) => setConfigValue(a, deps.configManager),
+  set_config_value: (a) => setConfigValue(a, deps.configManager, deps.log),
   get_usage_stats: () => getUsageStats(deps.usageTracker),
   get_recent_tool_calls: (a) => handlers.handleGetRecentToolCalls(a, deps.toolHistory),
   start_process: (a) => handlers.handleStartProcess(a, deps.terminal),

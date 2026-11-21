@@ -40,3 +40,11 @@ export function createAgentLogger(): AgentLogger {
 export function logToStderr(level: LogLevel, message: string): void {
   process.stderr.write('[agent:' + level + '] ' + redact(message) + '\n');
 }
+
+export function textLogToStderr(): import('brc-shared').TextLogPort {
+  return {
+    error: (message) => logToStderr('error', message),
+    warning: (message) => logToStderr('warning', message),
+    info: (message) => logToStderr('info', message),
+  };
+}

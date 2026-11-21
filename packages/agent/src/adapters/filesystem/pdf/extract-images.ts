@@ -1,4 +1,6 @@
 import { getDocumentProxy, extractImages } from 'unpdf';
+import { DEFAULT_PDF_IMAGE_BATCH_SIZE, type TextLogPort } from 'brc-shared';
+import { textLogToStderr } from '../../telemetry/logger.js';
 
 export interface ImageInfo {
     /** Object ID within PDF */
@@ -27,6 +29,8 @@ export interface ImageCompressionOptions {
     quality?: number;
     /** Maximum dimension to resize to (maintains aspect ratio) */
     maxDimension?: number;
+    /** Number of PDF pages processed per batch */
+    batchSize?: number;
 }
 
 /**
@@ -39,7 +43,8 @@ export interface ImageCompressionOptions {
 export async function extractImagesFromPdf(
     pdfBuffer: Uint8Array,
     pageNumbers?: number[],
-    compressionOptions: ImageCompressionOptions = {}
+    compressionOptions: ImageCompressionOptions = {},
+    log: TextLogPort = textLogToStderr(),
 ): Promise<Record<number, ImageInfo[]>> {
     const pdfDocument = await getDocumentProxy(pdfBuffer);
 
@@ -49,7 +54,7 @@ export async function extractImagesFromPdf(
 
     try {
 
-        const batchSize = 5; 
+        const batchSize = compressionOptions.batchSize ?? DEFAULT_PDF_IMAGE_BATCH_SIZE;
         const batches: number[][] = [];
         for (let i = 0; i < pagesToProcess.length; i += batchSize) {
             batches.push(pagesToProcess.slice(i, i + batchSize));
@@ -79,7 +84,8 @@ export async function extractImagesFromPdf(
                                 img.width,
                                 img.height,
                                 img.channels,
-                                compressionOptions
+                                compressionOptions,
+                                log
                             );
 
                             if (compressionResult) {
@@ -95,13 +101,13 @@ export async function extractImagesFromPdf(
                             }
                         } catch (err) {
 
-                            console.warn(`Failed to convert image ${index} on page ${pageNum}:`, err instanceof Error ? err.message : String(err));
+                            log.warning(`Failed to convert image ${index} on page ${pageNum}: ${err instanceof Error ? err.message : String(err)}`);
                         }
                     }
 
                     return { pageNum, images: pageImages };
                 } catch (error) {
-                    console.warn(`Failed to extract images from page ${pageNum}:`, error instanceof Error ? error.message : String(error));
+                    log.warning(`Failed to extract images from page ${pageNum}: ${error instanceof Error ? error.message : String(error)}`);
                     return { pageNum, images: [] };
                 }
             });
@@ -139,7 +145,8 @@ async function convertRawImageToBase64(
     width: number,
     height: number,
     channels: number,
-    options: ImageCompressionOptions = {}
+    options: ImageCompressionOptions = {},
+    log: TextLogPort = textLogToStderr(),
 ): Promise<{ data: string; mimeType: string } | null> {
     const {
         format = 'webp',
@@ -192,7 +199,7 @@ async function convertRawImageToBase64(
             mimeType
         };
     } catch (error) {
-        console.warn('Image conversion failed (likely missing sharp or invalid data):', error instanceof Error ? error.message : String(error));
+        log.warning(`Image conversion failed (likely missing sharp or invalid data): ${error instanceof Error ? error.message : String(error)}`);
         return null;
     }
 }

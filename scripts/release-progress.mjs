@@ -1,8 +1,6 @@
 import { performance } from 'node:perf_hooks';
+import { clearProgressLine, formatElapsed, progressFrame } from '../packages/shared/dist/progress/core.js';
 import { RELEASE_CONFIG } from './release-config.mjs';
-
-const frames = ['|', '/', '-', '\\'];
-const formatSeconds = (elapsed) => (elapsed / 1000).toFixed(1) + 's';
 
 export class ReleaseProgress {
   constructor({ output = process.stdout, verbose = false } = {}) {
@@ -36,11 +34,11 @@ export class ReleaseProgress {
 
   render() {
     if (!this.current) return;
-    const elapsed = formatSeconds(performance.now() - this.current.started);
+    const elapsed = formatElapsed(performance.now() - this.current.started);
     const detail = this.current.detail ? ' · ' + this.current.detail : '';
     if (this.output.isTTY) {
-      const frame = frames[this.frame++ % frames.length];
-      this.output.write('\r\x1b[2K' + frame + ' ' + this.current.stage + detail + ' · ' + elapsed);
+      const frame = progressFrame(this.frame++);
+      this.output.write(clearProgressLine(true) + frame + ' ' + this.current.stage + detail + ' · ' + elapsed);
     } else if (performance.now() - this.current.lastHeartbeat >= RELEASE_CONFIG.progressHeartbeatMs) {
       this.current.lastHeartbeat = performance.now();
       this.output.write('  … ' + this.current.stage + detail + ' · ' + elapsed + '\n');
@@ -48,14 +46,14 @@ export class ReleaseProgress {
   }
 
   clear() {
-    if (this.output.isTTY && this.current) this.output.write('\r\x1b[2K');
+    if (this.output.isTTY && this.current) this.output.write(clearProgressLine(true));
   }
 
   finish(result) {
     if (!this.current) return;
     clearInterval(this.timer);
     this.timer = null;
-    const elapsed = formatSeconds(performance.now() - this.current.started);
+    const elapsed = formatElapsed(performance.now() - this.current.started);
     this.clear();
     if (result instanceof Error) this.output.write('  ✗ ' + this.current.stage + ' · ' + elapsed + '\n');
     else this.output.write('  ✓ ' + this.current.stage + ' · ' + elapsed + '\n');
