@@ -142,6 +142,25 @@ export class FunctionTiming {
     };
   }
 
+  /** Merges one pre-recorded call captured before the probe was installed. */
+  recordEarly(record: EarlyRecord): void {
+    let aggregate = this.aggregates.get(record.id);
+    if (!aggregate) {
+      if (this.aggregates.size >= this.maxEntries) {
+        this.droppedIds += 1;
+        return;
+      }
+      aggregate = { calls: 0, totalMs: 0, maxMs: 0, asyncWallMs: 0, errors: 0 };
+      this.aggregates.set(record.id, aggregate);
+    }
+    aggregate.calls += 1;
+    this.totalCalls += 1;
+    if (record.failed) aggregate.errors += 1;
+    aggregate.totalMs += record.durationMs;
+    if (record.durationMs > aggregate.maxMs) aggregate.maxMs = record.durationMs;
+    if (record.kind === 'async') aggregate.asyncWallMs += record.durationMs;
+  }
+
   /** Registers source metadata produced by the build-time instrumenter. */
   register(id: string, descriptor: FunctionDescriptor): void {
     this.descriptors.set(id, descriptor);
@@ -165,6 +184,62 @@ export interface FunctionProbeInstallation {
   uninstall(): void;
 }
 
+const EARLY_BUFFER_SYMBOL = Symbol.for('brc.diag.early');
+const EARLY_BUFFER_LIMIT = 2_000;
+
+interface EarlyRecord {
+  id: string;
+  kind: FunctionKind;
+  started: number;
+  durationMs: number;
+  failed: boolean;
+}
+
+export interface EarlyFunctionBuffer {
+  begin(id: string, kind: FunctionKind, clock: number): { id: string; kind: FunctionKind; started: number };
+  end(token: { id: string; kind: FunctionKind; started: number }, failed: boolean, clock: number): void;
+  drain(): EarlyRecord[];
+  fork(): EarlyFunctionBuffer;
+  readonly count: number;
+}
+
+function createEarlyBuffer(): EarlyFunctionBuffer {
+  const records: EarlyRecord[] = [];
+  return {
+    begin(id, kind, clock) {
+      return { id, kind, started: clock };
+    },
+    end(token, failed, clock) {
+      if (records.length >= EARLY_BUFFER_LIMIT) return;
+      records.push({
+        id: token.id,
+        kind: token.kind,
+        started: token.started,
+        durationMs: Math.max(0, clock - token.started),
+        failed,
+      });
+    },
+    drain() {
+      return records.splice(0, records.length);
+    },
+    fork() {
+      return createEarlyBuffer();
+    },
+    get count() {
+      return records.length;
+    },
+  };
+}
+
+const globalWithEarly = globalThis as unknown as Record<symbol, EarlyFunctionBuffer | undefined>;
+if (!globalWithEarly[EARLY_BUFFER_SYMBOL]) {
+  globalWithEarly[EARLY_BUFFER_SYMBOL] = createEarlyBuffer();
+}
+
+function earlyBuffer(): EarlyFunctionBuffer {
+  return globalWithEarly[EARLY_BUFFER_SYMBOL] ??= createEarlyBuffer();
+}
+
 /**
  * Publishes the instrumentation hooks used by build-time injected calls.
  * When diagnostics are disabled the hooks stay absent and instrumented code
@@ -174,6 +249,7 @@ export function installFunctionProbe(
   timing: FunctionTiming,
   host: FunctionProbeHost = globalThis as unknown as FunctionProbeHost,
 ): FunctionProbeInstallation {
+  for (const record of earlyBuffer().drain()) timing.recordEarly(record);
   host.__brcDiagBegin = (id, kind) => timing.begin(id, kind === 'async' ? 'async' : 'sync');
   host.__brcDiagEnd = (token, failed) => timing.end(token, failed === true);
   return {
@@ -184,3 +260,19 @@ export function installFunctionProbe(
     },
   };
 }
+
+function installEarlyProbe(host: FunctionProbeHost): void {
+  if (host.__brcDiagBegin) return;
+  host.__brcDiagBegin = (id, kind) => {
+    const buffer = earlyBuffer();
+    const token = buffer.begin(id, kind === 'async' ? 'async' : 'sync', performance.now());
+    return token as unknown as FunctionTimingToken;
+  };
+  host.__brcDiagEnd = (token, failed) => {
+    if (!token) return;
+    const record = token as unknown as { id: string; kind: FunctionKind; started: number };
+    earlyBuffer().end(record, failed === true, performance.now());
+  };
+}
+
+installEarlyProbe(globalThis as unknown as FunctionProbeHost);
