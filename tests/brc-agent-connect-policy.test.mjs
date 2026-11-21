@@ -69,8 +69,11 @@ test('managed shutdown reports usage write failure without private error content
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const privateValue = 'private-usage-json-value';
   const logs = [];
-  const previous = console.error;
-  console.error = (...args) => logs.push(args.map(String).join(' '));
+  const captureLog = {
+    error: (message) => logs.push(String(message)),
+    warning: (message) => logs.push(String(message)),
+    info: (message) => logs.push(String(message)),
+  };
   let control;
   try {
     const dispatcher = createToolDispatcher({
@@ -78,6 +81,7 @@ test('managed shutdown reports usage write failure without private error content
       usageTracker: { trackSuccess: async () => { throw new Error(privateValue); } },
       toolHistory: { addCall() {} },
       trackToolCall: async () => {},
+      log: captureLog,
     });
     const result = await dispatcher.callTool('list_searches', {});
     assert.notEqual(result.isError, true);
@@ -103,7 +107,6 @@ test('managed shutdown reports usage write failure without private error content
     assert.match(logs.join('\n'), /usage storage write failed/i);
     assert.doesNotMatch(logs.join('\n'), /private-usage-json-value/);
   } finally {
-    console.error = previous;
     await control?.close();
   }
 });
