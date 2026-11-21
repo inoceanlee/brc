@@ -165,6 +165,12 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
 ];
 
+const TOP_LEVEL_EXAMPLES = [
+  'brc start',
+  'brc status --json',
+  'brc config show',
+];
+
 const UNINSTALL_NOTE = [
   'pnpm remove -g @inoceanlee/brc removes only the package and keeps BRC data.',
   'Run brc uninstall --yes to stop services and remove BRC data and the global package.',
@@ -231,7 +237,11 @@ export function helpText(command?: CliCommandName, brief = false): string {
     const label = flag.short ? `${flag.short}, ${flag.long}` : flag.long;
     lines.push(`  ${label.padEnd(46)} ${flag.description}`);
   }
-  if (!brief) lines.push('', `Docs: ${docsUrl()}`, '', ...UNINSTALL_NOTE);
+  if (!brief) {
+    lines.push('', 'Examples:');
+    for (const example of TOP_LEVEL_EXAMPLES) lines.push(`  ${example}`);
+    lines.push('', `Docs: ${docsUrl()}`, '', ...UNINSTALL_NOTE);
+  }
   return lines.join('\n');
 }
 

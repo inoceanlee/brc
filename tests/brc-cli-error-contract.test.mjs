@@ -119,6 +119,26 @@ test('short help lists commands and flags while full help keeps examples and doc
   assert.doesNotMatch(commandBrief, /Docs:/);
 });
 
+test('full top-level help includes copy-pasteable examples', () => {
+  const full = helpText();
+  assert.match(full, /Examples:/);
+  assert.match(full, /brc start/);
+  assert.match(full, /brc status --json/);
+  assert.match(full, /brc config show/);
+  assert.doesNotMatch(helpText(undefined, true), /Examples:/);
+});
+
+test('help machine format keeps its command and version fields', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-help-json-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const result = invoke(root, 'help', '--json');
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(Object.keys(payload).sort(), ['commands', 'version']);
+  assert.ok(Array.isArray(payload.commands));
+  assert.equal(typeof payload.version, 'string');
+});
+
 test('unexpected crash reports version, platform, command and issue link without raw stack', () => {
   const notDirectory = fileURLToPath(new URL('../package.json', import.meta.url));
   const result = spawnSync(process.execPath, [cli, 'status'], {
