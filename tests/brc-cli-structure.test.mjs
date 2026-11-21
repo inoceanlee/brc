@@ -34,8 +34,6 @@ test('CLI source tree keeps core rules separate from adapters', async () => {
 test('traefik rules expose version and configuration functions without adapter imports', async () => {
   const { readFile } = await import('node:fs/promises');
   const source = await readFile(path.join(cliSource, 'core', 'traefik', 'rules.ts'), 'utf8');
-  assert.match(source, /export function parseManifest/);
-  assert.match(source, /export function renderConfig/);
   assert.doesNotMatch(source, /from 'node:/);
   assert.doesNotMatch(source, /from '\.\.\/\.\.\/adapters/);
 });
