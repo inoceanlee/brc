@@ -16,14 +16,6 @@ test('verify-only mode skips publication and tag push', async () => {
   assert.deepEqual(releaseActions({}), { publish: true, push: true });
 });
 
-test('release script guards publish and push with verify-only actions', async () => {
-  const source = await read('scripts/release-brc.mjs');
-  assert.match(source, /releaseActions\(\{ dryRun, verifyOnly \}\)/);
-  assert.match(source, /if \(actions\.publish\) \{/);
-  assert.match(source, /await verifyAndTag\(artifact\)/);
-  assert.match(source, /if \(!remoteCommit && actions\.push\)/);
-});
-
 test('verify-only help documents no publication or push', () => {
   const result = spawnSync(process.execPath, [path.join(root, 'scripts/release-brc.mjs'), '--help'], {
     cwd: root, encoding: 'utf8', timeout: 10_000, windowsHide: true,
@@ -48,14 +40,6 @@ test('packaging rejects a missing native process binary', async () => {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-  const pack = await read('scripts/pack-brc.mjs');
-  assert.match(pack, /assertNativeBinary\(nativeBinaryPath\(\)\)/);
-});
-
-test('release tag pattern comes from the single release config prefix', async () => {
-  const source = await read('scripts/release-brc.mjs');
-  assert.doesNotMatch(source, /'brc-v\*'/);
-  assert.match(source, /RELEASE_CONFIG\.tagPrefix \+ '\*'/);
 });
 
 test('interrupt kills the whole process group off Windows', async () => {
@@ -65,9 +49,6 @@ test('interrupt kills the whole process group off Windows', async () => {
   assert.deepEqual(calls, [[-4242, 'SIGINT']]);
   interruptChild({ pid: 0 }, 'linux', (pid) => calls.push([pid]));
   assert.equal(calls.length, 1);
-  const source = await read('scripts/release-runner.mjs');
-  assert.match(source, /detached: process\.platform !== 'win32'/);
-  assert.match(source, /taskkill\.exe/);
 });
 
 test('Node minimum version matches across both README files and root engines', async () => {

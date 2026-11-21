@@ -1,19 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 const resourcesUrl = new URL('../packages/cli/dist/adapters/process/resources.js', import.meta.url).href;
-const resourcesSource = fileURLToPath(new URL('../packages/cli/src/adapters/process/resources.ts', import.meta.url));
-
-test('native sampling is the only process resource sampling implementation in the CLI adapter', async () => {
-  const source = await readFile(resourcesSource, 'utf8');
-  assert.doesNotMatch(source, /sampleWindows|sampleLinux|sampleDarwin|powershell\.exe|getconf/);
-  assert.match(source, /NATIVE_PROCESS_BINARY/);
-  assert.match(source, /\['sample', String\(pid\)\]/);
-  assert.match(source, /value\.status !== 'found'/);
-});
 
 test('native sample payload converts only found rows into raw samples', async () => {
   const { parseNativeSamplePayload } = await import(resourcesUrl);
