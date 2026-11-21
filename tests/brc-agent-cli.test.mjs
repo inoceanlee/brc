@@ -45,7 +45,7 @@ test('secret flags are rejected before connecting or logging', () => {
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
   assert.doesNotMatch(result.stderr, /private-secret/);
-  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.equal(JSON.parse(result.stderr).error.exit_code, 2);
   assert.equal(result.present, true);
 });
 
@@ -53,14 +53,14 @@ test('CLI error output redacts bearer credentials', () => {
   const result = run(['version', 'Bearer ' + 'fixture-private-value', '--json']);
   assert.equal(result.status, 2);
   assert.doesNotMatch(result.stderr, /fixture-private-value/);
-  assert.match(JSON.parse(result.stderr).message, /Bearer \[redacted\]/);
+  assert.match(JSON.parse(result.stderr).error.message, /Bearer \[redacted\]/);
 });
 
 test('logout without confirmation cannot remove saved credentials', () => {
   const result = run(['credentials', 'logout', '--no-input', '--json']);
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.equal(JSON.parse(result.stderr).error.exit_code, 2);
   assert.deepEqual(result.stored, credentials);
 });
 
@@ -83,7 +83,7 @@ test('token stdin requires nonempty data and does not echo it on failure', () =>
   const result = run(['connect', '--relay', 'https://relay.example', '--device-id', 'local', '--token-stdin', '--json'], { input: '' });
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.equal(JSON.parse(result.stderr).error.exit_code, 2);
   assert.deepEqual(result.stored, credentials);
 });
 
@@ -99,7 +99,7 @@ test('explicit --output json formats parser errors as JSON on stderr', () => {
   const result = run(['--output', 'json', 'connect', '--not-real']);
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr);
+  const error = JSON.parse(result.stderr).error;
   assert.equal(error.exit_code, 2);
   assert.equal(error.code, 'INVALID_USAGE');
 });
@@ -127,7 +127,7 @@ test('interactive overrides CI, but no-input overrides interactive', () => {
   assert.deepEqual(ciDefault.stored, credentials);
   const jsonInteractive = run(['credentials', 'logout', '--interactive', '--json'], { tty, input: 'yes\n', env: { CI: 'false' } });
   assert.equal(jsonInteractive.status, 2, jsonInteractive.stderr);
-  const jsonError = JSON.parse(jsonInteractive.stderr);
+  const jsonError = JSON.parse(jsonInteractive.stderr).error;
   assert.equal(jsonError.exit_code, 2);
   assert.match(jsonError.message, /interactive.*JSON/i);
   assert.match(jsonError.run, /--yes/);
@@ -162,7 +162,7 @@ test('Agent diagnostics resolves YAML and environment as one configuration', () 
       },
     });
     assert.equal(result.status, 2, result.stderr);
-    assert.equal(JSON.parse(result.stderr).code, 'INVALID_USAGE');
+    assert.equal(JSON.parse(result.stderr).error.code, 'INVALID_USAGE');
     assert.doesNotMatch(result.stderr, /logs\.rotateMiB cannot exceed/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -175,7 +175,7 @@ test('disabled Agent diagnostics does not validate inactive sampling overrides',
     env: { BRC_DIAGNOSTICS_ENABLED: 'false', BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS: 'invalid' },
   });
   assert.equal(result.status, 2, result.stderr);
-  assert.equal(JSON.parse(result.stderr).code, 'INVALID_USAGE');
+  assert.equal(JSON.parse(result.stderr).error.code, 'INVALID_USAGE');
   assert.doesNotMatch(result.stderr, /BRC_DIAGNOSTICS_RESOURCE_SAMPLE_MS/);
 });
 
@@ -187,9 +187,9 @@ test('Agent CLI accepts the supervisor managed identity marker', () => {
 
   const wrongCommand = run(['version', `--brc-managed-id=${managedId}`, '--json']);
   assert.equal(wrongCommand.status, 2, wrongCommand.stderr);
-  assert.equal(JSON.parse(wrongCommand.stderr).code, 'INVALID_USAGE');
+  assert.equal(JSON.parse(wrongCommand.stderr).error.code, 'INVALID_USAGE');
 
   const empty = run(['connect', '--relay', 'https://relay.example', '--preview', '--brc-managed-id=', '--json']);
   assert.equal(empty.status, 2, empty.stderr);
-  assert.equal(JSON.parse(empty.stderr).code, 'INVALID_USAGE');
+  assert.equal(JSON.parse(empty.stderr).error.code, 'INVALID_USAGE');
 });
