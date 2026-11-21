@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, TraceRecorder, diagnosticsRetentionConfig, type CliResult, type DiagnosticStatus, type TraceSummary } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, TraceRecorder, diagnosticsRetentionConfig, snapshotStaleAfterMs, type CliResult, type DiagnosticStatus, type TraceSummary } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -17,7 +17,7 @@ import { resolveAgentPaths } from './adapters/storage/agent-paths.js';
 import { CredentialStore } from './adapters/storage/credential-store.js';
 import { migrateCredentialFile } from './adapters/storage/credential-migration.js';
 import type { WsClientOptions } from './adapters/transport/ws-client.js';
-import { VERSION } from './core/version.js';
+import { VERSION, setProductVersion } from './core/version.js';
 import { AgentConfigManager, resolveAgentSettings } from './adapters/storage/config-manager.js';
 import { FeatureFlagManager } from './adapters/network/feature-flags.js';
 import { SearchManager } from './adapters/system/search-manager.js';
@@ -27,6 +27,7 @@ import { ToolHistory } from './adapters/telemetry/toolHistory.js';
 import { UsageTracker } from './adapters/telemetry/usageTracker.js';
 import { FileHandlerFactory, TextFileHandler, ImageFileHandler, BinaryFileHandler, ExcelFileHandler } from './adapters/filesystem/files/index.js';
 import { PdfFileHandler } from './adapters/filesystem/files/pdf.js';
+import { setPdfLogPort } from './adapters/filesystem/pdf/markdown.js';
 import { DocxFileHandler } from './adapters/filesystem/files/docx.js';
 import { FuzzySearchLogger } from './adapters/telemetry/fuzzySearchLogger.js';
 import { trackToolCall } from './adapters/telemetry/trackTools.js';
@@ -63,8 +64,10 @@ export function createAgentCredentials(env: NodeJS.ProcessEnv): AgentCredentials
 
 export async function configureAgentServices(): Promise<AgentServices> {
   const env = { ...process.env };
+  setProductVersion(env.BRC_PRODUCT_VERSION);
   const paths = resolveAgentPaths(env);
   const logger = createAgentLogger();
+  setPdfLogPort(logger);
   const credentials = createAgentCredentials(env);
   const yaml = createRequire(import.meta.url)('js-yaml') as {
     safeLoad(data: string): unknown;
@@ -97,7 +100,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
     new ImageFileHandler(), new BinaryFileHandler(), new TextFileHandler(),
   );
   const createClient = (options: WsClientOptions) => new WsClient(options);
-  const filesystem = { configManager, capture, fileHandlers };
+  const filesystem = { configManager, capture, fileHandlers, log: logger };
   const transfer = { ...filesystem, receiveKeys: new Map() };
   const commandManager = new CommandManager(configManager, capture);
   const terminalManager = new TerminalManager(configManager, capture);
@@ -123,7 +126,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
   const fuzzySearchLogger = new FuzzySearchLogger(paths.logsDirectory, logMaxBytes);
   const dispatcher = createToolDispatcher({
     configManager, featureFlagManager, searchManager, toolHistory, usageTracker, fuzzySearchLogger,
-    filesystem, terminal, transfer, currentClient,
+    filesystem, terminal, transfer, currentClient, log: logger,
     logHistoryFailure: reportHistoryFailure,
     trackToolCall: async (name) => trackToolCall(paths.logsDirectory, await logMaxBytes(), name),
   });
@@ -163,7 +166,7 @@ async function createAgentDiagnostics(services: AgentConnectionServices) {
   const diagnosticsStore = new SqliteDiagnosticsStore({
     databasePath: resolveDiagnosticsDbPath(path.join(paths.root, 'data'), env),
     config: diagnosticsRetentionConfig(resolved),
-    staleAfterMs: Math.max(settings.functionSnapshotMs * 3, 60_000),
+    staleAfterMs: snapshotStaleAfterMs(settings.functionSnapshotMs),
   });
   const probe = functions ? installFunctionProbe(functions) : undefined;
   if (!probe) clearEarlyProbe();

@@ -1,6 +1,16 @@
 import { resolveSettings, type BrcSettings } from 'brc-shared';
 import { DEFAULT_ADMIN_USER } from '../../core/auth/policy.js';
 
+export const DEFAULT_LOGIN_MAX_FAILS = 5;
+export const DEFAULT_LOGIN_LOCK_MS = 5 * 60_000;
+
+function positiveInteger(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer.`);
+  return parsed;
+}
+
 export interface RelayConfig {
   port: number;
   host: string;
@@ -12,6 +22,7 @@ export interface RelayConfig {
   adminPassword: string;
   relayVersion: string;
   audit: BrcSettings['audit'];
+  auth: { maxFails: number; lockMs: number };
 }
 
 export function parseTrustProxy(value: string | undefined): RelayConfig['trustProxy'] {
@@ -37,5 +48,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
     adminPassword: env.BRC_ADMIN_PASSWORD ?? '',
     relayVersion: env.BRC_PRODUCT_VERSION ?? 'unknown',
     audit: settings.audit,
+    auth: {
+      maxFails: positiveInteger(env.BRC_LOGIN_MAX_FAILS, DEFAULT_LOGIN_MAX_FAILS, 'BRC_LOGIN_MAX_FAILS'),
+      lockMs: positiveInteger(env.BRC_LOGIN_LOCK_MS, DEFAULT_LOGIN_LOCK_MS, 'BRC_LOGIN_LOCK_MS'),
+    },
   };
 }

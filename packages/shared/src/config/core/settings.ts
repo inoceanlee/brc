@@ -9,6 +9,16 @@ export const RESOURCE_SAMPLE_INTERVAL_DEFAULT_MS = 1_000;
 export const RESOURCE_SAMPLE_INTERVAL_MAX_MS = 60_000;
 export const DIAGNOSTIC_SINGLE_SAMPLE_MAX_MS = 1_000;
 
+export const SNAPSHOT_STALE_MULTIPLIER = 3;
+export const SNAPSHOT_STALE_MIN_MS = 60_000;
+
+export const DEFAULT_FILE_READ_CONCURRENCY = 8;
+export const DEFAULT_PDF_IMAGE_BATCH_SIZE = 5;
+
+export function snapshotStaleAfterMs(functionSnapshotMs: number): number {
+  return Math.max(functionSnapshotMs * SNAPSHOT_STALE_MULTIPLIER, SNAPSHOT_STALE_MIN_MS);
+}
+
 export const FUNCTION_SNAPSHOT_MIN_MS = 1_000;
 export const FUNCTION_SNAPSHOT_DEFAULT_MS = 10_000;
 export const FUNCTION_SNAPSHOT_MAX_MS = 3_600_000;

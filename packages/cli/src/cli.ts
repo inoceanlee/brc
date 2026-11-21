@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
+import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, snapshotStaleAfterMs, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
 import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
@@ -60,7 +60,7 @@ async function createProcessDiagnostics(
   const store = enabled ? new SqliteDiagnosticsStore({
     databasePath: resolveDiagnosticsDbPath(paths.data, process.env),
     config: diagnosticsRetentionConfig(settings),
-    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+    staleAfterMs: snapshotStaleAfterMs(settings.diagnostics.functionSnapshotMs),
   }) : undefined;
   const probe = functions ? installFunctionProbe(functions) : undefined;
   if (!probe) clearEarlyProbe();
@@ -479,7 +479,7 @@ async function snapshotStore(paths: BrcPaths): Promise<SqliteDiagnosticsStore> {
   return new SqliteDiagnosticsStore({
     databasePath: resolveDiagnosticsDbPath(paths.data, process.env),
     config: diagnosticsRetentionConfig(settings),
-    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+    staleAfterMs: snapshotStaleAfterMs(settings.diagnostics.functionSnapshotMs),
     isSameProcess: async (snapshot: DiagnosticSnapshot) => {
       if (snapshot.service === 'cli') return snapshot.pid === process.pid;
       if (snapshot.service === 'traefik' && snapshot.instanceId.endsWith('-binary')) {
