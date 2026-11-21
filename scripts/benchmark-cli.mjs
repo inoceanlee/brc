@@ -5,6 +5,7 @@
 // This uses the local CLI, not a global package. It never removes its temporary root.
 import { spawn } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, realpath, readFile, writeFile } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -112,8 +113,12 @@ async function waitFor(action, description) {
 async function pair(password) {
   await cliRun('start');
   const code = await waitFor(async () => {
-    try { return (await readFile(path.join(scratch, 'logs', 'agent.log'), 'utf8')).match(/code: ([A-Z0-9]{4}-[A-Z0-9]{4})/)?.[1]; }
-    catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
+    try {
+      const db = new DatabaseSync(path.join(scratch, 'data', 'relay.sqlite'), { readOnly: true });
+      const row = db.prepare("SELECT user_code FROM device_codes WHERE approved = 0 AND denied = 0 ORDER BY created_at DESC LIMIT 1").get();
+      db.close();
+      return row?.user_code;
+    } catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
   }, 'agent pairing code');
   const base = `http://127.0.0.1:${ports[1]}`;
   const login = await fetch(`${base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username: 'admin', password, returnTo: '/' }) });
