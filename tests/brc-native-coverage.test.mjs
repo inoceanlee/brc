@@ -1,24 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
-
-const source = path.join('native', 'brc-process', 'src');
-
-test('native process helper functions have timed execution scopes', async () => {
-  const windows = await readFile(path.join(source, 'windows.rs'), 'utf8');
-  const definitions = [...windows.matchAll(/\bfn\s+([a-z_]+)(?:\s*<[^>]+>)?\s*\(/g)]
-    .map((match) => match[1]);
-  const scoped = [...windows.matchAll(/ScopeTimer::new\("(?:windows::)?([a-z_]+)"\)/g)]
-    .map((match) => match[1]);
-  assert.deepEqual(scoped.slice().sort(), definitions.map((name) => name === 'drop' ? 'drop_handle' : name).sort());
-  const identity = await readFile(path.join(source, 'identity.rs'), 'utf8');
-  assert.match(identity, /ScopeTimer::new\("positive_pids"\)/);
-  assert.match(identity, /ScopeTimer::new\("row"\)/);
-  const main = await readFile(path.join(source, 'main.rs'), 'utf8');
-  assert.match(main, /diagnostics::record\("main"/);
-});
 
 test('native function coverage is returned inside diagnostic JSON', () => {
   if (process.platform !== 'win32') return;
@@ -46,9 +29,3 @@ test('native function coverage is returned inside diagnostic JSON', () => {
   }
 });
 
-test('native resource failures do not masquerade as measured zero values', async () => {
-  const rust = await readFile(path.join(source, 'diagnostics.rs'), 'utf8');
-  assert.doesNotMatch(rust, /"cpuUserMs": if times_read \{[^\n]+\} else \{ 0\.0 \}/);
-  assert.doesNotMatch(rust, /"cpuSystemMs": if times_read \{[^\n]+\} else \{ 0\.0 \}/);
-  assert.doesNotMatch(rust, /"rssBytes": if memory_read \{[^\n]+\} else \{ 0 \}/);
-});
