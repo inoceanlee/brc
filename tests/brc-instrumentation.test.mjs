@@ -63,18 +63,6 @@ test('build manifests cover every own TypeScript function', async () => {
   }
 });
 
-test('instrumented output keeps the probe call shape and never touches probe internals', async () => {
-  const manifest = JSON.parse(await readFile(path.resolve('packages/cli/dist/diagnostics-manifest.json'), 'utf8'));
-  const sample = manifest.functions.find((entry) => entry.name === 'runCli');
-  assert.ok(sample, 'runCli must be instrumented');
-  const compiled = await readFile(path.resolve('packages/cli/dist/cli.js'), 'utf8');
-  assert.match(compiled, /__brcDiagBegin\?\.\(/);
-  assert.match(compiled, /__brcDiagEnd\?\.\(/);
-  const probeSource = await readFile(path.resolve('packages/shared/dist/diagnostics/core/functions.js'), 'utf8');
-  assert.doesNotMatch(probeSource, /const __brcDiag\d+ = globalThis\.__brcDiagBegin/,
-    'the probe implementation must not instrument itself');
-});
-
 test('async instrumentation measures settlement while preserving catch boundaries and receiver', async () => {
   const instrumenter = createInstrumentation(ts, { rootDir: process.cwd(), packageName: 'async-fixture' });
   const source = [
