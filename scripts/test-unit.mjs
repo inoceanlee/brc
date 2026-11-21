@@ -17,7 +17,7 @@ export async function discoverUnitTests(base = root) {
   const suites = entries
     .filter((entry) => entry.isFile() && /^brc-.*\.test\.mjs$/.test(entry.name) && !excluded.has(entry.name))
     .map((entry) => `tests/${entry.name}`);
-  return ['packages/relay/test/unit.test.mjs', ...suites].sort();
+  return ['packages/relay/test/unit.test.mjs', 'packages/agent/tests/tool-libraries.test.mjs', ...suites].sort();
 }
 
 export function runUnitTests(suites, options = {}) {
