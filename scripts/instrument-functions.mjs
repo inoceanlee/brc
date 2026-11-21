@@ -61,18 +61,44 @@ export function createInstrumentation(ts, options) {
     ], ts.NodeFlags.Const),
   );
 
-  const endStatement = (token) => ts.factory.createExpressionStatement(
-    probeCall('__brcDiagEnd', [ts.factory.createIdentifier(token)]),
+  const endStatement = (token, failed) => ts.factory.createExpressionStatement(
+    probeCall('__brcDiagEnd', failed
+      ? [ts.factory.createIdentifier(token), ts.factory.createTrue()]
+      : [ts.factory.createIdentifier(token)]),
   );
 
-  const guardedBlock = (statements, token) => [
-    tokenStatement(token, currentId, currentKind),
-    ts.factory.createTryStatement(
-      ts.factory.createBlock(statements, true),
-      undefined,
-      ts.factory.createBlock([endStatement(token)], true),
-    ),
-  ];
+  const guardedBlock = (statements, token) => {
+    const failedFlag = token + 'Failed';
+    const markFailed = ts.factory.createExpressionStatement(
+      ts.factory.createAssignment(ts.factory.createIdentifier(failedFlag), ts.factory.createTrue()),
+    );
+    return [
+      tokenStatement(token, currentId, currentKind),
+      ts.factory.createVariableStatement(
+        undefined,
+        ts.factory.createVariableDeclarationList([
+          ts.factory.createVariableDeclaration(failedFlag, undefined, undefined, ts.factory.createFalse()),
+        ], ts.NodeFlags.Let),
+      ),
+      ts.factory.createTryStatement(
+        ts.factory.createBlock(statements, true),
+        ts.factory.createCatchClause(
+          ts.factory.createVariableDeclaration('__brcDiagError'),
+          ts.factory.createBlock([
+            markFailed,
+            ts.factory.createThrowStatement(ts.factory.createIdentifier('__brcDiagError')),
+          ], true),
+        ),
+        ts.factory.createBlock([
+          ts.factory.createIfStatement(
+            ts.factory.createIdentifier(failedFlag),
+            endStatement(token, true),
+            endStatement(token),
+          ),
+        ], true),
+      ),
+    ];
+  };
 
   let currentId = '';
   let currentKind = 'sync';
@@ -189,16 +215,35 @@ export function createInstrumentation(ts, options) {
       ? ts.factory.createStringLiteral(item.text)
       : ts.visitEachChild(item, freshLiterals, transformContext);
     const original = body.map((statement) => ts.visitNode(statement, replaceYield));
+    const failedFlag = token + 'Failed';
     const statements = [
       ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
         ts.factory.createVariableDeclaration(token, undefined, undefined, probeCall('__brcDiagBegin', [
           ts.factory.createStringLiteral(id), ts.factory.createStringLiteral(kind),
         ])),
       ], ts.NodeFlags.Let)),
+      ts.factory.createVariableStatement(undefined, ts.factory.createVariableDeclarationList([
+        ts.factory.createVariableDeclaration(failedFlag, undefined, undefined, ts.factory.createFalse()),
+      ], ts.NodeFlags.Let)),
       ...helpers.statements.map((statement) => ts.visitNode(statement, freshLiterals)),
       ts.factory.createTryStatement(
-        ts.factory.createBlock(original, true), undefined,
-        ts.factory.createBlock([endStatement(token)], true),
+        ts.factory.createBlock(original, true),
+        ts.factory.createCatchClause(
+          ts.factory.createVariableDeclaration('__brcDiagGenError'),
+          ts.factory.createBlock([
+            ts.factory.createExpressionStatement(
+              ts.factory.createAssignment(ts.factory.createIdentifier(failedFlag), ts.factory.createTrue()),
+            ),
+            ts.factory.createThrowStatement(ts.factory.createIdentifier('__brcDiagGenError')),
+          ], true),
+        ),
+        ts.factory.createBlock([
+          ts.factory.createIfStatement(
+            ts.factory.createIdentifier(failedFlag),
+            endStatement(token, true),
+            endStatement(token),
+          ),
+        ], true),
       ),
     ];
     return update(statements);
