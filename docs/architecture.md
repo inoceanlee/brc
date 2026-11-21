@@ -53,11 +53,13 @@ Relay 使用 SQLite 保存管理员、OAuth 客户端、访问令牌和设备归
 
 诊断配置（`diagnostics.enabled`、资源采样间隔、函数快照间隔、单条记录上限、保留天数）同样定义在 `settings.ts`，并通过受管子进程环境传递到 Relay、Agent 和 Traefik 管理进程。
 
-- 日志：组件日志写入 `logs/<component>.log`，CLI 启动轨迹与结构化诊断写入 `logs/cli.log`、`logs/<component>-diagnostics.log`。跨进程写入由独立日志锁保护，轮转按容量和保留期执行。
-- 启动轨迹：`brc start --timing` 在 stderr 输出阶段耗时；`brc diagnose startup [--json]` 显示最近一次启动的总时长、阶段、失败位置与未归属时间。
-- 函数统计：构建期对各包自有 TypeScript 函数插桩，运行时按函数 ID 聚合调用次数、累计时长与最大时长。异步函数的墙钟时长单独统计并标注，生成器按每次步进执行片段计时，避免把挂起等待算作执行时间。`brc diagnose functions [--json]` 读取各服务实例的原子快照。
-- 资源统计：CLI、Relay、Agent 持续采样 CPU 时间、RSS 与堆内存；Traefik 由管理进程采样；Rust 查询器报告系统峰值。`brc diagnose resources [--json]` 区分系统峰值与采样峰值，并标出已退出、过期或缺测状态。
-- 快照：每个受管实例在 `diagnostics/` 下以原子替换写入 `service-instanceId.json`，退出时尽力刷写。CLI 只读查询，不读取其他进程内存。
+组件日志、插桩产生的诊断事件、函数统计、资源采样和快照统一写入数据根下的 `brc-diagnostics.sqlite`。`SqliteDiagnosticsStore` 管理写入、保留与查询。身份库与日志库保持分离。
+
+- 日志查询：`brc diagnose logs` 按时间、级别、来源、运行标识和组件查询统一库的事件。`--json` 输出结构化记录。组件文本日志仍写入 `logs/<component>.log`，并按容量轮转。
+- 启动轨迹：`brc start --timing` 在 stderr 输出阶段耗时。`brc diagnose startup` 从统一库读取最近一次启动的总时长、阶段、失败位置与未归属时间。
+- 函数统计：构建期对各包自有 TypeScript 函数插桩。运行时按函数 ID 聚合调用次数、累计时长与最大时长。异常函数累加错误次数，并保存首个失败样本的消息与栈。`brc diagnose functions` 从统一库的函数统计表读取。
+- 资源统计：CLI、Relay、Agent 持续采样 CPU 时间、RSS 与堆内存。Traefik 由管理进程采样。Rust 查询器报告系统峰值。`brc diagnose resources` 区分系统峰值与采样峰值，并标出已退出、过期或缺测状态。
+- 快照：受管实例的快照写入统一库。CLI 只读查询，不读取其他进程内存。
 
 ## 生命周期与清理
 

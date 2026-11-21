@@ -45,7 +45,8 @@ export interface SearchSessionOptions {
 /**
  * Search Session Manager - handles ripgrep processes like terminal sessions
  * Supports both file search and content search with progressive results
- */export class SearchManager {
+ */
+export class SearchManager {
   private sessions = new Map<string, SearchSession>();
   private sessionCounter = 0;
   private cleanupInterval: NodeJS.Timeout | null = null;

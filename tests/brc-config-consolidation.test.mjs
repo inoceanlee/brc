@@ -84,7 +84,7 @@ test('Shared renderer separates machine data and machine errors', () => {
   assert.equal(failureCode, 4);
   assert.deepEqual(stdout, []);
   assert.deepEqual(JSON.parse(stderr.join('')), {
-    code: 'NOT_FOUND', exit_code: 4, message: 'Missing', run: 'brc status', retryable: false,
+    error: { code: 'NOT_FOUND', exit_code: 4, message: 'Missing', run: 'brc status', retryable: false },
   });
 });
 

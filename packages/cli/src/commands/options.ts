@@ -27,6 +27,7 @@ export const GLOBAL_FLAGS: readonly GlobalFlagDefinition[] = [
 
 export interface GlobalOptions {
   args: string[];
+  helpBrief: boolean;
   output: CliOutputFormat;
   quiet: boolean;
   verbose: boolean;
@@ -49,7 +50,7 @@ const BOOL_FLAGS = new Map<string, keyof GlobalOptions>([
 ]);
 export function normalizeGlobalOptions(argv: readonly string[]): GlobalOptions {
   const result: GlobalOptions = {
-    args: [], output: 'table', quiet: false, verbose: false,
+    args: [], helpBrief: false, output: 'table', quiet: false, verbose: false,
     debug: false, noInput: false, interactive: false, noColor: false,
     offline: false, noTelemetry: false, preview: false,
   };
@@ -95,7 +96,7 @@ export function normalizeGlobalOptions(argv: readonly string[]): GlobalOptions {
         else if (flag === 'v') result.verbose = true;
         else if (flag === 'n') result.preview = true;
         else if (flag === 'y') result.args.push('--yes');
-        else if (flag === 'h') result.args.push('--help');
+        else if (flag === 'h') { result.args.push('--help'); result.helpBrief = true; }
         else throw new UsageError('Unknown short flag: -' + flag);
       }
       continue;
@@ -104,7 +105,7 @@ export function normalizeGlobalOptions(argv: readonly string[]): GlobalOptions {
     if (token === '-v') { result.verbose = true; continue; }
     if (token === '-n') { result.preview = true; continue; }
     if (token === '-y') { result.args.push('--yes'); continue; }
-    if (token === '-h') { result.args.push('--help'); continue; }
+    if (token === '-h') { result.args.push('--help'); result.helpBrief = true; continue; }
     result.args.push(token);
   }
   if (result.noInput) result.interactive = false;

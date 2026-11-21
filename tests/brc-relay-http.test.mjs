@@ -28,7 +28,7 @@ test('HTTP OAuth metadata, authentication and isolated device pairing routes', a
       renderLogin: () => {}, renderConsent: () => {},
     }, new RelayClientsStore(store, tokens));
     mountRelayRoutes({
-      app, cfg, store, hub, provider, limiter: new LoginLimiter(), verifyPassword,
+      app, cfg, store, hub, provider, limiter: new LoginLimiter(cfg.auth.maxFails, cfg.auth.lockMs), verifyPassword,
       sessions: new Sessions(new SessionPolicy(new HmacSessionSigner('secret')), false),
       log: () => {},
     });

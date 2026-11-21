@@ -2,7 +2,10 @@
 export class LoginLimiter {
   private fails = new Map<string, { count: number; lockedUntil: number; last: number }>();
   private lastCleanup = 0;
-  constructor(private readonly maxFails = 5, private readonly lockMs = 5 * 60_000) {}
+  constructor(private readonly maxFails: number, private readonly lockMs: number) {
+    if (!Number.isSafeInteger(maxFails) || maxFails <= 0) throw new Error('LoginLimiter requires a positive maxFails.');
+    if (!Number.isSafeInteger(lockMs) || lockMs <= 0) throw new Error('LoginLimiter requires a positive lockMs.');
+  }
 
   prune(now = Date.now()): void {
     if (now - this.lastCleanup < 60_000) return;

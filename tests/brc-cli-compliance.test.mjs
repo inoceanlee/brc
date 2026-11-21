@@ -26,7 +26,7 @@ test('JSON errors use stderr only with stable machine fields', () => {
   const result = invoke(['unknown', '--json']);
   assert.equal(result.status, 2);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr.trim());
+  const error = JSON.parse(result.stderr.trim()).error;
   for (const key of ['code', 'exit_code', 'message', 'run', 'retryable']) {
     assert.equal(key in error, true, key);
   }
@@ -131,7 +131,7 @@ test('offline Traefik update fails before querying remote metadata', async (t) =
   const result = invokeWithRoot(['update', 'traefik', '--offline', '--json'], root);
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr.trim());
+  const error = JSON.parse(result.stderr.trim()).error;
   assert.match(error.message, /offline/i);
 });
 
@@ -177,13 +177,13 @@ test('offline update and unsupported write previews fail before side effects', (
   const offline = invoke(['update', 'traefik', '--offline', '--json']);
   assert.equal(offline.status, 2);
   assert.equal(offline.stdout, '');
-  const offlineError = JSON.parse(offline.stderr.trim());
+  const offlineError = JSON.parse(offline.stderr.trim()).error;
   assert.match(offlineError.message, /--offline prevents remote queries|release lookup/i);
 
   const preview = invoke(['uninstall', '--yes', '--preview', '--json']);
   assert.equal(preview.status, 2);
   assert.equal(preview.stdout, '');
-  const previewError = JSON.parse(preview.stderr.trim());
+  const previewError = JSON.parse(preview.stderr.trim()).error;
   assert.match(previewError.message, /preview is unsupported/i);
 });
 

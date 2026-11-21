@@ -6,6 +6,12 @@ export interface DiagnosticLogPort {
   flush(): Promise<void>;
 }
 
+export interface TextLogPort {
+  error(message: string, data?: unknown): void;
+  warning(message: string, data?: unknown): void;
+  info(message: string, data?: unknown): void;
+}
+
 export interface DiagnosticQueryFilter {
   since?: string;
   until?: string;

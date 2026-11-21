@@ -1,3 +1,4 @@
+import { clearProgressLine, progressFrame } from 'brc-shared';
 import type { TraefikProgressEvent } from '../traefik/manager.js';
 
 const MAX_PENDING_STAGE_LINES = 64;
@@ -18,6 +19,8 @@ export class TraefikProgress {
   private timer?: NodeJS.Timeout;
   private current?: TraefikProgressEvent;
   private percent?: number;
+  private completed?: number;
+  private total?: number;
   private frame = 0;
   private failed = false;
   private interrupted = false;
@@ -52,6 +55,8 @@ export class TraefikProgress {
         this.stop();
         this.current = event;
         this.percent = undefined;
+        this.completed = undefined;
+        this.total = undefined;
         if (!this.output.isTTY) {
           this.write(`Traefik ${event.operation}: ${event.stage}\n`);
           return;
@@ -65,11 +70,15 @@ export class TraefikProgress {
         && Number.isSafeInteger(event.completedBytes) && event.completedBytes >= 0 && event.completedBytes <= event.totalBytes) {
         const percent = Math.floor(event.completedBytes * 100 / event.totalBytes);
         this.percent = Math.max(this.percent ?? 0, percent);
+        this.completed = Math.max(this.completed ?? 0, event.completedBytes);
+        this.total = event.totalBytes;
       }
     } else if (sameStage) {
       if (this.output.isTTY && event.status === 'completed' && event.completedBytes !== undefined
         && event.totalBytes !== undefined && event.totalBytes > 0 && event.completedBytes === event.totalBytes) {
         this.percent = 100;
+        this.completed = event.totalBytes;
+        this.total = event.totalBytes;
         this.render();
       }
       this.stop();
@@ -80,10 +89,12 @@ export class TraefikProgress {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = undefined;
-      this.write(this.color ? '\r\x1b[2K' : '\r');
+      this.write(clearProgressLine(this.color));
     }
     this.current = undefined;
     this.percent = undefined;
+    this.completed = undefined;
+    this.total = undefined;
   }
 
   async stopAndWait(): Promise<void> {
@@ -107,9 +118,10 @@ export class TraefikProgress {
 
   private render(): void {
     if (!this.current) return;
-    const spinner = ['|', '/', '-', '\\'][this.frame++ % 4];
+    const spinner = progressFrame(this.frame++);
+    const count = this.total === undefined ? '' : ` ${this.completed}/${this.total}`;
     const percent = this.percent === undefined ? '' : ` ${this.percent}%`;
-    this.write(`${this.color ? '\r\x1b[2K' : '\r'}${spinner} Traefik ${this.current.operation}: ${this.current.stage}${percent}`);
+    this.write(`${clearProgressLine(this.color)}${spinner} Traefik ${this.current.operation}: ${this.current.stage}${count}${percent}`);
   }
 
   private write(text: string): void {

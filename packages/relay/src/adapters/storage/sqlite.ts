@@ -83,16 +83,16 @@ const USER_REFERENCE_TABLES = [
 export class SqliteStore implements RelayStorePort {
   readonly #db: DatabaseSync;
   private readonly file: string;
-  private auditLog?: RelayAuditLog;
+  private readonly auditPort?: RelayAuditLog;
 
-  static open(file: string): SqliteStore {
+  static open(file: string, audit?: RelayAuditLog): SqliteStore {
     const isMemory = file === ':memory:';
     if (!isMemory && !existsSync(file)) {
       throw new Error(`Relay database is missing at ${file}; run brc setup for a new data root or restore the existing database.`);
     }
     const db = new DatabaseSync(file);
     try {
-      return new SqliteStore(file, db, isMemory);
+      return new SqliteStore(file, db, isMemory, audit);
     } catch (error) {
       db.close();
       throw error;
@@ -138,9 +138,10 @@ export class SqliteStore implements RelayStorePort {
     }
   }
 
-  private constructor(file: string, db: DatabaseSync, isNew: boolean) {
+  private constructor(file: string, db: DatabaseSync, isNew: boolean, audit?: RelayAuditLog) {
     this.#db = db;
     this.file = file;
+    this.auditPort = audit;
     this.#db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     if (isNew) this.initializeNewDatabase();
     else this.migrateExistingDatabase(file);
@@ -165,9 +166,9 @@ export class SqliteStore implements RelayStorePort {
     }
   }
 
-  private getAuditLog(): RelayAuditLog {
-    this.auditLog ??= RelayAuditLog.open({ dbFile: this.file, env: process.env });
-    return this.auditLog;
+  private requireAudit(): RelayAuditLog {
+    if (!this.auditPort) throw new Error('RelayAuditLog must be injected into SqliteStore.');
+    return this.auditPort;
   }
 
   private migrateExistingDatabase(file: string): void {
@@ -477,7 +478,7 @@ export class SqliteStore implements RelayStorePort {
   }
 
   audit(row: Omit<AuditRow, 'id'>): void {
-    void this.getAuditLog().append({
+    void this.requireAudit().append({
       ts: row.ts,
       userId: row.user_id ?? undefined,
       deviceId: row.device_id ?? undefined,
@@ -491,11 +492,11 @@ export class SqliteStore implements RelayStorePort {
   }
 
   recentAudit(userId: string, limit = 100): AuditRow[] {
-    return this.getAuditLog().recentAudit(userId, limit);
+    return this.requireAudit().recentAudit(userId, limit);
   }
 
   auditStats(userId: string): { total: number; failed: number; last24h: number } {
-    return this.getAuditLog().auditStats(userId);
+    return this.requireAudit().auditStats(userId);
   }
 
   vacuumExpired(audit: AuditRetentionPolicy): void {
@@ -503,7 +504,7 @@ export class SqliteStore implements RelayStorePort {
     this.#db.prepare('DELETE FROM auth_codes WHERE expires_at < ?').run(now);
     this.#db.prepare('DELETE FROM device_codes WHERE expires_at < ?').run(now);
     this.#db.prepare('DELETE FROM tokens WHERE expires_at IS NOT NULL AND expires_at < ?').run(now - 7 * 86_400_000);
-    this.getAuditLog().prune(audit);
+    this.requireAudit().prune(audit);
   }
 
   /* ---------- OAuth clients (management) ---------- */
@@ -546,6 +547,6 @@ export class SqliteStore implements RelayStorePort {
   }
 
   close(): void {
-    try { this.auditLog?.close(); } finally { this.#db.close(); }
+    this.#db.close();
   }
 }

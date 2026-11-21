@@ -23,7 +23,7 @@ test('service install and uninstall reject unconfirmed noninteractive changes', 
   for (const command of [['service', 'install'], ['service', 'uninstall']]) {
     const result = run([...command, '--no-input', '--json']);
     assert.equal(result.status, 2, result.stderr);
-    assert.equal(JSON.parse(result.stderr).exit_code, 2);
+    assert.equal(JSON.parse(result.stderr).error.exit_code, 2);
     assert.equal(result.stdout, '');
   }
 });

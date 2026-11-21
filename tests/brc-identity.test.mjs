@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { createHmac, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -19,6 +19,7 @@ import { DeviceHub } from '../packages/relay/dist/adapters/transport/device-hub.
 import { registerDeviceSocket } from '../packages/relay/dist/adapters/transport/websocket.js';
 import { consentPage } from '../packages/relay/dist/adapters/http/pages/html.js';
 import { SqliteStore, hashPassword, verifyPassword, sha256, randomToken } from '../packages/relay/dist/adapters/storage/sqlite.js';
+import { RelayAuditLog } from '../packages/relay/dist/adapters/storage/relay-audit.js';
 
 const requireRelay = createRequire(new URL('../packages/relay/package.json', import.meta.url));
 const express = requireRelay('express');
@@ -70,12 +71,14 @@ function config(dbFile, sessionSecret = 'shared-session-secret') {
     adminUser: 'admin',
     adminPassword: 'password',
     audit: { retentionDays: 30, maxEntries: 50_000 },
+    auth: { maxFails: 5, lockMs: 5 * 60_000 },
     relayVersion: 'test',
   };
 }
 
 function buildRelay(cfg, log) {
-  const store = SqliteStore.open(cfg.dbFile);
+  const audit = RelayAuditLog.open({ dbFile: cfg.dbFile, env: {} });
+  const store = SqliteStore.open(cfg.dbFile, audit);
   try {
     if (!cfg.audit) throw new Error('Relay audit settings are required for service startup.');
     if (cfg.adminPassword) store.upsertUser(cfg.adminUser, cfg.adminPassword);
@@ -100,7 +103,7 @@ function buildRelay(cfg, log) {
       issuer: cfg.publicUrl,
     }, clientsStore);
     const app = express();
-    const limiter = new LoginLimiter();
+    const limiter = new LoginLimiter(cfg.auth.maxFails, cfg.auth.lockMs);
     mountRelayRoutes({ app, cfg, store, hub, sessions, provider, limiter, log, verifyPassword });
     const http = createServer(app);
     const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
@@ -118,6 +121,7 @@ function buildRelay(cfg, log) {
         wss.close();
         await new Promise((resolve) => http.close(() => resolve()));
         store.close();
+        audit.close();
       },
     };
   } catch (error) {
@@ -494,6 +498,7 @@ test('browser login survives password-free Relay restart using the stored sessio
       redirect: 'manual',
     });
     assert.equal(response.status, 302);
+    await response.arrayBuffer();
     const cookie = response.headers.get('set-cookie')?.split(';')[0];
     assert.ok(cookie?.startsWith('brc_session='));
     await relay.close();
@@ -506,6 +511,7 @@ test('browser login survives password-free Relay restart using the stored sessio
       redirect: 'manual',
     });
     assert.equal(home.status, 200);
+    await home.arrayBuffer();
   } finally {
     await relay?.close();
     rmSync(directory, { recursive: true, force: true });
@@ -516,18 +522,29 @@ test('start and restart reject a missing Relay database without creating one', (
   const cliEntrypoint = path.resolve('packages/cli/dist/cli.js');
   for (const command of ['start', 'restart']) {
     const root = mkdtempSync(path.join(os.tmpdir(), 'brc-missing-relay-db-'));
+    const stdoutFile = path.join(root, 'stdout.txt');
+    const stderrFile = path.join(root, 'stderr.txt');
+    let stdoutFd;
+    let stderrFd;
     try {
+      stdoutFd = openSync(stdoutFile, 'w');
+      stderrFd = openSync(stderrFile, 'w');
       const result = spawnSync(process.execPath, [cliEntrypoint, command], {
         cwd: process.cwd(),
         env: { ...process.env, BRC_DATA_ROOT: root, BRC_ADMIN_PASSWORD: 'test-only' },
         encoding: 'utf8',
         timeout: 10_000,
         windowsHide: true,
+        stdio: ['ignore', stdoutFd, stderrFd],
       });
-      assert.equal(result.status, 1, `${command}: ${result.stderr}`);
-      assert.match(`${result.stdout}${result.stderr}`, /Relay database is missing.*brc setup/i);
+      const stdout = readFileSync(stdoutFile, 'utf8');
+      const stderr = readFileSync(stderrFile, 'utf8');
+      assert.equal(result.status, 1, `${command}: ${stderr}`);
+      assert.match(`${stdout}${stderr}`, /Relay database is missing.*brc setup/i);
       assert.equal(existsSync(path.join(root, 'data', 'relay.sqlite')), false);
     } finally {
+      if (stdoutFd !== undefined) closeSync(stdoutFd);
+      if (stderrFd !== undefined) closeSync(stderrFd);
       rmSync(root, { recursive: true, force: true });
     }
   }
@@ -547,7 +564,8 @@ function addAudit(store, ts, tool = 'test') {
 }
 
 test('audit housekeeping enforces zero, one, 50000 and 50001 row boundaries', () => {
-  const store = SqliteStore.open(':memory:');
+  const audit = RelayAuditLog.open({ dbFile: ':memory:' });
+  const store = SqliteStore.open(':memory:', audit);
   const policy = { retentionDays: 30, maxEntries: 50_000 };
   try {
     store.vacuumExpired(policy);
@@ -572,7 +590,8 @@ test('audit housekeeping enforces zero, one, 50000 and 50001 row boundaries', ()
 });
 
 test('audit housekeeping enforces maxEntries when excess exceeds one cleanup batch', () => {
-  const store = SqliteStore.open(':memory:');
+  const audit = RelayAuditLog.open({ dbFile: ':memory:' });
+  const store = SqliteStore.open(':memory:', audit);
   try {
     const now = Date.now();
     for (let index = 0; index < 1_012; index += 1) addAudit(store, now + index, `entry-${index}`);
@@ -587,7 +606,8 @@ test('audit housekeeping enforces maxEntries when excess exceeds one cleanup bat
 });
 
 test('audit housekeeping deletes expired rows in bounded batches', () => {
-  const store = SqliteStore.open(':memory:');
+  const audit = RelayAuditLog.open({ dbFile: ':memory:' });
+  const store = SqliteStore.open(':memory:', audit);
   try {
     const expiredAt = Date.now() - 31 * 86_400_000;
     for (let index = 0; index < 1_001; index += 1) addAudit(store, expiredAt + index);
@@ -603,7 +623,8 @@ test('audit housekeeping deletes expired rows in bounded batches', () => {
 });
 
 test('audit housekeeping removes expired rows and retains newer rows', () => {
-  const store = SqliteStore.open(':memory:');
+  const audit = RelayAuditLog.open({ dbFile: ':memory:' });
+  const store = SqliteStore.open(':memory:', audit);
   try {
     const now = Date.now();
     addAudit(store, now - 31 * 86_400_000, 'expired');
@@ -618,7 +639,8 @@ test('audit housekeeping removes expired rows and retains newer rows', () => {
 });
 
 test('audit housekeeping preserves users, devices, auth codes and tokens', () => {
-  const store = SqliteStore.open(':memory:');
+  const audit = RelayAuditLog.open({ dbFile: ':memory:' });
+  const store = SqliteStore.open(':memory:', audit);
   try {
     const user = store.upsertUser('admin', 'password');
     const deviceToken = store.issueDeviceToken('device-id', user.id, 'Agent', 'win32');

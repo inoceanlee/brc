@@ -5,7 +5,7 @@ import path from 'node:path';
 import express from 'express';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, snapshotStaleAfterMs, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
 import { mountRelayRoutes } from './adapters/http/app.js';
 import { loadConfig } from './adapters/http/config.js';
 import { RelayOAuthProvider, RelayClientsStore } from './adapters/http/oauth-provider.js';
@@ -44,7 +44,7 @@ const diagnosticStore = diagnosticsEnabled
   ? new SqliteDiagnosticsStore({
     databasePath: resolveDiagnosticsDbPath(path.dirname(path.resolve(cfg.dbFile)), process.env),
     config: diagnosticsRetentionConfig(settings),
-    staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
+    staleAfterMs: snapshotStaleAfterMs(settings.diagnostics.functionSnapshotMs),
   })
   : undefined;
 const diagnosticSession = functionTiming && resourceSampler && diagnosticStore
@@ -133,10 +133,12 @@ const log = (level: string, msg: string) => {
 interface RelayInstance { http: HttpServer; close(): Promise<void> }
 let relay: RelayInstance;
 let relayStore: SqliteStore | undefined;
+let relayAudit: RelayAuditLog | undefined;
 try {
-  const store = SqliteStore.open(cfg.dbFile);
-  relayStore = store;
   const audit = RelayAuditLog.open({ dbFile: cfg.dbFile, env: process.env, settings });
+  relayAudit = audit;
+  const store = SqliteStore.open(cfg.dbFile, audit);
+  relayStore = store;
   const admin = cfg.adminPassword ? store.upsertUser(cfg.adminUser, cfg.adminPassword) : store.getAdministrator();
   const sessionSecret = cfg.sessionSecret || store.getSessionSecret();
   const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner(sessionSecret)), cfg.publicUrl.startsWith('https://'));
@@ -156,7 +158,7 @@ try {
     ),
     issuer: cfg.publicUrl,
   }, clientsStore);
-  const limiter = new LoginLimiter();
+  const limiter = new LoginLimiter(cfg.auth.maxFails, cfg.auth.lockMs);
   const app = express();
   mountRelayRoutes({ app, cfg, store, audit, hub, sessions, provider, limiter, log, verifyPassword });
   const http = createServer(app);
@@ -186,6 +188,7 @@ try {
   };
 } catch (error) {
   relayStore?.close();
+  relayAudit?.close();
   log('error', `Relay startup failed: ${error instanceof Error ? error.message : String(error)}`);
   await closeLogs();
   process.exit(1);

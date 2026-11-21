@@ -5,6 +5,14 @@ import { mdToPdf } from 'md-to-pdf';
 import type { PageRange } from './lib/pdf2md.js';
 import { PdfParseResult, pdf2md } from './lib/pdf2md.js';
 import { resolveAgentPaths } from '../../storage/agent-paths.js';
+import type { TextLogPort } from 'brc-shared';
+import { textLogToStderr } from '../../telemetry/logger.js';
+
+let pdfLogPort: TextLogPort = textLogToStderr();
+
+export function setPdfLogPort(port: TextLogPort): void {
+    pdfLogPort = port;
+}
 
 const isUrl = (source: string): boolean =>
     source.startsWith('http://') || source.startsWith('https://');
@@ -128,7 +136,7 @@ export async function pruneOldPuppeteerChromeBuilds(activeExecutablePath: string
             try {
                 await fs.rm(buildDir, { recursive: true, force: true });
             } catch (error) {
-                console.error(`Failed to remove old Chrome cache build at ${buildDir}:`, error);
+                pdfLogPort.warning(`Failed to remove old Chrome cache build at ${buildDir}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }));
 }
@@ -176,7 +184,7 @@ async function installChrome(): Promise<CachedPuppeteerChrome> {
     const platform = detectBrowserPlatform()!;
     const buildId = await resolveBuildId(Browser.CHROME, platform, 'stable');
 
-    console.error('Downloading Chrome for PDF generation (this may take a few minutes)...');
+    pdfLogPort.info('Downloading Chrome for PDF generation (this may take a few minutes)...');
     await fs.mkdir(cacheDir, { recursive: true });
 
     const installedBrowser = await install({
@@ -189,7 +197,7 @@ async function installChrome(): Promise<CachedPuppeteerChrome> {
         },
     });
 
-    console.error('\nChrome download complete.');
+    pdfLogPort.info('Chrome download complete.');
 
     return {
         executablePath: installedBrowser.executablePath,
@@ -198,7 +206,7 @@ async function installChrome(): Promise<CachedPuppeteerChrome> {
 
 /**
  * Find or install Chrome for PDF generation
- * Priority: 1. Puppeteer cache, 2. System Chrome, 3. Install Chrome
+ * Priority: Puppeteer cache, then system Chrome, then install Chrome
  * Results are cached to avoid repeated lookups
  */
 async function getChromePath(): Promise<string | undefined> {
@@ -236,7 +244,7 @@ async function getChromePath(): Promise<string | undefined> {
             cachedChromePath = installedChrome.executablePath;
             return installedChrome.executablePath;
         } catch (error) {
-            console.error('Failed to install Chrome:', error);
+            pdfLogPort.error(`Failed to install Chrome: ${error instanceof Error ? error.message : String(error)}`);
             cachedChromePath = undefined;
             return undefined;
         }
@@ -255,7 +263,7 @@ async function getChromePath(): Promise<string | undefined> {
 export function ensureChromeAvailable(): void {
 
     getChromePath().catch((error) => {
-        console.error('Background Chrome check failed:', error);
+        pdfLogPort.error(`Background Chrome check failed: ${error instanceof Error ? error.message : String(error)}`);
     });
 }
 
@@ -279,7 +287,7 @@ export async function parsePdfToMarkdown(source: string, pageNumbers: number[] |
         return await pdf2md(new Uint8Array(data), pageNumbers);
 
     } catch (error) {
-        console.error("Error converting PDF to Markdown (v3):", error);
+        pdfLogPort.error(`Error converting PDF to Markdown: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
     }
 }
@@ -312,7 +320,7 @@ export async function parseMarkdownToPdf(markdown: string, options: any = {}): P
                 'or Chromium, then try again.'
             );
         }
-        console.error('Error creating PDF:', error);
+        pdfLogPort.error(`Error creating PDF: ${error instanceof Error ? error.message : String(error)}`);
         throw error;
     }
 }

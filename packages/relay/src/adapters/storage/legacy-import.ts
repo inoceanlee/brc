@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { existsSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { resolveDiagnosticsDbPath } from 'brc-shared';
+import { resolveDiagnosticsDbPath, type TextLogPort } from 'brc-shared';
 import { markLegacyIdentityImported } from './legacy-import-marker.js';
 
 const LEGACY_REQUIRED_TABLES = ['users', 'oauth_clients', 'auth_codes', 'tokens', 'devices', 'device_codes', 'brc_meta'];
@@ -20,6 +20,7 @@ export interface LegacyIdentityImportResult {
 export interface LegacyIdentityImportOptions {
   diagnosticsDbPath?: string;
   removeLegacyArtifacts?: (legacyFile: string) => void;
+  log?: TextLogPort;
 }
 
 interface IdentitySnapshot {
@@ -136,7 +137,11 @@ export function importLegacyIdentityDatabase(
       const detail = error instanceof Error ? error.message : String(error);
       warnings.push(`Failed to remove legacy identity database: ${detail}`);
     }
-    for (const warning of warnings) console.warn(`Relay identity import warning: ${warning}`);
+    for (const warning of warnings) {
+      const message = `Relay identity import warning: ${warning}`;
+      if (options.log) options.log.warning(message);
+      else process.stderr.write(message + '\n');
+    }
 
     return { legacyFile: legacy, targetFile: target, stagingFile: staging, ...snapshot, legacyRemoved, warnings };
   } catch (error) {

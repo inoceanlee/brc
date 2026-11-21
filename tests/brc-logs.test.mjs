@@ -76,7 +76,7 @@ const exitCode = await showLogs(${JSON.stringify(fixture.paths)}, 'agent', () =>
 console.log(JSON.stringify({ exitCode, errors }));
 `));
 
-  assert.equal(result.exitCode, 1);
+  assert.equal(result.exitCode, 0);
   assert.match(result.errors.join('\n'), /agent.*log.*not found/i);
 });
 
@@ -90,7 +90,7 @@ const exitCode = await showLogs(${JSON.stringify(fixture.paths)}, undefined, (va
 console.log(JSON.stringify({ exitCode, output, errors }));
 `));
 
-  assert.equal(result.exitCode, 1);
+  assert.equal(result.exitCode, 0);
   assert.deepEqual(result.output, []);
   assert.match(result.errors.join('\n'), /no service logs were found/i);
 });

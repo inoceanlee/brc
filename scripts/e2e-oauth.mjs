@@ -6,18 +6,18 @@ const b64 = (b) => b.toString('base64url');
 const j = async (r) => { const t = await r.text(); try { return JSON.parse(t); } catch { return t; } };
 const step = (n, ok, extra = '') => console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${extra ? '  ' + extra : ''}`);
 
-// 1. discovery
+// discovery
 const prm = await j(await fetch(`${base}/.well-known/oauth-protected-resource/mcp`));
 const meta = await j(await fetch(`${base}/.well-known/oauth-authorization-server`));
 step('discovery', !!meta.authorization_endpoint && !!prm.resource, `auth=${meta.authorization_endpoint} token=${meta.token_endpoint} reg=${meta.registration_endpoint}`);
 
-// 2. dynamic client registration
+// dynamic client registration
 const redirect = 'https://claude.ai/api/mcp/auth_callback';
 const reg = await j(await fetch(meta.registration_endpoint, { method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ client_name: 'Claude', redirect_uris: [redirect], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'], token_endpoint_auth_method: 'none' }) }));
 step('register', !!reg.client_id, `client_id=${reg.client_id}`);
 
-// 3. authorize with PKCE -> expect redirect to login
+// authorize with PKCE -> expect redirect to login
 const verifier = b64(randomBytes(32)); const challenge = b64(createHash('sha256').update(verifier).digest());
 const state = b64(randomBytes(8));
 const authUrl = `${meta.authorization_endpoint}?response_type=code&client_id=${reg.client_id}&redirect_uri=${encodeURIComponent(redirect)}&code_challenge=${challenge}&code_challenge_method=S256&state=${state}&scope=mcp:tools&resource=${encodeURIComponent(prm.resource)}`;
@@ -25,7 +25,7 @@ let r = await fetch(authUrl, { redirect: 'manual' });
 const loginLoc = r.headers.get('location') ?? '';
 step('authorize -> login redirect', r.status === 302 && loginLoc.startsWith('/auth/login'), loginLoc);
 
-// 4. login (cookie), then follow returnTo to consent
+// login (cookie), then follow returnTo to consent
 r = await fetch(`${base}/auth/login`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
   body: new URLSearchParams({ username: user, password: pass, returnTo: new URL(loginLoc, base).searchParams.get('returnTo') }) });
 const cookie = (r.headers.get('set-cookie') ?? '').split(';')[0];
@@ -36,18 +36,18 @@ const html = await r.text();
 const pending = html.match(/name="pending" value="([^"]+)"/)?.[1];
 step('consent page', r.status === 200 && !!pending, `pending=${pending}`);
 
-// 5. allow -> code
+// allow -> code
 r = await fetch(`${base}/auth/consent`, { method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ pending, decision: 'allow' }) });
 const cb = new URL(r.headers.get('location'));
 const code = cb.searchParams.get('code');
 step('consent -> code', r.status === 302 && !!code && cb.searchParams.get('state') === state, `${cb.origin}${cb.pathname}`);
 
-// 6. token exchange
+// token exchange
 const tok = await j(await fetch(meta.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
   body: new URLSearchParams({ grant_type: 'authorization_code', code, code_verifier: verifier, client_id: reg.client_id, redirect_uri: redirect, resource: prm.resource }) }));
 step('token', !!tok.access_token && !!tok.refresh_token, `expires_in=${tok.expires_in} scope=${tok.scope}`);
 
-// 7. MCP: initialize, tools/list, tools/call
+// MCP: initialize, tools/list, tools/call
 const H = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${tok.access_token}` };
 const rpc = async (method, params, id, headers = H) => {
   const res = await fetch(`${base}/mcp`, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
@@ -107,7 +107,7 @@ const devices2 = JSON.parse(devs2.body?.result?.content?.[0]?.text ?? '{}').devi
 const stableDevices = (devices) => devices.map(({ deviceId, name, platform, online, paused }) => ({ deviceId, name, platform, online, paused })).sort((a, b) => a.deviceId.localeCompare(b.deviceId));
 step('second OAuth client sees same devices', consent2.status === 200 && !!tok2.access_token && JSON.stringify(stableDevices(devices2)) === JSON.stringify(stableDevices(devJson.devices)), JSON.stringify(devices2.map((device) => device.name)));
 
-// 8. unauthorized / refresh
+// unauthorized / refresh
 const bad = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...H, authorization: 'Bearer nope' }, body: '{}' });
 step('mcp rejects bad token', bad.status === 401, `www-authenticate=${bad.headers.get('www-authenticate')?.slice(0, 60)}`);
 const ref = await j(await fetch(meta.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },

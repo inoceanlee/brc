@@ -27,6 +27,9 @@ export const DIAGNOSE_TARGETS: readonly DiagnoseTarget[] = ['startup', 'lifecycl
 
 export class UsageError extends Error {
   readonly exitCode = 2;
+  constructor(message: string, readonly run?: string) {
+    super(message);
+  }
 }
 
 export class AuthError extends Error {
@@ -58,6 +61,7 @@ export interface ParsedCommand {
   debug: boolean;
   noColor: boolean;
   interactive: boolean;
+  helpBrief: boolean;
   timeoutMs?: number;
   offline: boolean;
   noTelemetry: boolean;
@@ -207,15 +211,15 @@ function specFor(name: CliCommandName): CommandSpec {
   return spec;
 }
 
-export function helpText(command?: CliCommandName): string {
+export function helpText(command?: CliCommandName, brief = false): string {
   if (command) {
     const spec = specFor(command);
     const lines = [spec.usage, '', spec.summary];
-    if (spec.examples.length) {
+    if (!brief && spec.examples.length) {
       lines.push('', 'Examples:');
       for (const example of spec.examples) lines.push(`  ${example}`);
     }
-    lines.push('', `Docs: ${docsUrl()}`);
+    if (!brief) lines.push('', `Docs: ${docsUrl()}`);
     return lines.join('\n');
   }
   const lines = ['BRC unified CLI', '', 'Usage: brc <command>', '', 'Commands:'];
@@ -227,7 +231,7 @@ export function helpText(command?: CliCommandName): string {
     const label = flag.short ? `${flag.short}, ${flag.long}` : flag.long;
     lines.push(`  ${label.padEnd(46)} ${flag.description}`);
   }
-  lines.push('', `Docs: ${docsUrl()}`, '', ...UNINSTALL_NOTE);
+  if (!brief) lines.push('', `Docs: ${docsUrl()}`, '', ...UNINSTALL_NOTE);
   return lines.join('\n');
 }
 
@@ -286,11 +290,13 @@ function parseLegacyCommand(argv: string[]): ParsedCommand {
   const base: ParsedCommand = {
     name: 'help', args: [], json: false, timing: false, quiet, verbose, noInput, includeStatus: false,
     output: 'table', debug: false, noColor: false, interactive: false, offline: false, noTelemetry: false, preview: false,
+    helpBrief: false,
   };
-  if (stripped.length === 0) return base;
+  if (stripped.length === 0) return { ...base, helpBrief: true };
 
   const [command, ...rest] = stripped;
-  if (command === '-h' || command === '--help') return { ...base, name: 'help' };
+  if (command === '-h') return { ...base, name: 'help', helpBrief: true };
+  if (command === '--help') return { ...base, name: 'help' };
   if (command === '--version') return parseVersion(rest, base);
 
   const names = COMMAND_SPECS.map((spec) => spec.name);
@@ -300,6 +306,7 @@ function parseLegacyCommand(argv: string[]): ParsedCommand {
   const name = command as CliCommandName;
   if (name === 'version') return parseVersion(rest, base);
   if (name === 'help') {
+    if (rest.includes('-h')) return { ...base, name: 'help', helpBrief: true };
     if (rest.includes('--help')) return { ...base, name: 'help' };
     if (rest.length === 0) return { ...base, name: 'help' };
     if (rest.length !== 1 || !names.includes(rest[0] as CliCommandName)) {
@@ -307,6 +314,7 @@ function parseLegacyCommand(argv: string[]): ParsedCommand {
     }
     return { ...base, name: 'help', args: [rest[0]] };
   }
+  if (rest.includes('-h')) return { ...base, name: 'help', args: [name], helpBrief: true };
   if (rest.includes('--help')) return { ...base, name: 'help', args: [name] };
 
   switch (name) {
@@ -440,5 +448,6 @@ export function parseCommand(argv: string[]): ParsedCommand {
     noTelemetry: global.noTelemetry,
     preview: global.preview,
     includeStatus: false,
+    helpBrief: global.helpBrief || result.helpBrief,
   };
 }
