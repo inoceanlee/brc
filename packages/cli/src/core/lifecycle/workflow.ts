@@ -79,8 +79,9 @@ export class ServiceManager {
   }
 
   private async startUnlocked(known?: readonly ServiceStatus[], signal?: AbortSignal): Promise<void> {
-    const started: ManagedServiceSpec[] = [];
     const knownByName = new Map((known ?? []).map((status) => [status.name, status]));
+    let toStart: ManagedServiceSpec[] = [];
+    const started = new Set<ManagedServiceSpec>();
     try {
       for (const service of this.services) {
         signal?.throwIfAborted();
@@ -90,14 +91,22 @@ export class ServiceManager {
         if (!isStartable(current)) {
           throw Object.assign(new Error(`Cannot start ${service.name}: ${current.detail}`), { exitCode: 5 });
         }
-        await this.stage('spawn-ready', service.name, () => this.processes.start(service, signal));
-        started.push(service);
-        const health = await this.stage('control-health', service.name, () => this.healthCheck.check(service, signal));
-        if (!health.ready) throw new Error(`${service.name} failed its control health check: ${health.detail}`);
+        toStart.push(service);
       }
+      await Promise.all(toStart.map(async (service) => {
+        signal?.throwIfAborted();
+        await this.stage('spawn-ready', service.name, () => this.processes.start(service, signal));
+        started.add(service);
+      }));
+      const healthResults = await Promise.all(toStart.map(async (service) => ({
+        service,
+        health: await this.stage('control-health', service.name, () => this.healthCheck.check(service, signal)),
+      })));
+      const unhealthy = healthResults.find((result) => !result.health.ready);
+      if (unhealthy) throw new Error(`${unhealthy.service.name} failed its control health check: ${unhealthy.health.detail}`);
     } catch (error) {
       const rollbackErrors: unknown[] = [];
-      for (const service of started.reverse()) {
+      for (const service of toStart.filter((item) => started.has(item)).reverse()) {
         try {
           await this.processes.stop(service);
         } catch (failure) {

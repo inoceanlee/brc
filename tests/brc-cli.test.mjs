@@ -368,7 +368,7 @@ console.log(JSON.stringify({ exitCode, output, errors }));
   assert.match(failure.cleanup.message, /cleanup failed/);
 });
 
-test('JSON output stays clean when automatic cleanup fails after success or invalid input', () => {
+test('read-only JSON command skips cleanup; invalid input still reports cleanup failure', () => {
   const results = probeResult(runProbe(`
 const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
 const results = [];
@@ -385,10 +385,7 @@ console.log(JSON.stringify(results));
 `));
   assert.equal(results[0].exitCode, 0);
   assert.equal(typeof JSON.parse(results[0].output[0]).version, 'string');
-  const warning = JSON.parse(results[0].errors.join('\n'));
-  assert.equal(warning.code, 'CLEANUP_FAILED');
-  assert.equal(warning.command_exit_code, 0);
-  assert.match(warning.message, /cleanup failed/);
+  assert.deepEqual(results[0].errors, [], 'read-only command must not invoke cleanup');
   assert.equal(results[1].exitCode, 2);
   assert.deepEqual(results[1].output, []);
   const usage = JSON.parse(results[1].errors.join('\n'));
@@ -531,13 +528,16 @@ test('brc clean removes expired files and reports the cleanup result', async (t)
   assert.doesNotMatch(result.stdout, /BRC cleanup:/);
 });
 
-test('automatic cleanup runs after help, invalid commands, and startup failure', async (t) => {
-  for (const args of [['help'], ['unknown']]) {
-    const fixture = await makeCleanupFixture(t);
-    const result = runCliProcess(args, fixture.root);
-    assert.equal(result.status, args[0] === 'help' ? 0 : 2, result.stderr);
-    assert.equal(existsSync(fixture.expiredLog), false);
-  }
+test('read-only commands skip cleanup while failures and mutations still clean', async (t) => {
+  const helpFixture = await makeCleanupFixture(t);
+  const helpResult = runCliProcess(['help'], helpFixture.root);
+  assert.equal(helpResult.status, 0, helpResult.stderr);
+  assert.equal(existsSync(helpFixture.expiredLog), true, 'read-only help must not run cleanup');
+
+  const invalidFixture = await makeCleanupFixture(t);
+  const invalidResult = runCliProcess(['unknown'], invalidFixture.root);
+  assert.equal(invalidResult.status, 2, invalidResult.stderr);
+  assert.equal(existsSync(invalidFixture.expiredLog), false, 'unparsed command keeps cleanup');
 
   const fixture = await makeCleanupFixture(t);
   SqliteStore.initialize(path.join(fixture.root, 'data', 'relay.sqlite'));
