@@ -400,7 +400,7 @@ test('missing deployment templates leave the installed version and both configur
   }
   await symlink(unzipperRoot, path.join(modules, 'unzipper'), 'junction');
   await symlink(path.resolve(cliRoot, '../shared'), path.join(modules, 'brc-shared'), 'junction');
-  const { TraefikManager: IsolatedManager } = await import(pathToFileURL(path.join(isolatedPackage, 'dist', 'traefik', 'manager.js')).href);
+  const { TraefikManager: IsolatedManager } = await import(pathToFileURL(path.join(isolatedPackage, 'dist', 'adapters', 'traefik', 'manager.js')).href);
   const manager = new IsolatedManager(brcPaths, settingsFor(), makeLifecycle(), {
     fetch: release.fetch,
     verifyExecutable: async () => { },
