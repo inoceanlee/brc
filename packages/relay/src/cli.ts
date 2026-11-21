@@ -5,7 +5,7 @@ import path from 'node:path';
 import express from 'express';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, snapshotStaleAfterMs, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, snapshotStaleAfterMs, startManagedControlServer, type ManagedControlServer, type TextLogPort } from 'brc-shared';
 import { mountRelayRoutes } from './adapters/http/app.js';
 import { loadConfig } from './adapters/http/config.js';
 import { RelayOAuthProvider, RelayClientsStore } from './adapters/http/oauth-provider.js';
@@ -84,6 +84,20 @@ async function closeLogs(): Promise<void> {
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) throw new AggregateError(errors, 'Relay log shutdown failed.');
 }
+const log = (level: string, msg: string): void => {
+  const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
+  diagnostics.log(msg, {
+    level: level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info',
+    source: { file: 'relay/cli.ts', function: 'log' },
+  });
+  (level === 'error' || level === 'warn' ? console.error : console.log)(line);
+  writeManagedLog(line);
+};
+const textLog: TextLogPort = {
+  error: (message) => log('error', message),
+  warning: (message) => log('warn', message),
+  info: (message) => log('info', message),
+};
 if (process.argv.includes('--initialize')) {
   try {
     const input = process.stdin.isTTY ? '' : readFileSync(0, 'utf8').trim();
@@ -105,7 +119,7 @@ if (process.argv.includes('--initialize')) {
       finally { audit.close(); }
       importedLegacy = true;
     }
-    SqliteStore.initialize(cfg.dbFile, legacyFile || undefined);
+    SqliteStore.initialize(cfg.dbFile, legacyFile || undefined, textLog);
     if (administrator && !importedLegacy) {
       const store = SqliteStore.open(cfg.dbFile);
       try { store.bootstrapAdministrator(administrator.username, administrator.password); }
@@ -119,16 +133,6 @@ if (process.argv.includes('--initialize')) {
   await closeLogs();
   process.exit(0);
 }
-
-const log = (level: string, msg: string) => {
-  const line = `[${new Date().toISOString()}] [${level}] ${msg}`;
-  diagnostics.log(msg, {
-    level: level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info',
-    source: { file: 'relay/cli.ts', function: 'log' },
-  });
-  (level === 'error' || level === 'warn' ? console.error : console.log)(line);
-  writeManagedLog(line);
-};
 
 interface RelayInstance { http: HttpServer; close(): Promise<void> }
 let relay: RelayInstance;

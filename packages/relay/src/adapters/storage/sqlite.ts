@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import type { TextLogPort } from 'brc-shared';
 import type { RelayStorePort } from '../../core/auth/ports.js';
 import { importLegacyIdentityDatabase, type LegacyIdentityImportResult } from './legacy-import.js';
 import { RelayAuditLog } from './relay-audit.js';
@@ -99,7 +100,7 @@ export class SqliteStore implements RelayStorePort {
     }
   }
 
-  static initialize(file: string, legacyFile?: string): void {
+  static initialize(file: string, legacyFile?: string, log?: TextLogPort): void {
     if (file === ':memory:') throw new Error('Cannot initialize a persistent Relay database at :memory:.');
     if (existsSync(file)) {
       const store = SqliteStore.open(file);
@@ -108,7 +109,7 @@ export class SqliteStore implements RelayStorePort {
     }
     const resolved = path.resolve(file);
     if (legacyFile !== undefined) {
-      const imported: LegacyIdentityImportResult = importLegacyIdentityDatabase(legacyFile, resolved);
+      const imported: LegacyIdentityImportResult = importLegacyIdentityDatabase(legacyFile, resolved, { log });
       const store = SqliteStore.open(imported.targetFile);
       store.close();
       return;
