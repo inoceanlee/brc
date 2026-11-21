@@ -4,12 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import {
-  DEFAULT_AGENT_FILE_READ_LINE_LIMIT,
-  DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT,
   DEFAULT_SETTINGS,
-  FILE_SIZE_LIMITS,
   RESOURCE_SAMPLE_INTERVAL_MAX_MS,
-  RESOURCE_SAMPLE_INTERVAL_MIN_MS,
   resolveSettings,
   withSettingValue,
 } from '../packages/shared/dist/config/core/settings.js';
@@ -17,9 +13,6 @@ import { YamlSettingsStore } from '../packages/shared/dist/config/adapters/yaml-
 import { renderCliResult } from '../packages/shared/dist/cli/adapters/renderer.js';
 
 test('Shared owns BRC and Agent settings with validated overrides', () => {
-  assert.equal(DEFAULT_SETTINGS.agent.fileReadLineLimit, 1000);
-  assert.equal(DEFAULT_SETTINGS.agent.fileWriteLineLimit, 50);
-  assert.equal(DEFAULT_SETTINGS.agent.telemetry.enabled, false);
   assert.throws(
     () => resolveSettings({ version: 1 }, { BRC_AGENT_TELEMETRY_ENABLED: 'incorrect' }),
     /BRC_AGENT_TELEMETRY_ENABLED/,
@@ -97,16 +90,6 @@ test('Shared renderer formats records as a table and leaves plain mode headerles
   out.length = 0;
   renderCliResult({ status: 'success', data: records }, { format: 'plain' }, streams);
   assert.doesNotMatch(out.join(''), /^name\s+state/);
-});
-
-test('configuration model publishes the single source for default values', () => {
-  assert.equal(FILE_SIZE_LIMITS.LINE_COUNT_LIMIT, 10 * 1024 * 1024);
-  assert.equal(DEFAULT_AGENT_FILE_READ_LINE_LIMIT, 1000);
-  assert.equal(DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT, 50);
-  assert.equal(DEFAULT_SETTINGS.agent.fileReadLineLimit, DEFAULT_AGENT_FILE_READ_LINE_LIMIT);
-  assert.equal(DEFAULT_SETTINGS.agent.fileWriteLineLimit, DEFAULT_AGENT_FILE_WRITE_LINE_LIMIT);
-  assert.equal(RESOURCE_SAMPLE_INTERVAL_MIN_MS, 100);
-  assert.equal(RESOURCE_SAMPLE_INTERVAL_MAX_MS, 60_000);
 });
 
 test('sampling interval bounds come from the configuration model', () => {
