@@ -22,14 +22,10 @@ if (process.argv.slice(2).some((arg) => !['--dry-run', '--verbose', '--help', '-
 }
 if (help) {
   console.log('pnpm release:brc [--dry-run] [--verbose] [--verify-only]');
-  console.log('Validate, build, test and publish @inoceanlee/brc with interactive npm authentication.');
+  console.log('Validate, build, test and publish @inoceanlee/brc with the configured npm token.');
   console.log('Use --dry-run to validate without uploading or tagging.');
   console.log('Use --verify-only to verify a published release without publishing or pushing.');
   process.exit(0);
-}
-if (!dryRun && !verifyOnly && !process.stdin.isTTY) {
-  console.error('npm publish requires a local interactive terminal for authentication. Run pnpm release:brc locally.');
-  process.exit(2);
 }
 
 const actions = releaseActions({ dryRun, verifyOnly });
@@ -230,7 +226,7 @@ async function release() {
     artifact.tag = tag;
     artifact = await store.markAttempted(artifact);
     artifact.tag = tag;
-    await runStage('Upload npm package', () => command('npm', ['publish', artifact.archivePath, '--access', 'public', '--registry', RELEASE_CONFIG.registry], { interactive: true }), { interactive: true });
+    await runStage('Upload npm package', () => command('npm', ['publish', artifact.archivePath, '--access', 'public', '--registry', RELEASE_CONFIG.registry]));
   } else {
     progress.print('Package upload skipped.');
   }

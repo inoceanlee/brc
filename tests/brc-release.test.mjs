@@ -38,10 +38,11 @@ test('release automation rejects unsupported arguments before publishing', () =>
   assert.match(result.stderr, /Usage: pnpm release:brc/);
 });
 
-test('publishing requires a local interactive terminal before build or network work', () => {
-  const result = execute();
-  assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stderr, /local interactive terminal/);
+test('release automation publishes non-interactively with a configured token', () => {
+  const source = readFileSync(script, 'utf8');
+  assert.doesNotMatch(source, /!process\.stdin\.isTTY/);
+  assert.doesNotMatch(source, /local interactive terminal/);
+  assert.match(source, /\['publish', artifact\.archivePath, '--access', 'public'/);
 });
 
 test('runner captures subprocess output and progress displays stage details', async () => {
@@ -78,6 +79,7 @@ test('progress renderer refreshes a terminal while a stage runs', async () => {
 test('real release shows distinct upload, registry and tag progress stages', () => {
   const source = readFileSync(script, 'utf8');
   assert.match(source, /await runStage\('Upload npm package',.*command\('npm', \['publish'/);
+  assert.doesNotMatch(source, /\['publish', artifact\.archivePath[^\n]*\{ interactive: true \}/);
   assert.match(source, /await runStage\('Wait for npm registry'/);
   assert.match(source, /await runStage\('Verify release tag'/);
 });
