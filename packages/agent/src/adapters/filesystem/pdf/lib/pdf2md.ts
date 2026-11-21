@@ -1,4 +1,5 @@
 import { createRequire } from 'module';
+import type { TextLogPort } from 'brc-shared';
 
 import { generatePageNumbers } from '../utils.js';
 import { extractImagesFromPdf, ImageInfo } from '../extract-images.js';
@@ -67,7 +68,7 @@ export type PageRange = {
  * @param pageNumbers The page numbers to extract. If empty, all pages are extracted.
  * @returns A Promise that resolves to a PdfParseResult object containing the parsed data.
  */
-export async function pdf2md(pdfBuffer: Uint8Array, pageNumbers: number[] | PageRange = []): Promise<PdfParseResult> {
+export async function pdf2md(pdfBuffer: Uint8Array, pageNumbers: number[] | PageRange, log: TextLogPort): Promise<PdfParseResult> {
 
     const result = await parse(pdfBuffer);
     const { fonts, pages, pdfDocument } = result;
@@ -90,7 +91,7 @@ export async function pdf2md(pdfBuffer: Uint8Array, pageNumbers: number[] | Page
     const parseResult = transform(pagesToProcess, transformations);
 
 
-    const imagesByPage = await extractImagesFromPdf(pdfBuffer, pageNumberMap, { format: 'webp', quality: 85 });
+    const imagesByPage = await extractImagesFromPdf(pdfBuffer, pageNumberMap, { format: 'webp', quality: 85 }, log);
 
 
     const processedPages: PdfPageItem[] = parseResult.pages.map((page: any, index: number) => {
