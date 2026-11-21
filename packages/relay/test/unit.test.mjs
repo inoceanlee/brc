@@ -68,6 +68,7 @@ test('MCP request cleanup covers response close and request failures', async (t)
       const cfg = loadConfig({ PUBLIC_URL: 'http://127.0.0.1:1' });
       const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner('test-secret')), false);
       const hub = new DeviceHub('test', () => {});
+      t.after(() => hub.close());
       const provider = new RelayOAuthProvider({
         store, tokens: { randomToken, sha256 }, currentUserId: () => null,
         renderLogin: () => {}, renderConsent: () => {}, issuer: cfg.publicUrl,
@@ -107,7 +108,7 @@ test('MCP request cleanup covers response close and request failures', async (t)
         },
       };
       mountRelayRoutes({
-        app, cfg, store, audit: stubAudit(), hub, sessions, provider, limiter: new LoginLimiter(), verifyPassword: () => false,
+        app, cfg, store, audit: stubAudit(), hub, sessions, provider, limiter: new LoginLimiter(cfg.auth.maxFails, cfg.auth.lockMs), verifyPassword: () => false,
         log: (level, message) => { if (level === 'error') errors.push(message); },
         createMcpTransport: () => {
           if (mode === 'create') throw new Error('transport creation failure');
@@ -140,26 +141,26 @@ test('MCP request cleanup covers response close and request failures', async (t)
         }
         if (mode === 'both-close') assert.equal(errors.filter((message) => message.includes('cleanup failed')).length, 2);
       } finally {
-        hub.close();
         store.close();
       }
     });
   }
 });
 
-test('HTTP login uses injected password verifier and preserves pairing approval', async () => {
+test('HTTP login uses injected password verifier and preserves pairing approval', async (t) => {
   const store = SqliteStore.open(':memory:');
   const user = store.upsertUser('admin', 'stored-password');
   const app = express();
   const cfg = loadConfig({ PUBLIC_URL: 'http://127.0.0.1:1' });
   const sessions = new Sessions(new SessionPolicy(new HmacSessionSigner('test-secret')), false);
   const hub = new DeviceHub('test', () => {});
+  t.after(() => hub.close());
   const tokens = { randomToken, sha256 };
   const provider = new RelayOAuthProvider({
     store, tokens, currentUserId: () => null, renderLogin: () => {}, renderConsent: () => {}, issuer: cfg.publicUrl,
   }, new RelayClientsStore(store, tokens));
   mountRelayRoutes({
-    app, cfg, store, audit: stubAudit(), hub, sessions, provider, limiter: new LoginLimiter(), log: () => {},
+    app, cfg, store, audit: stubAudit(), hub, sessions, provider, limiter: new LoginLimiter(cfg.auth.maxFails, cfg.auth.lockMs), log: () => {},
     verifyPassword: (password, hash) => password === 'injected-password' && hash === user.password_hash,
   });
   const server = createServer(app);
@@ -195,7 +196,6 @@ test('HTTP login uses injected password verifier and preserves pairing approval'
     });
     assert.equal(again.status, 400);
   } finally {
-    hub.close();
     await new Promise((resolve) => server.close(resolve));
     store.close();
   }
