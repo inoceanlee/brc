@@ -131,7 +131,7 @@ export class FileSnapshotStore implements DiagnosticSnapshotPort {
     }
     const minimal: DiagnosticSnapshot = {
       ...snapshot,
-      functions: { schema: 1, totalCalls: snapshot.functions.totalCalls, entries: [], truncated: true, droppedIds: snapshot.functions.droppedIds },
+      functions: { schema: 1, totalCalls: snapshot.functions.totalCalls, entries: [], truncated: true, droppedIds: snapshot.functions.droppedIds, failures: snapshot.functions.failures ?? [] },
     };
     payload = `${JSON.stringify(minimal)}\n`;
     if (Buffer.byteLength(payload) > this.maxBytes) throw new Error('Diagnostic snapshot exceeds the configured size limit.');

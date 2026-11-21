@@ -19,6 +19,7 @@ export interface FunctionTimingSnapshot {
   entries: FunctionTimingEntry[];
   truncated: boolean;
   droppedIds: number;
+  failures: FunctionFailureSample[];
 }
 
 export interface FunctionDescriptor {
@@ -51,6 +52,26 @@ interface Aggregate {
   errors: number;
 }
 
+const MAX_FAILURE_TEXT = 512;
+
+function redactFailureText(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/(deviceToken|token|secret|password|passwd|apikey|api_key|authorization|credential)(["'=:\s]+)[^\s,}]+/gi, '$1$2[redacted]')
+    .slice(0, MAX_FAILURE_TEXT);
+}
+
+function describeFailure(id: string, error: unknown): FunctionFailureSample {
+  const err = error instanceof Error ? error : undefined;
+  const message = err?.message ?? (typeof error === 'string' ? error : String(error));
+  const rawStack = err?.stack ?? '';
+  return {
+    id,
+    message: redactFailureText(message),
+    stack: redactFailureText(rawStack),
+  };
+}
+
 /**
  * Bounded in-memory aggregation of own function calls. Only the outermost
  * invocation of a given function contributes time, so recursive and
@@ -61,6 +82,7 @@ export class FunctionTiming {
   private readonly aggregates = new Map<string, Aggregate>();
   private readonly descriptors = new Map<string, FunctionDescriptor>();
   private readonly active = new Map<string, Set<FunctionTimingToken>>();
+  private readonly failures = new Map<string, FunctionFailureSample>();
   private readonly maxEntries: number;
   private readonly clock: () => number;
   private readonly describe?: (id: string) => FunctionDescriptor | undefined;
@@ -92,7 +114,7 @@ export class FunctionTiming {
     return token;
   }
 
-  end(token: FunctionTimingToken | undefined, failed = false): void {
+  end(token: FunctionTimingToken | undefined, failed = false, error?: unknown): void {
     if (!token) return;
     const tokens = this.active.get(token.id);
     if (tokens) {
@@ -101,12 +123,21 @@ export class FunctionTiming {
     }
     const aggregate = this.aggregates.get(token.id);
     if (!aggregate) return;
-    if (failed) aggregate.errors += 1;
+    if (failed) {
+      aggregate.errors += 1;
+      if (!this.failures.has(token.id)) {
+        this.failures.set(token.id, describeFailure(token.id, error));
+      }
+    }
     if (!token.root) return;
     const duration = Math.max(0, this.clock() - token.started);
     aggregate.totalMs += duration;
     if (duration > aggregate.maxMs) aggregate.maxMs = duration;
     if (token.kind === 'async') aggregate.asyncWallMs += duration;
+  }
+
+  failureSamples(): FunctionFailureSample[] {
+    return [...this.failures.values()];
   }
 
   snapshot(limit = this.maxEntries): FunctionTimingSnapshot {
@@ -139,7 +170,33 @@ export class FunctionTiming {
       entries: truncated ? entries.slice(0, limit) : entries,
       truncated,
       droppedIds: this.droppedIds,
+      failures: this.failureSamples(),
     };
+  }
+
+  /** Merges one pre-recorded call captured before the probe was installed. */
+  recordEarly(record: EarlyRecord): void {
+    let aggregate = this.aggregates.get(record.id);
+    if (!aggregate) {
+      if (this.aggregates.size >= this.maxEntries) {
+        this.droppedIds += 1;
+        return;
+      }
+      aggregate = { calls: 0, totalMs: 0, maxMs: 0, asyncWallMs: 0, errors: 0 };
+      this.aggregates.set(record.id, aggregate);
+    }
+    aggregate.calls += 1;
+    this.totalCalls += 1;
+    if (record.failed) {
+      aggregate.errors += 1;
+      if (!this.failures.has(record.id)) {
+        this.failures.set(record.id, describeFailure(record.id, record.error));
+      }
+    }
+    if (!record.root) return;
+    aggregate.totalMs += record.durationMs;
+    if (record.durationMs > aggregate.maxMs) aggregate.maxMs = record.durationMs;
+    if (record.kind === 'async') aggregate.asyncWallMs += record.durationMs;
   }
 
   /** Registers source metadata produced by the build-time instrumenter. */
@@ -155,14 +212,93 @@ export class FunctionTiming {
   }
 }
 
+export interface FunctionFailureSample {
+  id: string;
+  message: string;
+  stack: string;
+}
+
 export interface FunctionProbeHost {
   __brcDiagBegin?: (id: string, kind?: string) => FunctionTimingToken | undefined;
-  __brcDiagEnd?: (token: FunctionTimingToken | undefined, failed?: boolean) => void;
+  __brcDiagEnd?: (token: FunctionTimingToken | undefined, failed?: boolean, error?: unknown) => void;
 }
 
 export interface FunctionProbeInstallation {
   timing: FunctionTiming;
   uninstall(): void;
+}
+
+const EARLY_BUFFER_SYMBOL = Symbol.for('brc.diag.early');
+const EARLY_BUFFER_LIMIT = 2_000;
+
+interface EarlyRecord {
+  id: string;
+  kind: FunctionKind;
+  root: boolean;
+  started: number;
+  durationMs: number;
+  failed: boolean;
+  error?: unknown;
+}
+
+interface EarlyToken {
+  id: string;
+  kind: FunctionKind;
+  root: boolean;
+  started: number;
+}
+
+export interface EarlyFunctionBuffer {
+  begin(id: string, kind: FunctionKind, clock: number): EarlyToken;
+  end(token: EarlyToken, failed: boolean, clock: number, error?: unknown): void;
+  drain(): EarlyRecord[];
+  fork(): EarlyFunctionBuffer;
+  readonly count: number;
+}
+
+function createEarlyBuffer(): EarlyFunctionBuffer {
+  const records: EarlyRecord[] = [];
+  const active = new Map<string, number>();
+  return {
+    begin(id, kind, clock) {
+      const depth = active.get(id) ?? 0;
+      active.set(id, depth + 1);
+      return { id, kind, root: depth === 0, started: clock };
+    },
+    end(token, failed, clock, error) {
+      const depth = active.get(token.id) ?? 0;
+      if (depth <= 1) active.delete(token.id);
+      else active.set(token.id, depth - 1);
+      if (records.length >= EARLY_BUFFER_LIMIT) return;
+      records.push({
+        id: token.id,
+        kind: token.kind,
+        root: token.root,
+        started: token.started,
+        durationMs: Math.max(0, clock - token.started),
+        failed,
+        error,
+      });
+    },
+    drain() {
+      return records.splice(0, records.length);
+    },
+    fork() {
+      return createEarlyBuffer();
+    },
+    get count() {
+      return records.length;
+    },
+  };
+}
+
+const globalWithEarly = globalThis as unknown as Record<symbol, EarlyFunctionBuffer | undefined>;
+if (!globalWithEarly[EARLY_BUFFER_SYMBOL]) {
+  globalWithEarly[EARLY_BUFFER_SYMBOL] = createEarlyBuffer();
+}
+
+function earlyBuffer(): EarlyFunctionBuffer {
+  return globalWithEarly[EARLY_BUFFER_SYMBOL] ??= createEarlyBuffer();
 }
 
 /**
@@ -174,8 +310,9 @@ export function installFunctionProbe(
   timing: FunctionTiming,
   host: FunctionProbeHost = globalThis as unknown as FunctionProbeHost,
 ): FunctionProbeInstallation {
+  for (const record of earlyBuffer().drain()) timing.recordEarly(record);
   host.__brcDiagBegin = (id, kind) => timing.begin(id, kind === 'async' ? 'async' : 'sync');
-  host.__brcDiagEnd = (token, failed) => timing.end(token, failed === true);
+  host.__brcDiagEnd = (token, failed, error) => timing.end(token, failed === true, error);
   return {
     timing,
     uninstall: () => {
@@ -184,3 +321,29 @@ export function installFunctionProbe(
     },
   };
 }
+
+function installEarlyProbe(host: FunctionProbeHost): void {
+  if (host.__brcDiagBegin) return;
+  host.__brcDiagBegin = (id, kind) => {
+    const buffer = earlyBuffer();
+    const token = buffer.begin(id, kind === 'async' ? 'async' : 'sync', performance.now());
+    return token as unknown as FunctionTimingToken;
+  };
+  host.__brcDiagEnd = (token, failed, error) => {
+    if (!token) return;
+    const record = token as unknown as EarlyToken;
+    earlyBuffer().end(record, failed === true, performance.now(), error);
+  };
+}
+
+/** Discards buffered early calls and removes the global buffer. Used when diagnostics are disabled. */
+export function clearEarlyProbe(host: FunctionProbeHost = globalThis as unknown as FunctionProbeHost): void {
+  earlyBuffer().drain();
+  if (host.__brcDiagBegin) {
+    delete host.__brcDiagBegin;
+    delete host.__brcDiagEnd;
+  }
+  delete globalWithEarly[EARLY_BUFFER_SYMBOL];
+}
+
+installEarlyProbe(globalThis as unknown as FunctionProbeHost);

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, TraceRecorder, diagnosticsRetentionConfig, type CliResult, type DiagnosticStatus, type TraceSummary } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, TraceRecorder, diagnosticsRetentionConfig, type CliResult, type DiagnosticStatus, type TraceSummary } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -166,6 +166,7 @@ async function createAgentDiagnostics(services: AgentConnectionServices) {
     staleAfterMs: Math.max(settings.functionSnapshotMs * 3, 60_000),
   });
   const probe = functions ? installFunctionProbe(functions) : undefined;
+  if (!probe) clearEarlyProbe();
   const resources = functions ? new NodeResourceSampler({ intervalMs: settings.resourceSampleMs }) : undefined;
   const session = functions && resources ? new DiagnosticSession({
     service: 'agent', instanceId, store: diagnosticsStore.snapshots, functions, resources,

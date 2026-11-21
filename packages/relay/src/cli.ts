@@ -5,7 +5,7 @@ import path from 'node:path';
 import express from 'express';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
+import { appendRotatingLog, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, SqliteDiagnosticsStore, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolveSettings, startManagedControlServer, type ManagedControlServer } from 'brc-shared';
 import { mountRelayRoutes } from './adapters/http/app.js';
 import { loadConfig } from './adapters/http/config.js';
 import { RelayOAuthProvider, RelayClientsStore } from './adapters/http/oauth-provider.js';
@@ -37,6 +37,7 @@ if (functionTiming) {
   }
 }
 const probe = functionTiming ? installFunctionProbe(functionTiming) : undefined;
+if (!probe) clearEarlyProbe();
 const resourceSampler = diagnosticsEnabled
   ? new NodeResourceSampler({ intervalMs: settings.diagnostics.resourceSampleMs }) : undefined;
 const diagnosticStore = diagnosticsEnabled

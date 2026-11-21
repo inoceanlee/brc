@@ -18,6 +18,7 @@ const EMPTY_FUNCTIONS: FunctionTimingSnapshot = {
   entries: [],
   truncated: false,
   droppedIds: 0,
+  failures: [],
 };
 
 export interface RawProcessSample {
