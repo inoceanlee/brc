@@ -123,7 +123,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
   const logMaxBytes = async () => (
     resolveAgentSettings((await settingsStore.read()).settings, env).logs.rotateMiB * 1024 * 1024
   );
-  const fuzzySearchLogger = new FuzzySearchLogger(paths.logsDirectory, logMaxBytes);
+  const fuzzySearchLogger = new FuzzySearchLogger(paths.logsDirectory, logMaxBytes, logger);
   const dispatcher = createToolDispatcher({
     configManager, featureFlagManager, searchManager, toolHistory, usageTracker, fuzzySearchLogger,
     filesystem, terminal, transfer, currentClient, log: logger,
