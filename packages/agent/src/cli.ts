@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, diagnosticsRetentionConfig, type CliResult } from 'brc-shared';
+import { cliFailure, cliSuccess, renderCliResult, createDiagnosticsRuntime, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, resolveDiagnosticsDbPath, SqliteDiagnosticsStore, SqliteToolHistoryStore, TraceRecorder, diagnosticsRetentionConfig, type CliResult, type DiagnosticStatus, type TraceSummary } from 'brc-shared';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -37,6 +38,8 @@ import { createToolDispatcher } from './adapters/mcp/dispatcher.js';
 import { AgentContext } from './context.js';
 
 import type { AgentCredentials, AgentServices } from './composition.js';
+
+const startupTrace = new TraceRecorder('start', `agent-${randomUUID()}`);
 
 export function createAgentCredentials(env: NodeJS.ProcessEnv): AgentCredentials {
   const paths = resolveAgentPaths(env);
@@ -174,6 +177,9 @@ async function createAgentDiagnostics(services: AgentConnectionServices) {
   let stopped: Promise<void> | undefined;
   return {
     ...runtime,
+    recordTrace(summary: TraceSummary): number {
+      return enabled ? diagnosticsStore.recordTrace(summary) : 0;
+    },
     stop() {
       stopped ??= runtime.stop().finally(() => { probe?.uninstall(); diagnosticsStore.close(); });
       return stopped;
@@ -188,7 +194,9 @@ let quiet = false;
 let verbose = false;
 
 async function run(): Promise<CliResult | null> {
+  const parseSpan = startupTrace.begin('parse-arguments', 'agent');
   const invocation = parseAgentInvocation(argv);
+  parseSpan.end();
   format = invocation.format;
   quiet = invocation.quiet;
   verbose = invocation.verbose;
@@ -202,13 +210,29 @@ async function run(): Promise<CliResult | null> {
   if (invocation.command !== 'connect' && (invocation.command !== 'config allow-dir' || invocation.preview)) {
     return runAgentLocalCommand(invocation);
   }
+  const serviceSpan = startupTrace.begin('configure-services', 'agent');
   const services = await configureAgentServices();
+  serviceSpan.end();
   if (invocation.command !== 'connect') return runAgentLocalCommand(invocation, services.configManager);
+  const diagnosticsSpan = startupTrace.begin('diagnostics-init', 'agent');
   const { runAgentConnection } = await import('./adapters/transport/connection.js');
   const diagnostics = await createAgentDiagnostics(services);
+  diagnosticsSpan.end();
+  const connectionSpan = startupTrace.begin('connection-ready', 'agent');
+  let recorded = false;
+  const recordStartup = (status: DiagnosticStatus, errorCode?: string) => {
+    if (recorded) return;
+    recorded = true;
+    diagnostics.recordTrace(startupTrace.finish(status, errorCode));
+  };
   try {
-    await runAgentConnection(invocation, services, diagnostics, createServer());
+    await runAgentConnection(invocation, services, diagnostics, createServer(), () => {
+      connectionSpan.end();
+      recordStartup('ok');
+    });
   } catch (error) {
+    connectionSpan.end('failed');
+    recordStartup('failed', 'AGENT_CONNECT_FAILED');
     try {
       await diagnostics.stop();
     } catch (shutdownError) {

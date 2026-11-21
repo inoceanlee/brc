@@ -72,6 +72,7 @@ export async function runAgentConnection(
   services: AgentConnectionServices,
   diagnostics: InjectedDiagnosticsRuntime,
   controlServer: Server,
+  onReady?: () => void,
 ): Promise<void> {
   if (inv.offline) throw new AgentUsageError('Connecting requires network access; remove --offline.');
   const relayArg = inv.relay || services.env.BRC_RELAY;
@@ -210,6 +211,7 @@ export async function runAgentConnection(
       stop: () => stop(),
     });
     await controlStarting;
+    onReady?.();
     let creds: DeviceCredentials;
     if (manual) creds = manual;
     else if (saved && (!relay || saved.relayUrl === relay)) {
