@@ -23,13 +23,14 @@ test('release automation advertises a safe dry-run mode', () => {
   assert.match(result.stdout, /without uploading or tagging/);
 });
 
-test('dry-run retains package and isolated E2E validation', () => {
+test('release validates package install and isolated E2E without rerunning unit tests', () => {
   const source = readFileSync(script, 'utf8');
-  const unit = source.indexOf("await runStage('Unit tests'");
+  assert.doesNotMatch(source, /runStage\('Unit tests'/);
+  assert.match(source, /runStage\('Package install and upgrade tests'/);
   const packageTest = source.indexOf("await runStage('Package install and upgrade tests'");
   const e2e = source.indexOf("await runStage('Traefik OAuth and MCP E2E'");
-  const dryRunExit = source.indexOf('if (dryRun) {', unit);
-  assert.ok(unit >= 0 && unit < packageTest && packageTest < e2e && e2e < dryRunExit);
+  const dryRunExit = source.indexOf('if (dryRun) {', packageTest);
+  assert.ok(packageTest >= 0 && packageTest < e2e && e2e < dryRunExit);
 });
 
 test('release automation rejects unsupported arguments before publishing', () => {

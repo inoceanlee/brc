@@ -203,7 +203,6 @@ async function release() {
       const nextArchive = path.join(output, 'next-patch', filename.replace(version, nextPatch(version)));
       if (!existsSync(nextArchive)) throw new Error('Missing upgrade test archive.');
       const env = { ...process.env, BRC_TRAEFIK_TEST_BINARY: traefik, BRC_PACKAGE_TARBALL: archive, BRC_PACKAGE_UPDATED_TARBALL: nextArchive };
-      await runStage('Unit tests', () => command('pnpm', ['test:unit'], { env }));
       await runStage('Package install and upgrade tests', () => command('pnpm', ['test:package'], { env }));
       await runStage('Traefik OAuth and MCP E2E', () => command('pnpm', ['test:e2e'], { env }));
       if (dryRun) {
@@ -213,7 +212,7 @@ async function release() {
       await runStage('Inspect npm package', () => command('npm', ['publish', archive, '--dry-run', '--access', 'public', '--registry', RELEASE_CONFIG.registry]));
       return store.save({
         archive, revision, name: manifest.name, version, tag, buildFingerprint,
-        validations: { unit: true, package: true, e2e: true, dryRun: true },
+        validations: { package: true, e2e: true, dryRun: true },
       });
     });
   }

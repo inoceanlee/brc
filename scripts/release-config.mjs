@@ -8,7 +8,7 @@ export const RELEASE_CONFIG = Object.freeze({
   tagPrefix: 'brc-v',
   registry: 'https://registry.npmjs.org/',
   artifactDirectory: path.join(workspaceRoot, 'artifacts', 'releases'),
-  validationNames: Object.freeze(['unit', 'package', 'e2e', 'dryRun']),
+  validationNames: Object.freeze(['package', 'e2e', 'dryRun']),
   progressIntervalMs: 120,
   progressHeartbeatMs: 15000,
   registryAttempts: 240,
