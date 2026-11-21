@@ -3,6 +3,7 @@ import { Writable } from 'node:stream';
 
 export { allowsInteractiveInput } from '../adapters/terminal/interaction.js';
 import { allowsInteractiveInput, type InteractiveTerminal } from '../adapters/terminal/interaction.js';
+import { UsageError } from './parser.js';
 
 export interface AdministratorPrompt {
   askUsername(signal?: AbortSignal): Promise<string>;
@@ -28,7 +29,10 @@ export async function collectAdministratorCredentials(
   signal?.throwIfAborted();
   const suppliedPassword = env.BRC_ADMIN_PASSWORD;
   if (suppliedPassword === undefined && !interactive) {
-    throw new Error('First setup requires an interactive terminal to set the administrator password.');
+    throw new UsageError(
+      'Non-interactive setup requires BRC_ADMIN_PASSWORD. Set BRC_ADMIN_PASSWORD or run brc setup without --no-input.',
+      'brc help setup',
+    );
   }
   let username = env.BRC_ADMIN_USER?.trim();
   if (!username && interactive) username = (await prompt.askUsername(signal)).trim();

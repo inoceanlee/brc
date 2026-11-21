@@ -168,6 +168,15 @@ function completeCommand(result: CommandResult, parsed: ParsedCommand, deps: Cli
   return 0;
 }
 
+function repairCommand(code: string): string {
+  if (code === 'USAGE_ERROR') return 'brc help';
+  if (code === 'PERMISSION_DENIED') return 'brc setup';
+  if (code === 'NOT_FOUND') return 'brc status';
+  if (code === 'CONFLICT') return 'brc stop';
+  if (code === 'INTERRUPTED') return 'brc status';
+  return 'brc diagnose logs --json';
+}
+
 function renderFailure(error: unknown, parsed: ParsedCommand | undefined, format: ParsedCommand['output'], deps: CliDependencies): number {
   const exitCode = errorExitCode(error);
   if ((exitCode === 130 || exitCode === 143) && !(error instanceof AggregateError)) return exitCode;
@@ -176,11 +185,12 @@ function renderFailure(error: unknown, parsed: ParsedCommand | undefined, format
   const details = parsed?.debug || parsed?.verbose
     ? error instanceof Error ? { name: error.name, stack: error.stack } : undefined
     : undefined;
+  const explicitRun = error instanceof UsageError ? error.run : undefined;
   const failure = cliFailure({
     code,
     exitCode: exitCode as Exclude<CliExitCode, 0>,
     message: errorMessage(error),
-    run: 'brc help',
+    run: explicitRun || repairCommand(code),
     retryable: exitCode === 1,
     ...(details ? { details } : {}),
   });
@@ -206,7 +216,7 @@ async function dispatch(
     case 'help':
       return renderOutput(cliSuccess(parsed.output === 'json'
         ? { commands: COMMAND_SPECS, version: readProductVersion() }
-        : helpText(parsed.args[0] as CliCommandName | undefined)), parsed, deps);
+        : helpText(parsed.args[0] as CliCommandName | undefined, parsed.helpBrief)), parsed, deps);
     case 'version':
       return renderOutput(cliSuccess(parsed.output === 'json'
         ? { version: readProductVersion() } : readProductVersion()), parsed, deps);
@@ -223,6 +233,9 @@ async function dispatch(
           const rows = parsed.diagnose === 'functions'
             ? await readFunctionDiagnostics(store.snapshots)
             : await readResourceDiagnostics(store.snapshots);
+          if (rows.length === 0 && parsed.output !== 'table') {
+            return renderOutput(cliSuccess([]), parsed, deps);
+          }
           const message = parsed.diagnose === 'functions'
             ? 'No function statistics are available. Start a managed service with diagnostics enabled.'
             : 'No resource samples are available. Start a managed service with diagnostics enabled.';
@@ -409,21 +422,37 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
     if (jsonErrors.length) {
       try {
         const value = JSON.parse(jsonErrors[0]) as unknown;
-        if (value && typeof value === 'object' && !Array.isArray(value) && 'code' in value) {
-          primary = value as Record<string, unknown>;
+        if (value && typeof value === 'object' && !Array.isArray(value) && 'error' in value
+          && value.error && typeof value.error === 'object' && !Array.isArray(value.error)) {
+          primary = value.error as Record<string, unknown>;
           jsonErrors.shift();
         }
       } catch {
         // Non-JSON messages are retained as diagnostics.
       }
     }
+    const code = typeof primary?.code === 'string' ? primary.code
+      : cleanup?.code ?? trace?.code ?? 'COMMAND_DIAGNOSTICS';
+    const message = typeof primary?.message === 'string' ? primary.message
+      : cleanup?.message ?? trace?.message ?? 'BRC command diagnostics.';
+    const run = typeof primary?.run === 'string' ? primary.run : repairCommand(code);
+    const retryable = typeof primary?.retryable === 'boolean' ? primary.retryable : exitCode === 1;
+    const details = {
+      ...(primary?.details !== undefined ? { command: primary.details } : {}),
+      ...(cleanup ? { cleanup } : {}),
+      ...(trace ? { trace } : {}),
+      ...(jsonErrors.length ? { diagnostics: jsonErrors } : {}),
+    };
     if (primary || cleanup || trace || jsonErrors.length) {
       deps.writeError(JSON.stringify({
-        ...(primary ?? { code: cleanup?.code ?? trace?.code ?? 'COMMAND_DIAGNOSTICS', command_exit_code: exitCode,
-          ...(cleanup ? { message: cleanup.message } : trace ? { message: trace.message } : {}) }),
-        ...(cleanup ? { cleanup } : {}),
-        ...(trace ? { trace } : {}),
-        ...(jsonErrors.length ? { diagnostics: jsonErrors } : {}),
+        error: {
+          code,
+          exit_code: typeof primary?.exit_code === 'number' ? primary.exit_code : exitCode,
+          message,
+          run,
+          retryable,
+          ...(Object.keys(details).length ? { details } : {}),
+        },
       }));
     }
   }
@@ -748,7 +777,8 @@ function isMainModule(): boolean {
     return false;
   }
 }
-if (isMainModule()) {
+async function entry(): Promise<void> {
+  if (!isMainModule()) return;
   if (process.env.BRC_MANAGED_SERVICE === 'traefik' && process.argv.includes('--run-traefik')) {
     const paths = resolveBrcPaths(process.env);
     const { settings } = await readSettings(paths, process.env);
@@ -800,3 +830,18 @@ if (isMainModule()) {
     await main();
   }
 }
+
+export function crashReport(error: unknown, args: string[]): string {
+  return [
+    `Crash: unexpected BRC failure: ${errorMessage(error)}`,
+    `Version: ${readProductVersion()}`,
+    `Platform: ${process.platform}/${process.arch}`,
+    `Command: brc ${args.join(' ')}`.trimEnd(),
+    'Report: https://github.com/inoceanlee/brc/issues/new',
+  ].join('\n');
+}
+
+entry().catch((error) => {
+  process.exitCode = 1;
+  console.error(crashReport(error, process.argv.slice(2)));
+});

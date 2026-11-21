@@ -202,9 +202,9 @@ console.log(JSON.stringify(results));
     assert.equal(item.exitCode, 1, item.format);
     if (item.format === 'json') {
       assert.deepEqual(item.output, []);
-      const error = JSON.parse(item.errors.join('\n'));
+      const error = JSON.parse(item.errors.join('\n')).error;
       assert.equal(error.exit_code, 1);
-      assert.equal(error.details.services[0].state, 'degraded');
+      assert.equal(error.details.command.services[0].state, 'degraded');
     }
   }
 });
@@ -245,9 +245,9 @@ console.log(JSON.stringify({ exitCode, output, errors }));
 `));
   assert.equal(result.exitCode, 1);
   assert.deepEqual(result.output, []);
-  const error = JSON.parse(result.errors.join('\n'));
-  assert.equal(error.details.removed, 1);
-  assert.equal(error.details.failures[0].reason, 'denied');
+  const error = JSON.parse(result.errors.join('\n')).error;
+  assert.equal(error.details.command.removed, 1);
+  assert.equal(error.details.command.failures[0].reason, 'denied');
 });
 
 test('JSON errors retain cleanup-preserved corrupt records in one error object', async (t) => {
@@ -259,9 +259,9 @@ test('JSON errors retain cleanup-preserved corrupt records in one error object',
   const result = runCliProcess(['--json', '--not-real'], root);
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr);
+  const error = JSON.parse(result.stderr).error;
   assert.equal(error.exit_code, 2);
-  assert.ok(error.cleanup.report.preserved.some((item) => item.path === record));
+  assert.ok(error.details.cleanup.report.preserved.some((item) => item.path === record));
   assert.equal(await readFile(record, 'utf8'), '{invalid');
 });
 
@@ -287,7 +287,7 @@ console.log(JSON.stringify(results));
     assert.deepEqual(result.calls, ['stop', 'remove']);
   }
   assert.match(results[0].errors.join('\n'), /denied/);
-  assert.match(JSON.parse(results[1].errors.join('\n')).cleanup.message, /denied/);
+  assert.match(JSON.parse(results[1].errors.join('\n')).error.details.cleanup.message, /denied/);
 });
 
 test('JSON lifecycle conflicts retain service and reason with exit code 5', () => {
@@ -302,7 +302,7 @@ console.log(JSON.stringify({ exitCode, output, errors }));
 `));
   assert.equal(result.exitCode, 5);
   assert.deepEqual(result.output, []);
-  const error = JSON.parse(result.errors.join('\n'));
+  const error = JSON.parse(result.errors.join('\n')).error;
   assert.equal(error.code, 'CONFLICT');
   assert.match(error.message, /agent: process identity changed/);
 });
@@ -318,7 +318,7 @@ const exitCode = await runCli(['stop', '--json'], {
 console.log(JSON.stringify({ exitCode, errors }));
 `));
   assert.equal(result.exitCode, 130);
-  const error = JSON.parse(result.errors.join('\n'));
+  const error = JSON.parse(result.errors.join('\n')).error;
   assert.equal(error.exit_code, 130);
   assert.match(error.message, /agent: ownership conflict/);
 });
@@ -342,7 +342,7 @@ await import(${cliUrl});
   });
   assert.equal(result.status, 130, result.stderr);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr);
+  const error = JSON.parse(result.stderr).error;
   assert.equal(error.exit_code, 130);
   assert.match(error.message, /agent: ownership conflict/);
 });
@@ -362,10 +362,10 @@ console.log(JSON.stringify({ exitCode, output, errors }));
   assert.equal(result.exitCode, 1);
   assert.deepEqual(result.output, []);
   assert.equal(result.errors.length, 1);
-  const failure = JSON.parse(result.errors[0]);
+  const failure = JSON.parse(result.errors[0]).error;
   assert.equal(failure.message, 'start failed');
   assert.equal(failure.exit_code, 1);
-  assert.match(failure.cleanup.message, /cleanup failed/);
+  assert.match(failure.details.cleanup.message, /cleanup failed/);
 });
 
 test('read-only JSON command skips cleanup; invalid input still reports cleanup failure', () => {
@@ -388,9 +388,9 @@ console.log(JSON.stringify(results));
   assert.deepEqual(results[0].errors, [], 'read-only command must not invoke cleanup');
   assert.equal(results[1].exitCode, 2);
   assert.deepEqual(results[1].output, []);
-  const usage = JSON.parse(results[1].errors.join('\n'));
+  const usage = JSON.parse(results[1].errors.join('\n')).error;
   assert.equal(usage.exit_code, 2);
-  assert.match(usage.cleanup.message, /cleanup failed/);
+  assert.match(usage.details.cleanup.message, /cleanup failed/);
 });
 
 test('successful JSON mutations retain success when automatic cleanup fails', () => {
@@ -409,9 +409,9 @@ console.log(JSON.stringify({ exitCode, output, errors, mutations }));
   assert.equal(result.exitCode, 0);
   assert.equal(result.mutations, 1);
   assert.equal(JSON.parse(result.output[0]).status, 'success');
-  const warning = JSON.parse(result.errors.join('\n'));
+  const warning = JSON.parse(result.errors.join('\n')).error;
   assert.equal(warning.code, 'CLEANUP_FAILED');
-  assert.equal(warning.command_exit_code, 0);
+  assert.equal(warning.exit_code, 0);
 });
 
 test('structured command failures retain their details and exit code when cleanup fails', () => {
@@ -428,10 +428,10 @@ const exitCode = await runCli(['start', '--json'], {
 console.log(JSON.stringify({ exitCode, errors }));
 `));
   assert.equal(result.exitCode, 5);
-  const failure = JSON.parse(result.errors.join('\n'));
+  const failure = JSON.parse(result.errors.join('\n')).error;
   assert.equal(failure.code, 'CONFLICT');
-  assert.deepEqual(failure.details, { service: 'relay' });
-  assert.match(failure.cleanup.message, /cleanup failed/);
+  assert.deepEqual(failure.details.command, { service: 'relay' });
+  assert.match(failure.details.cleanup.message, /cleanup failed/);
 });
 
 test('JSON preserves trace and cleanup failures without replacing command results', () => {
@@ -460,15 +460,15 @@ console.log(JSON.stringify(results));
   for (const [index, exitCode] of [0, 5, 130].entries()) {
     const result = results[index];
     assert.equal(result.exitCode, exitCode);
-    const diagnostic = JSON.parse(result.errors.join('\n'));
-    assert.match(diagnostic.cleanup.message, /cleanup failed/);
-    assert.match(diagnostic.trace.message, /trace storage failed/);
-    assert.ok(diagnostic.diagnostics.some((line) => line.includes('Startup total')));
+    const diagnostic = JSON.parse(result.errors.join('\n')).error;
+    assert.match(diagnostic.details.cleanup.message, /cleanup failed/);
+    assert.match(diagnostic.details.trace.message, /trace storage failed/);
+    assert.ok(diagnostic.details.diagnostics.some((line) => line.includes('Startup total')));
     if (exitCode === 5) {
       assert.equal(diagnostic.code, 'CONFLICT');
       assert.equal(diagnostic.message, 'service busy');
     } else {
-      assert.equal(diagnostic.command_exit_code, exitCode);
+      assert.equal(diagnostic.exit_code, exitCode);
     }
   }
   assert.equal(JSON.parse(results[0].output[0]).status, 'success');
@@ -491,10 +491,10 @@ console.log(JSON.stringify({ exitCode, output, errors }));
 `));
   assert.equal(result.exitCode, 0);
   assert.equal(JSON.parse(result.output[0]).status, 'success');
-  const warning = JSON.parse(result.errors.join('\n'));
+  const warning = JSON.parse(result.errors.join('\n')).error;
   assert.equal(warning.code, 'TRACE_WRITE_FAILED');
-  assert.equal(warning.command_exit_code, 0);
-  assert.match(warning.trace.message, /trace storage failed/);
+  assert.equal(warning.exit_code, 0);
+  assert.match(warning.details.trace.message, /trace storage failed/);
 });
 
 test('automatic cleanup reports do not corrupt JSON usage errors', async (t) => {
@@ -502,7 +502,7 @@ test('automatic cleanup reports do not corrupt JSON usage errors', async (t) => 
   const result = runCliProcess(['--json', '--not-real'], root);
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  assert.equal(JSON.parse(result.stderr).exit_code, 2);
+  assert.equal(JSON.parse(result.stderr).error.exit_code, 2);
   assert.equal(existsSync(expiredLog), false);
 });
 
@@ -551,8 +551,8 @@ test('noninteractive first setup fails before creating a new identity', async (t
   const root = await mkdtemp(path.join(os.tmpdir(), 'brc-cli-first-setup-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = runCliProcess(['setup'], root);
-  assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /interactive terminal.*administrator password/i);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /BRC_ADMIN_PASSWORD/);
   assert.equal(existsSync(path.join(root, 'data', 'relay.sqlite')), false);
 });
 
@@ -572,7 +572,7 @@ await import(${cliUrl});
   });
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr);
+  const error = JSON.parse(result.stderr).error;
   assert.equal(error.code, 'USAGE_ERROR');
   assert.match(error.message, /interactive.*JSON/i);
   assert.match(error.message, /BRC_ADMIN_PASSWORD/);
@@ -597,7 +597,7 @@ await import(${cliUrl});
   });
   assert.equal(result.status, 2, result.stderr);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr);
+  const error = JSON.parse(result.stderr).error;
   assert.match(error.message, /interactive.*JSON/i);
   assert.match(error.message, /--yes/);
   assert.equal(await readFile(marker, 'utf8'), 'keep');
@@ -687,7 +687,7 @@ test('first setup without a terminal or supplied password refuses to initialize'
   await assert.rejects(collectAdministratorCredentials({}, false, {
     askUsername: async () => { throw new Error('must not prompt'); },
     askHiddenPassword: async () => { throw new Error('must not prompt'); },
-  }), /interactive terminal.*administrator password/i);
+  }), /BRC_ADMIN_PASSWORD/);
 });
 
 test('Traefik progress renders real byte percentages and stops on completion', async () => {
@@ -950,7 +950,7 @@ console.log(JSON.stringify({ exitCode, aborted, cleaned, error: errors[0] }));
   assert.equal(value.exitCode, 1);
   assert.equal(value.aborted, true);
   assert.equal(value.cleaned, true);
-  const error = JSON.parse(value.error);
+  const error = JSON.parse(value.error).error;
   assert.equal(error.exit_code, 1);
   assert.match(error.message, /timed out after 25 ms/i);
 });
@@ -983,7 +983,7 @@ await import(${cliUrl});
   });
   assert.equal(result.status, 1, result.stderr);
   assert.equal(result.stdout, '');
-  const error = JSON.parse(result.stderr);
+  const error = JSON.parse(result.stderr).error;
   assert.match(error.message, /timed out/i);
   assert.doesNotMatch(error.message, /did not receive cancellation|started after cancellation/);
 });

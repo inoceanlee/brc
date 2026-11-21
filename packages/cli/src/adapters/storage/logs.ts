@@ -108,7 +108,7 @@ export async function showLogs(
   }
   if (!logDirectoryExists) {
     writeError(component ? `${component} log not found.` : 'No service logs were found.');
-    return 1;
+    return 0;
   }
 
   const components = component ? [component] : LOG_COMPONENTS;
@@ -127,7 +127,7 @@ export async function showLogs(
   }
   if (!found && !failed) {
     writeError(component ? `${component} log not found.` : 'No service logs were found.');
-    return 1;
+    return 0;
   }
   return failed ? 1 : 0;
 }

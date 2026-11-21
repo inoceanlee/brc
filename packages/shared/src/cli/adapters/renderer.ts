@@ -50,12 +50,14 @@ export function renderCliResult(
     if (!error) throw new Error('CLI error result requires an error object.');
     if (options.format === 'json') {
       streams.stderr(JSON.stringify({
-        code: error.code,
-        exit_code: error.exitCode,
-        message: error.message,
-        run: error.run,
-        retryable: error.retryable,
-        ...(error.details === undefined ? {} : { details: error.details }),
+        error: {
+          code: error.code,
+          exit_code: error.exitCode,
+          message: error.message,
+          run: error.run,
+          retryable: error.retryable,
+          ...(error.details === undefined ? {} : { details: error.details }),
+        },
       }) + '\n');
     } else {
       streams.stderr(error.message + '\n' + (error.run ? 'Run: ' + error.run + '\n' : ''));
