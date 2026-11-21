@@ -222,8 +222,13 @@ async function run(): Promise<CliResult | null> {
   let recorded = false;
   const recordStartup = (status: DiagnosticStatus, errorCode?: string) => {
     if (recorded) return;
-    recorded = true;
-    diagnostics.recordTrace(startupTrace.finish(status, errorCode));
+    try {
+      diagnostics.recordTrace(startupTrace.finish(status, errorCode));
+      recorded = true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Agent startup diagnostic write failed: ${detail}\n`);
+    }
   };
   try {
     await runAgentConnection(invocation, services, diagnostics, createServer(), () => {
