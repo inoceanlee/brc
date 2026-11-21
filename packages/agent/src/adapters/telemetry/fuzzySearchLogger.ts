@@ -1,6 +1,10 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { appendRotatingLog } from 'brc-shared';
+import { appendRotatingLog, type TextLogPort } from 'brc-shared';
+
+function describeError(error: unknown): string {
+    return error instanceof Error ? (error.stack ?? error.message) : String(error);
+}
 
 export interface FuzzySearchLogEntry {
     timestamp: Date;
@@ -32,7 +36,7 @@ export class FuzzySearchLogger {
     private logPath: string;
     private initialized = false;
 
-    constructor(logsDirectory: string, private readonly maxBytes: number | (() => Promise<number>)) {
+    constructor(logsDirectory: string, private readonly maxBytes: number | (() => Promise<number>), private readonly textLog: TextLogPort) {
         this.logPath = path.join(logsDirectory, 'fuzzy-search.log');
     }
 
@@ -55,7 +59,7 @@ export class FuzzySearchLogger {
 
             this.initialized = true;
         } catch (error) {
-            console.error('Failed to initialize fuzzy search log file:', error);
+            this.textLog.error(`Failed to initialize fuzzy search log file: ${describeError(error)}`);
             throw error;
         }
     }
@@ -83,7 +87,7 @@ export class FuzzySearchLogger {
 
             await appendRotatingLog(this.logPath, logLine + '\n', maxBytes);
         } catch (error) {
-            console.error('Failed to write to fuzzy search log:', error);
+            this.textLog.error(`Failed to write to fuzzy search log: ${describeError(error)}`);
         }
     }
 
@@ -100,7 +104,7 @@ export class FuzzySearchLogger {
             const limit = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
             return limit === 0 ? [] : lines.slice(-limit);
         } catch (error) {
-            console.error('Failed to read fuzzy search logs:', error);
+            this.textLog.error(`Failed to read fuzzy search logs: ${describeError(error)}`);
             return [];
         }
     }
@@ -114,7 +118,7 @@ export class FuzzySearchLogger {
             await fs.writeFile(this.logPath, headers + '\n');
             process.stderr.write('Agent fuzzy-search diagnostics cleared.\n');
         } catch (error) {
-            console.error('Failed to clear fuzzy search log:', error);
+            this.textLog.error(`Failed to clear fuzzy search log: ${describeError(error)}`);
         }
     }
 }

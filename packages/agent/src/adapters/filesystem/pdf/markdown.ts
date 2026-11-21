@@ -284,7 +284,7 @@ export async function parsePdfToMarkdown(source: string, pageNumbers: number[] |
         const data = await loadPdfToBuffer(source);
 
 
-        return await pdf2md(new Uint8Array(data), pageNumbers);
+        return await pdf2md(new Uint8Array(data), pageNumbers, pdfLogPort);
 
     } catch (error) {
         pdfLogPort.error(`Error converting PDF to Markdown: ${error instanceof Error ? error.message : String(error)}`);

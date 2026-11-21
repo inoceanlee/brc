@@ -1,6 +1,5 @@
 import { getDocumentProxy, extractImages } from 'unpdf';
 import { DEFAULT_PDF_IMAGE_BATCH_SIZE, type TextLogPort } from 'brc-shared';
-import { textLogToStderr } from '../../telemetry/logger.js';
 
 export interface ImageInfo {
     /** Object ID within PDF */
@@ -42,9 +41,9 @@ export interface ImageCompressionOptions {
  */
 export async function extractImagesFromPdf(
     pdfBuffer: Uint8Array,
-    pageNumbers?: number[],
-    compressionOptions: ImageCompressionOptions = {},
-    log: TextLogPort = textLogToStderr(),
+    pageNumbers: number[] | undefined,
+    compressionOptions: ImageCompressionOptions,
+    log: TextLogPort,
 ): Promise<Record<number, ImageInfo[]>> {
     const pdfDocument = await getDocumentProxy(pdfBuffer);
 
@@ -145,8 +144,8 @@ async function convertRawImageToBase64(
     width: number,
     height: number,
     channels: number,
-    options: ImageCompressionOptions = {},
-    log: TextLogPort = textLogToStderr(),
+    options: ImageCompressionOptions,
+    log: TextLogPort,
 ): Promise<{ data: string; mimeType: string } | null> {
     const {
         format = 'webp',
