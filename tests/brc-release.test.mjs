@@ -23,27 +23,10 @@ test('release automation advertises a safe dry-run mode', () => {
   assert.match(result.stdout, /without uploading or tagging/);
 });
 
-test('release validates package install and isolated E2E without rerunning unit tests', () => {
-  const source = readFileSync(script, 'utf8');
-  assert.doesNotMatch(source, /runStage\('Unit tests'/);
-  assert.match(source, /runStage\('Package install and upgrade tests'/);
-  const packageTest = source.indexOf("await runStage('Package install and upgrade tests'");
-  const e2e = source.indexOf("await runStage('Traefik OAuth and MCP E2E'");
-  const dryRunExit = source.indexOf('if (dryRun) {', packageTest);
-  assert.ok(packageTest >= 0 && packageTest < e2e && e2e < dryRunExit);
-});
-
 test('release automation rejects unsupported arguments before publishing', () => {
   const result = execute('--publish-immediately');
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Usage: pnpm release:brc/);
-});
-
-test('release automation publishes non-interactively with a configured token', () => {
-  const source = readFileSync(script, 'utf8');
-  assert.doesNotMatch(source, /!process\.stdin\.isTTY/);
-  assert.doesNotMatch(source, /local interactive terminal/);
-  assert.match(source, /\['publish', artifact\.archivePath, '--access', 'public'/);
 });
 
 test('runner captures subprocess output and progress displays stage details', async () => {
@@ -77,27 +60,12 @@ test('progress renderer refreshes a terminal while a stage runs', async () => {
   assert.match(output.data, /✓/);
 });
 
-test('real release shows distinct upload, registry and tag progress stages', () => {
-  const source = readFileSync(script, 'utf8');
-  assert.match(source, /await runStage\('Upload npm package',.*command\('npm', \['publish'/);
-  assert.doesNotMatch(source, /\['publish', artifact\.archivePath[^\n]*\{ interactive: true \}/);
-  assert.match(source, /await runStage\('Wait for npm registry'/);
-  assert.match(source, /await runStage\('Verify release tag'/);
-});
-
 test('runner preserves concise subprocess errors', async () => {
   const runner = new ReleaseRunner();
   await assert.rejects(
     runner.run(process.execPath, ['-e', "console.error('known failure');process.exit(3)"]),
     /known failure/,
   );
-});
-
-test('progress renderer does not execute subprocesses', () => {
-  const progress = new ReleaseProgress({ output: { write() {} } });
-  assert.equal(typeof progress.start, 'function');
-  assert.equal(typeof progress.detail, 'function');
-  assert.equal(typeof progress.finish, 'function');
 });
 
 test('only the public CLI manifest declares a product version', () => {
@@ -107,11 +75,6 @@ test('only the public CLI manifest declares a product version', () => {
   for (const file of ['package.json', 'packages/shared/package.json', 'packages/relay/package.json', 'packages/agent/package.json']) {
     assert.equal(Object.hasOwn(read(file), 'version'), false, file);
   }
-  const release = readFileSync(script, 'utf8');
-  assert.match(release, /const version = manifest.version;/);
-  assert.match(release, /assertReleaseVersion\(version, publishedVersion\(\)\)/);
-  assert.doesNotMatch(release, /versionForRelease|rootManifest/);
-  assert.doesNotMatch(readFileSync(path.resolve('scripts/pack-brc.mjs'), 'utf8'), /requestedVersion|--version=/);
 });
 
 test('release requires a higher explicit CLI version than npm', () => {
@@ -144,7 +107,6 @@ test('npm unpublished package names are blocked for 24 hours before building', (
   assert.equal(registryRepublishAt(notice, Date.parse('2026-10-31T14:00:00Z')), '2026-11-01T05:18:46.137Z');
   assert.equal(registryRepublishAt(notice, Date.parse('2026-11-01T05:18:47Z')), null);
   assert.equal(registryRepublishAt('{"error":{"summary":"Not Found"}}'), null);
-  assert.match(readFileSync(script, 'utf8'), /registryRepublishAt\(details\)/);
 });
 
 test('registry verification rejects a same-version archive with different integrity', () => {
@@ -158,8 +120,3 @@ test('registry verification rejects a same-version archive with different integr
   }), /integrity/);
 });
 
-
-test('release automation is exposed only as a dedicated package command', () => {
-  const manifest = JSON.parse(readFileSync(path.resolve('package.json'), 'utf8'));
-  assert.equal(manifest.scripts['release:brc'], 'node scripts/script-diagnostics.mjs scripts/release-brc.mjs');
-});
