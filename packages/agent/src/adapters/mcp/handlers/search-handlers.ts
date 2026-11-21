@@ -3,7 +3,7 @@ import {
   StartSearchArgsSchema,
   GetMoreSearchResultsArgsSchema,
   StopSearchArgsSchema
-} from '../schemas.js';
+} from '../../../core/tools/schemas.js';
 import { ServerResult } from '../../../core/types.js';
 import type { Capture } from '../../telemetry/capture.js';
 

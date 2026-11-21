@@ -28,7 +28,7 @@ import {
     MoveFileArgsSchema,
     GetFileInfoArgsSchema,
     WritePdfArgsSchema
-} from '../schemas.js';
+} from '../../../core/tools/schemas.js';
 import path from 'path';
 import os from 'os';
 import { resolvePreviewFileType } from '../../../core/ui/file-preview/shared/preview-file-types.js';

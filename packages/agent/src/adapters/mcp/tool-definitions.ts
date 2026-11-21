@@ -16,7 +16,7 @@ import {
   GiveFeedbackArgsSchema, StartSearchArgsSchema, GetMoreSearchResultsArgsSchema,
   StopSearchArgsSchema, ListSearchesArgsSchema, GetPromptsArgsSchema,
   GetRecentToolCallsArgsSchema, WritePdfArgsSchema,
-} from './schemas.js';
+} from '../../core/tools/schemas.js';
 
 const CMD_PREFIX_DESCRIPTION = `This command can be referenced as "BRC: ..." or "use Better Remote Commander (BRC) to ..." in your instructions.`;
 

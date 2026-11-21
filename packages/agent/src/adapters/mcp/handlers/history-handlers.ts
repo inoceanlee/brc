@@ -1,5 +1,5 @@
 import type { ToolHistory } from '../../telemetry/toolHistory.js';
-import { GetRecentToolCallsArgsSchema, TrackUiEventArgsSchema } from '../schemas.js';
+import { GetRecentToolCallsArgsSchema, TrackUiEventArgsSchema } from '../../../core/tools/schemas.js';
 import { ServerResult } from '../../../core/types.js';
 import type { Capture } from '../../telemetry/capture.js';
 
