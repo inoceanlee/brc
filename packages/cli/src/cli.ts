@@ -85,6 +85,25 @@ async function createProcessDiagnostics(
 export type CliLogComponent = 'relay' | 'agent' | 'traefik' | 'cli';
 type CommandResult = number | void | CliResult;
 
+const READ_ONLY_CONFIG_ACTIONS = new Set(['show', 'get', 'path']);
+
+function isReadOnlyCommand(parsed: ParsedCommand | undefined): boolean {
+  if (!parsed) return true;
+  switch (parsed.name) {
+    case 'help':
+    case 'version':
+    case 'status':
+    case 'logs':
+    case 'diagnose':
+    case 'completion':
+      return true;
+    case 'config':
+      return READ_ONLY_CONFIG_ACTIONS.has(parsed.args[0]);
+    default:
+      return false;
+  }
+}
+
 export interface CliDependencies {
   paths: BrcPaths;
   commands: {
@@ -337,6 +356,7 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
   };
   try {
     parsed = parseCommand(args);
+    if (isReadOnlyCommand(parsed)) skipCleanup = true;
     if (parsed.timeoutMs !== undefined) {
       timeoutController = new AbortController();
       timeoutHandle = setTimeout(() => {
@@ -523,7 +543,7 @@ async function main(): Promise<void> {
       runExclusive: (operation, signal) => lifecycleLock.runExclusive(
         () => sharedConfigLock.runExclusive(operation, signal), signal),
     },
-    readOnly: parsed?.preview === true,
+    readOnly: parsed?.preview === true || isReadOnlyCommand(parsed),
     apply: async (settings, previous, signal) => {
       if (!traefikSettingsChanged(previous, settings)) return;
       if (!configTraefikManager) throw new Error('Traefik manager is not initialized for configuration apply.');
