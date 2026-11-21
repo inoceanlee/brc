@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -12,6 +12,7 @@ const cliEntry = fileURLToPath(new URL('../packages/cli/dist/cli.js', import.met
 const cliUrl = JSON.stringify(pathToFileURL(cliEntry).href);
 const pathsEntry = fileURLToPath(new URL('../packages/cli/dist/config/paths.js', import.meta.url));
 const pathsUrl = JSON.stringify(pathToFileURL(pathsEntry).href);
+const tempRoot = realpathSync.native(os.tmpdir());
 
 function runCliProcess(args, dataRoot = path.join(os.tmpdir(), 'brc-cli-process-test'), extraEnv = {}) {
   const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
@@ -78,7 +79,7 @@ test('help and invalid arguments do not initialize configuration', async (t) => 
   assert.match(invalidValue.stderr, /average|number/i);
 });
 test('non-interactive uninstall requires --yes and preserves private data', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-cli-uninstall-'));
+  const root = await mkdtemp(path.join(tempRoot, 'brc-cli-uninstall-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const marker = path.join(root, 'data', 'private.sqlite');
   await mkdir(path.dirname(marker), { recursive: true });
@@ -580,7 +581,7 @@ await import(${cliUrl});
 });
 
 test('JSON uninstall reports unavailable interactive confirmation without removing data', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-cli-uninstall-tty-'));
+  const root = await mkdtemp(path.join(tempRoot, 'brc-cli-uninstall-tty-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const marker = path.join(root, 'keep.txt');
   await writeFile(marker, 'keep');

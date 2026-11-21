@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -15,6 +15,8 @@ import { createDefaultServices } from '../packages/cli/dist/adapters/process/spe
 import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
 import { LockStore } from '../packages/cli/dist/adapters/storage/lock-store.js';
 import { FileSnapshotStore } from '../packages/shared/dist/diagnostics/adapters/snapshots.js';
+
+const tempRoot = realpathSync.native(os.tmpdir());
 
 function LifecycleLock(paths, options) {
   return new LifecycleLockImpl(paths, new LockStore(paths), options);
@@ -45,7 +47,7 @@ function paths(root) {
 }
 
 async function fixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-uninstall-'));
+  const root = await mkdtemp(path.join(tempRoot, 'brc-uninstall-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await Promise.all(['traefik', 'config', 'data', 'runtime', 'logs', 'tmp'].map((name) => mkdir(path.join(root, name))));
   return { root, paths: paths(root) };
@@ -256,8 +258,8 @@ test('unknown root entries remain and appear in residual report', async (t) => {
 });
 
 test('linked data root is rejected before services stop', async (t) => {
-  const outside = await mkdtemp(path.join(os.tmpdir(), 'brc-uninstall-outside-'));
-  const linkedRoot = path.join(os.tmpdir(), `brc-uninstall-root-${process.pid}-${Date.now()}`);
+  const outside = await mkdtemp(path.join(tempRoot, 'brc-uninstall-outside-'));
+  const linkedRoot = path.join(tempRoot, `brc-uninstall-root-${process.pid}-${Date.now()}`);
   t.after(async () => {
     await rm(outside, { recursive: true, force: true });
     await rm(linkedRoot, { recursive: true, force: true });

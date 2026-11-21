@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { realpathSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { parseCommand } from '../packages/cli/dist/commands/parser.js';
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
+
+const tempRoot = realpathSync.native(tmpdir());
 
 function invoke(args) {
   const root = path.join(tmpdir(), 'brc-agent-b-cli-contract');
@@ -137,7 +140,7 @@ test('offline Traefik update fails before querying remote metadata', async (t) =
 
 test('structured uninstall returns its outcome without writing human text', async (t) => {
   const { uninstallBrc } = await import('../packages/cli/dist/adapters/storage/uninstall.js');
-  const root = await mkdtemp(path.join(tmpdir(), 'brc-uninstall-result-'));
+  const root = await mkdtemp(path.join(tempRoot, 'brc-uninstall-result-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const paths = Object.fromEntries(['traefik', 'config', 'data', 'runtime', 'logs', 'tmp'].map((name) => [name, path.join(root, name)]));
   const writes = [];
