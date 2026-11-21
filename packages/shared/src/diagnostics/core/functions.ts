@@ -54,14 +54,21 @@ interface Aggregate {
 
 const MAX_FAILURE_TEXT = 512;
 
+function redactFailureText(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
+    .replace(/(deviceToken|token|secret|password|passwd|apikey|api_key|authorization|credential)(["'=:\s]+)[^\s,}]+/gi, '$1$2[redacted]')
+    .slice(0, MAX_FAILURE_TEXT);
+}
+
 function describeFailure(id: string, error: unknown): FunctionFailureSample {
   const err = error instanceof Error ? error : undefined;
   const message = err?.message ?? (typeof error === 'string' ? error : String(error));
   const rawStack = err?.stack ?? '';
   return {
     id,
-    message: message.slice(0, MAX_FAILURE_TEXT),
-    stack: rawStack.slice(0, MAX_FAILURE_TEXT),
+    message: redactFailureText(message),
+    stack: redactFailureText(rawStack),
   };
 }
 
@@ -186,6 +193,7 @@ export class FunctionTiming {
         this.failures.set(record.id, describeFailure(record.id, record.error));
       }
     }
+    if (!record.root) return;
     aggregate.totalMs += record.durationMs;
     if (record.durationMs > aggregate.maxMs) aggregate.maxMs = record.durationMs;
     if (record.kind === 'async') aggregate.asyncWallMs += record.durationMs;
@@ -226,15 +234,23 @@ const EARLY_BUFFER_LIMIT = 2_000;
 interface EarlyRecord {
   id: string;
   kind: FunctionKind;
+  root: boolean;
   started: number;
   durationMs: number;
   failed: boolean;
   error?: unknown;
 }
 
+interface EarlyToken {
+  id: string;
+  kind: FunctionKind;
+  root: boolean;
+  started: number;
+}
+
 export interface EarlyFunctionBuffer {
-  begin(id: string, kind: FunctionKind, clock: number): { id: string; kind: FunctionKind; started: number };
-  end(token: { id: string; kind: FunctionKind; started: number }, failed: boolean, clock: number, error?: unknown): void;
+  begin(id: string, kind: FunctionKind, clock: number): EarlyToken;
+  end(token: EarlyToken, failed: boolean, clock: number, error?: unknown): void;
   drain(): EarlyRecord[];
   fork(): EarlyFunctionBuffer;
   readonly count: number;
@@ -242,15 +258,22 @@ export interface EarlyFunctionBuffer {
 
 function createEarlyBuffer(): EarlyFunctionBuffer {
   const records: EarlyRecord[] = [];
+  const active = new Map<string, number>();
   return {
     begin(id, kind, clock) {
-      return { id, kind, started: clock };
+      const depth = active.get(id) ?? 0;
+      active.set(id, depth + 1);
+      return { id, kind, root: depth === 0, started: clock };
     },
     end(token, failed, clock, error) {
+      const depth = active.get(token.id) ?? 0;
+      if (depth <= 1) active.delete(token.id);
+      else active.set(token.id, depth - 1);
       if (records.length >= EARLY_BUFFER_LIMIT) return;
       records.push({
         id: token.id,
         kind: token.kind,
+        root: token.root,
         started: token.started,
         durationMs: Math.max(0, clock - token.started),
         failed,
@@ -308,9 +331,19 @@ function installEarlyProbe(host: FunctionProbeHost): void {
   };
   host.__brcDiagEnd = (token, failed, error) => {
     if (!token) return;
-    const record = token as unknown as { id: string; kind: FunctionKind; started: number };
+    const record = token as unknown as EarlyToken;
     earlyBuffer().end(record, failed === true, performance.now(), error);
   };
+}
+
+/** Discards buffered early calls and removes the global buffer. Used when diagnostics are disabled. */
+export function clearEarlyProbe(host: FunctionProbeHost = globalThis as unknown as FunctionProbeHost): void {
+  earlyBuffer().drain();
+  if (host.__brcDiagBegin) {
+    delete host.__brcDiagBegin;
+    delete host.__brcDiagEnd;
+  }
+  delete globalWithEarly[EARLY_BUFFER_SYMBOL];
 }
 
 installEarlyProbe(globalThis as unknown as FunctionProbeHost);

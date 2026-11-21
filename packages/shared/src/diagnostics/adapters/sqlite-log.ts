@@ -378,6 +378,7 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
   private readonly isSameProcess?: (snapshot: DiagnosticSnapshot) => Promise<boolean>;
   private readonly now: () => Date;
   private readonly writtenFailures = new Set<string>();
+  private static readonly MAX_WRITTEN_FAILURES = 5_000;
 
   constructor(options: SqliteSnapshotStoreOptions = {}) {
     const resolved = resolveDatabase(options);
@@ -397,6 +398,7 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
     if (!SERVICE_PATTERN.test(snapshot.service)) throw new Error(`Unknown diagnostic snapshot service: ${snapshot.service}`);
     if (!INSTANCE_PATTERN.test(snapshot.instanceId)) throw new Error('Diagnostic snapshot instance id is not safe.');
     const captured = Date.parse(snapshot.capturedAt);
+    const committedKeys: string[] = [];
     this.database.transaction(() => {
       this.database.connection.prepare(
         'INSERT INTO snapshots (service,instance_id,pid,captured_at,epoch_ms,status,payload) VALUES (?,?,?,?,?,?,?) '
@@ -421,8 +423,7 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
       );
       for (const failure of snapshot.functions.failures ?? []) {
         const key = `${snapshot.instanceId}:${failure.id}:${failure.message}`;
-        if (this.writtenFailures.has(key)) continue;
-        this.writtenFailures.add(key);
+        if (this.writtenFailures.has(key) || committedKeys.includes(key)) continue;
         const event = createDiagnosticEvent({
           level: 'error',
           component: snapshot.service,
@@ -438,8 +439,19 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
           optional(event.runId), optional(event.instanceId), event.source.file,
           optional(event.source.function), optional(event.errorCode), boundedPayload(event, this.database.config.maxRecordBytes),
         );
+        committedKeys.push(key);
       }
     });
+    for (const key of committedKeys) this.writtenFailures.add(key);
+    if (this.writtenFailures.size > SqliteSnapshotStore.MAX_WRITTEN_FAILURES) {
+      const excess = this.writtenFailures.size - SqliteSnapshotStore.MAX_WRITTEN_FAILURES;
+      const iterator = this.writtenFailures.values();
+      for (let index = 0; index < excess; index += 1) {
+        const next = iterator.next();
+        if (next.done) break;
+        this.writtenFailures.delete(next.value);
+      }
+    }
     return Promise.resolve();
   }
 
@@ -522,6 +534,7 @@ export class SqliteSnapshotStore implements DiagnosticSnapshotPort {
   }
 
   close(): void {
+    this.writtenFailures.clear();
     if (this.ownsDatabase) this.database.close();
   }
 }

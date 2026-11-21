@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
+import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
 import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
@@ -63,6 +63,7 @@ async function createProcessDiagnostics(
     staleAfterMs: Math.max(settings.diagnostics.functionSnapshotMs * 3, 60_000),
   }) : undefined;
   const probe = functions ? installFunctionProbe(functions) : undefined;
+  if (!probe) clearEarlyProbe();
   const resources = functions ? new NodeResourceSampler({ intervalMs: settings.diagnostics.resourceSampleMs }) : undefined;
   const session = functions && resources && store ? new DiagnosticSession({
     service: component, instanceId, store: store.snapshots, functions, resources,
