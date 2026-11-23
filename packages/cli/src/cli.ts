@@ -678,9 +678,23 @@ async function main(): Promise<void> {
         }
         const agent = (await time('post-start-status', () => serviceManager.status()))
           .find((item) => item.name === 'agent');
-        if (parsed?.output === 'table') console.log(agent?.state === 'pairing'
-          ? 'Relay and Traefik started. Agent awaits approval; run brc logs agent for the pairing URL and code.'
-          : 'BRC services started.');
+        if (parsed?.output === 'table') {
+          if (agent?.state !== 'pairing') console.log('BRC services started.');
+          else {
+            let pairing;
+            try {
+              pairing = relayDatabase.pendingPairings()[0];
+            } catch {
+              pairing = undefined;
+            }
+            if (!pairing) console.log('Agent awaits approval. Run brc status to check the pairing state.');
+            else {
+              const current = await loadSettings();
+              const base = current.services.publicUrl || `http://127.0.0.1:${current.services.proxyPort}`;
+              console.log(`Agent awaits approval. Open ${base.replace(/\/+$/, '')}/device/verify and enter code ${pairing.userCode}.`);
+            }
+          }
+        }
         return 0;
       },
       stop: async (signal) => {

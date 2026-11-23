@@ -1,7 +1,14 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import type { ManagedServiceSpec } from '../process/controller.js';
+
+export interface PendingPairing {
+  userCode: string;
+  clientName: string;
+  expiresAt: number;
+}
 
 export class RelayDatabase {
   constructor(
@@ -80,6 +87,19 @@ export class RelayDatabase {
   assertExists(): void {
     if (!this.exists()) {
       throw new Error(`Relay database is missing at ${this.file}; run brc setup for a new data root or restore the existing database.`);
+    }
+  }
+
+  pendingPairings(): PendingPairing[] {
+    if (!this.exists()) return [];
+    const connection = new DatabaseSync(this.file, { readOnly: true });
+    try {
+      const rows = connection.prepare(
+        'SELECT user_code, client_name, expires_at FROM device_codes WHERE approved = 0 AND denied = 0 AND expires_at > ? ORDER BY created_at DESC',
+      ).all(Date.now()) as Array<{ user_code: string; client_name: string; expires_at: number }>;
+      return rows.map((row) => ({ userCode: row.user_code, clientName: row.client_name, expiresAt: row.expires_at }));
+    } finally {
+      connection.close();
     }
   }
 }
