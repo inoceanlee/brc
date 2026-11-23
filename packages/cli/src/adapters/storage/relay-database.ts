@@ -1,13 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { openReadOnlyDatabase } from 'brc-shared';
 import path from 'node:path';
 import type { ManagedServiceSpec } from '../process/controller.js';
 
+const PENDING_PAIRINGS_QUERY = 'SELECT user_code FROM device_codes WHERE approved = 0 AND denied = 0 AND expires_at > ? ORDER BY created_at DESC';
+
 export interface PendingPairing {
   userCode: string;
-  clientName: string;
-  expiresAt: number;
 }
 
 export class RelayDatabase {
@@ -92,12 +92,10 @@ export class RelayDatabase {
 
   pendingPairings(): PendingPairing[] {
     if (!this.exists()) return [];
-    const connection = new DatabaseSync(this.file, { readOnly: true });
+    const connection = openReadOnlyDatabase(this.file);
     try {
-      const rows = connection.prepare(
-        'SELECT user_code, client_name, expires_at FROM device_codes WHERE approved = 0 AND denied = 0 AND expires_at > ? ORDER BY created_at DESC',
-      ).all(Date.now()) as Array<{ user_code: string; client_name: string; expires_at: number }>;
-      return rows.map((row) => ({ userCode: row.user_code, clientName: row.client_name, expiresAt: row.expires_at }));
+      const rows = connection.prepare(PENDING_PAIRINGS_QUERY).all(Date.now()) as Array<{ user_code: string }>;
+      return rows.map((row) => ({ userCode: row.user_code }));
     } finally {
       connection.close();
     }

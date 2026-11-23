@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { parseCommand, UsageError } from '../packages/cli/dist/commands/parser.js';
 
-test('bare uninstall stays an interactive command with an optional --yes', () => {
-  const bare = parseCommand(['uninstall']);
-  assert.equal(bare.name, 'uninstall');
-  assert.deepEqual(bare.args, []);
-  const confirmed = parseCommand(['uninstall', '--yes']);
-  assert.deepEqual(confirmed.args, ['--yes']);
+test('uninstall requires an explicit confirmation target', () => {
+  assert.throws(() => parseCommand(['uninstall']), UsageError);
+  assert.throws(() => parseCommand(['uninstall', '--yes']), UsageError);
+  const confirmed = parseCommand(['uninstall', '--confirm', '/tmp/brc', '--yes']);
+  assert.equal(confirmed.name, 'uninstall');
+  assert.equal(confirmed.confirm, '/tmp/brc');
+  assert.deepEqual(confirmed.args, ['--confirm', '/tmp/brc', '--yes']);
   assert.throws(() => parseCommand(['uninstall', '--force']), UsageError);
 });
 

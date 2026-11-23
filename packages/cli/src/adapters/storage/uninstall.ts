@@ -104,19 +104,27 @@ function writeRemovalReport(report: CleanupReport, write: (message: string) => v
   return report.failures.length > 0 || report.preserved.length > 0;
 }
 
-export async function confirmBrcUninstall(root: string, options: Pick<InteractiveTerminal, 'interactive' | 'noInput'> = {}): Promise<boolean> {
+export interface UninstallConfirmationOptions extends Pick<InteractiveTerminal, 'interactive' | 'noInput'> {
+  confirmTarget?: string;
+}
+
+export async function confirmBrcUninstall(root: string, options: UninstallConfirmationOptions = {}): Promise<boolean> {
+  const expected = path.resolve(root);
+  if (options.confirmTarget !== undefined && path.resolve(options.confirmTarget) !== expected) {
+    throw Object.assign(new Error(`Uninstall confirmation target does not match BRC data root "${expected}".`), { exitCode: 2 });
+  }
   if (!allowsInteractiveInput({
     stdinTTY: Boolean(process.stdin.isTTY),
     stderrTTY: Boolean(process.stderr.isTTY),
     ci: process.env.CI === 'true',
     ...options,
   })) {
-    throw Object.assign(new Error('Use brc uninstall --yes in a non-interactive session.'), { exitCode: 2 });
+    throw Object.assign(new Error('Use brc uninstall --confirm <data-root> in a non-interactive session.'), { exitCode: 2 });
   }
   const prompt = createInterface({ input: process.stdin, output: process.stderr });
   try {
-    const answer = await prompt.question(`Remove all BRC data under "${root}" and uninstall ${PACKAGE_NAME}? [y/N] `);
-    return /^(?:y|yes)$/i.test(answer.trim());
+    const answer = await prompt.question(`Type "${expected}" to remove all BRC data and uninstall ${PACKAGE_NAME}: `);
+    return answer.trim() === expected;
   } finally {
     prompt.close();
   }
@@ -124,7 +132,7 @@ export async function confirmBrcUninstall(root: string, options: Pick<Interactiv
 
 export async function uninstallBrc(options: UninstallOptions): Promise<void | CliResult> {
   const root = await validatePrivateDataRoot(options.paths);
-  if (!options.yes && !await options.confirm(root)) {
+  if (!await options.confirm(root)) {
     if (options.structuredOutput) return cliSuccess({ command: 'uninstall', status: 'cancelled' });
     options.write('BRC uninstall cancelled.');
     return;

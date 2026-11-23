@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { resolvePublicUrl } from 'brc-shared';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -62,7 +63,7 @@ export function createDefaultServices(
     BRC_AUDIT_MAX_ENTRIES: String(settings.audit.maxEntries),
     HOST: '127.0.0.1',
     PORT: String(relay),
-    PUBLIC_URL: settings.services.publicUrl || proxyUrl,
+    PUBLIC_URL: resolvePublicUrl(settings),
     TRUST_PROXY: 'loopback',
     BRC_DB: path.join(paths.data, 'relay.sqlite'),
     BRC_LOG_FILE: path.join(paths.logs, 'relay.log'),

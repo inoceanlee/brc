@@ -334,7 +334,7 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
       run(bin, ['setup'], { cwd: root, env: isolatedEnv });
       await updateAndStopBrc(dataRoot, root, bin, isolatedEnv, updatedPackage);
       const command = shell === 'cmd'
-        ? run(bin, ['uninstall', '--yes'], { cwd: root, env: isolatedEnv })
+        ? run(bin, ['uninstall', '--confirm', dataRoot, '--yes'], { cwd: root, env: isolatedEnv })
         : run('powershell.exe', [
           '-NoProfile',
           '-NonInteractive',
@@ -361,7 +361,7 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
     }
   } else {
     await updateAndStopBrc(dataRoot, root, bin, isolatedEnv, updatedPackage);
-    const output = run(bin, ['uninstall', '--yes'], { cwd: root, env: isolatedEnv });
+    const output = run(bin, ['uninstall', '--confirm', dataRoot, '--yes'], { cwd: root, env: isolatedEnv });
     assert.match(output, /BRC data removed/);
     await assert.rejects(stat(dataRoot), { code: 'ENOENT' });
     await assert.rejects(stat(bin), { code: 'ENOENT' });

@@ -51,11 +51,15 @@ test('relay CLI isolated start, health, managed logs, diagnostic snapshot and sh
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     await new Promise((resolve, reject) => {
+      const ready = () => (stdout + stderr).includes('brc-relay listening');
       const timeout = setTimeout(() => reject(new Error('Relay startup timed out: ' + stdout + stderr)), 10_000);
       child.on('exit', (code) => { clearTimeout(timeout); reject(new Error('Relay exited early ' + code + ': ' + stdout + stderr)); });
       child.stdout.on('data', (chunk) => {
         stdout += chunk.toString();
-        if (stdout.includes('brc-relay listening')) { clearTimeout(timeout); resolve(); }
+        if (ready()) { clearTimeout(timeout); resolve(); }
+      });
+      child.stderr.on('data', () => {
+        if (ready()) { clearTimeout(timeout); resolve(); }
       });
     });
     const response = await fetch(`http://127.0.0.1:${port}/health`);

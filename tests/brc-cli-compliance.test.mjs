@@ -148,7 +148,7 @@ test('structured uninstall returns its outcome without writing human text', asyn
     yes: true,
     structuredOutput: true,
     paths: { root, ...paths },
-    confirm: async () => { throw new Error('confirmation must not run with --yes'); },
+    confirm: async () => true,
     stopServices: async () => {},
     clean: async () => {},
     removePackage: async () => ({ scheduled: true, reportPath: 'isolated-report.json' }),
@@ -183,7 +183,7 @@ test('offline update and unsupported write previews fail before side effects', (
   const offlineError = JSON.parse(offline.stderr.trim()).error;
   assert.match(offlineError.message, /--offline prevents remote queries|release lookup/i);
 
-  const preview = invoke(['uninstall', '--yes', '--preview', '--json']);
+  const preview = invoke(['uninstall', '--confirm', 'root', '--yes', '--preview', '--json']);
   assert.equal(preview.status, 2);
   assert.equal(preview.stdout, '');
   const previewError = JSON.parse(preview.stderr.trim()).error;

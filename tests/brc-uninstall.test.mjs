@@ -126,7 +126,7 @@ test('confirmed uninstall stops, cleans, removes only BRC data, then removes pac
   const calls = [];
 
   await uninstallBrc(dependencies(fixtureRoot, {
-    confirm: async () => { calls.push('unexpected confirmation'); return false; },
+    confirm: async () => { calls.push('confirm'); return true; },
     stopServices: async () => calls.push('stop'),
     clean: async () => {
       calls.push('clean');
@@ -138,7 +138,7 @@ test('confirmed uninstall stops, cleans, removes only BRC data, then removes pac
     },
   }));
 
-  assert.deepEqual(calls, ['stop', 'clean', 'remove package']);
+  assert.deepEqual(calls, ['confirm', 'stop', 'clean', 'remove package']);
   assert.equal(existsSync(fixtureRoot.root), false);
 });
 test('uninstall cleans a stale service record before removing data', async (t) => {

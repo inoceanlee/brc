@@ -88,7 +88,7 @@ test('non-interactive uninstall requires --yes and preserves private data', asyn
   const result = runCliProcess(['uninstall'], root);
 
   assert.equal(result.status, 2, result.stderr);
-  assert.match(result.stderr, /--yes/);
+  assert.match(result.stderr, /--confirm/);
   assert.equal(await readFile(marker, 'utf8'), 'isolated database');
 });
 
@@ -140,7 +140,7 @@ const commands = {
     return 0;
   },
 };
-const exitCode = await runCli(['uninstall', '--yes'], { paths, commands, clean: async () => { cleanCount++; calls.push('clean'); }, write: () => {}, writeError: () => {} });
+const exitCode = await runCli(['uninstall', '--confirm', 'root', '--yes'], { paths, commands, clean: async () => { cleanCount++; calls.push('clean'); }, write: () => {}, writeError: () => {} });
 console.log(JSON.stringify({ exitCode, cleanCount, calls }));
 `));
 
@@ -157,7 +157,7 @@ let cleanCount = 0;
 const errors = [];
 const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data', runtime: 'runtime', logs: 'logs', tmp: 'tmp' };
 const commands = { uninstall: async () => { throw new Error('service stop failed'); } };
-const exitCode = await runCli(['uninstall', '--yes'], { paths, commands, clean: async () => { cleanCount++; }, write: () => {}, writeError: (message) => errors.push(message) });
+const exitCode = await runCli(['uninstall', '--confirm', 'root', '--yes'], { paths, commands, clean: async () => { cleanCount++; }, write: () => {}, writeError: (message) => errors.push(message) });
 console.log(JSON.stringify({ exitCode, cleanCount, errors }));
 `));
 
@@ -272,7 +272,7 @@ const paths = { root: 'root', traefik: 'traefik', config: 'config', data: 'data'
 const results = [];
 for (const format of ['table', 'json']) {
   const output = [], errors = [], calls = [];
-  const exitCode = await runCli(['uninstall', '--yes', '--output', format], {
+  const exitCode = await runCli(['uninstall', '--confirm', 'root', '--yes', '--output', format], {
     paths, commands: { uninstall: async (_options, clean) => {
       calls.push('stop'); await clean(); calls.push('remove'); return 0;
     } },
@@ -588,7 +588,7 @@ test('JSON uninstall reports unavailable interactive confirmation without removi
   const probe = `
 Object.defineProperty(process.stdin, 'isTTY', { value: true });
 Object.defineProperty(process.stderr, 'isTTY', { value: true });
-process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'uninstall', '--interactive', '--json'];
+process.argv = [process.execPath, ${JSON.stringify(cliEntry)}, 'uninstall', '--confirm', ${JSON.stringify(root)}, '--interactive', '--json'];
 await import(${cliUrl});
 `;
   const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('BRC_')));
@@ -600,7 +600,7 @@ await import(${cliUrl});
   assert.equal(result.stdout, '');
   const error = JSON.parse(result.stderr).error;
   assert.match(error.message, /interactive.*JSON/i);
-  assert.match(error.message, /--yes/);
+  assert.match(error.message, /--confirm/);
   assert.equal(await readFile(marker, 'utf8'), 'keep');
 });
 

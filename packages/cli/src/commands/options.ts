@@ -42,6 +42,30 @@ export interface GlobalOptions {
 }
 
 const FORMATS: readonly string[] = ['table', 'plain', 'json', 'yaml'];
+
+export function detectOutputFormat(argv: readonly string[]): CliOutputFormat | undefined {
+  let format: CliOutputFormat | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === '--json') format = 'json';
+    else if (token === '--plain') format = 'plain';
+    else if (token === '--output' || token === '-o') {
+      const value = argv[index + 1];
+      if (value && FORMATS.includes(value)) {
+        format = value as CliOutputFormat;
+        index += 1;
+      }
+    } else if (token.startsWith('--output=')) {
+      const value = token.slice(9);
+      if (FORMATS.includes(value)) format = value as CliOutputFormat;
+    } else if (/^-o[^-]/.test(token)) {
+      const value = token.slice(2);
+      if (FORMATS.includes(value)) format = value as CliOutputFormat;
+    }
+  }
+  return format;
+}
+
 const BOOL_FLAGS = new Map<string, keyof GlobalOptions>([
   ['--quiet', 'quiet'], ['--verbose', 'verbose'], ['--debug', 'debug'],
   ['--no-input', 'noInput'], ['--interactive', 'interactive'],

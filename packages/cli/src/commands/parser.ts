@@ -63,6 +63,7 @@ export interface ParsedCommand {
   interactive: boolean;
   helpBrief: boolean;
   timeoutMs?: number;
+  confirm?: string;
   offline: boolean;
   noTelemetry: boolean;
   preview: boolean;
@@ -147,9 +148,9 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
   },
   {
     name: 'uninstall',
-    usage: 'brc uninstall [-y|--yes]',
+    usage: 'brc uninstall --confirm <data-root> [--yes]',
     summary: 'Stop services and remove BRC data and the global package.',
-    examples: ['brc uninstall', 'brc uninstall --yes'],
+    examples: ['brc uninstall --confirm <data-root>', 'brc uninstall --confirm /path/to/BRC --yes'],
   },
   {
     name: 'diagnose',
@@ -358,11 +359,20 @@ function parseLegacyCommand(argv: string[]): ParsedCommand {
     case 'update':
       if (rest.length !== 1 || rest[0] !== 'traefik') throw new UsageError(`Usage: ${specFor('update').usage}`);
       return { ...base, name, args: rest };
-    case 'uninstall':
-      if (rest.length > 1 || (rest.length === 1 && rest[0] !== '--yes')) {
-        throw new UsageError(`Usage: ${specFor('uninstall').usage}`);
+    case 'uninstall': {
+      let confirm: string | undefined;
+      let yes = false;
+      for (let index = 0; index < rest.length; index += 1) {
+        const token = rest[index];
+        if (token === '--yes' || token === '-y') yes = true;
+        else if (token === '--confirm') {
+          confirm = rest[++index];
+          if (!confirm) throw new UsageError('--confirm requires the BRC data root path.');
+        } else throw new UsageError(`Usage: ${specFor('uninstall').usage}`);
       }
-      return { ...base, name, args: rest };
+      if (!confirm) throw new UsageError('Uninstall requires --confirm <data-root>.');
+      return { ...base, name, args: rest, confirm };
+    }
     case 'completion':
       if (rest.length !== 1 || !['powershell', 'bash', 'zsh', 'fish'].includes(rest[0])) {
         throw new UsageError(`Usage: ${specFor('completion').usage}`);

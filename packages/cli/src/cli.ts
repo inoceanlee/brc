@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, snapshotStaleAfterMs, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
+import { createDiagnosticsRuntime, createManagedLog, DiagnosticSession, FunctionTiming, installFunctionProbe, clearEarlyProbe, NodeResourceSampler, TraceRecorder, FileSettingsLock, SqliteDiagnosticsStore, cliSuccess, cliFailure, renderCliResult, diagnosticsRetentionConfig, resolveDiagnosticsDbPath, resolvePublicUrl, snapshotStaleAfterMs, type CliExitCode, type CliResult, type DiagnosticSnapshot, type TraceSummary } from 'brc-shared';
 import { lstat, readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { readProductVersion } from './config/product.js';
 import { readDiagnosticLogs, readFunctionDiagnostics, readLatestLifecycle, readLatestStartup, readResourceDiagnostics } from './commands/diagnostics.js';
 import { COMMAND_SPECS, helpText, parseCommand, UsageError, type CliCommandName, type ParsedCommand } from './commands/parser.js';
+import { detectOutputFormat } from './commands/options.js';
 import { installCancellationHandlers, SIGNAL_EXIT_CODES } from './commands/signals.js';
 import { completionScript } from './commands/completion.js';
 import path from 'node:path';
@@ -115,7 +116,7 @@ export interface CliDependencies {
     logs: (component?: CliLogComponent) => Promise<CommandResult>;
     config: (args: string[], options: { json: boolean; preview?: boolean; signal?: AbortSignal }) => Promise<CommandResult>;
     updateTraefik: (signal?: AbortSignal) => Promise<CommandResult>;
-    uninstall: (options: { yes: boolean; structuredOutput?: boolean; signal?: AbortSignal }, clean: () => Promise<void>) => Promise<CommandResult>;
+    uninstall: (options: { yes: boolean; confirm?: string; structuredOutput?: boolean; signal?: AbortSignal }, clean: () => Promise<void>) => Promise<CommandResult>;
   };
   clean: (paths: BrcPaths) => Promise<void | CleanupReport>;
   legacyCandidates?: readonly LegacyIdentityCandidate[];
@@ -309,7 +310,8 @@ async function dispatch(
     case 'uninstall':
       skipAutomaticCleanup();
       return completeCommand(await deps.commands.uninstall({
-        yes: parsed.args[0] === '--yes',
+        yes: parsed.args.includes('--yes') || parsed.args.includes('-y'),
+        confirm: parsed.confirm,
         structuredOutput: parsed.output !== 'table',
         signal: deps.signal,
       }, async () => { await clean(); }), parsed, deps);
@@ -334,8 +336,7 @@ export async function runCli(args: string[], deps: CliDependencies): Promise<num
   let parsed: ParsedCommand | undefined;
   let timeoutHandle: NodeJS.Timeout | undefined;
   let timeoutController: AbortController | undefined;
-  const requestedJson = args.includes('--json') || args.includes('--output=json')
-    || args.some((value, index) => (value === '--output' || value === '-o') && args[index + 1] === 'json');
+  const requestedJson = detectOutputFormat(args) === 'json';
   const jsonErrors: string[] = [];
   let cleanupFailure: string | undefined;
   let cleanupReport: CleanupReport | undefined;
@@ -620,9 +621,13 @@ async function main(): Promise<void> {
       stopServices: (signal) => serviceManager.stop(signal),
       confirm: (root) => {
         if (parsed?.output === 'json' && parsed.interactive && !parsed.noInput) {
-          throw new UsageError('Interactive confirmation is unavailable with JSON output. Use brc uninstall --yes.');
+          throw new UsageError('Interactive confirmation is unavailable with JSON output. Use brc uninstall --confirm <data-root>.');
         }
-        return confirmBrcUninstall(root, { interactive: parsed?.interactive, noInput: parsed?.noInput || parsed?.output === 'json' });
+        return confirmBrcUninstall(root, {
+          interactive: parsed?.interactive,
+          noInput: parsed?.noInput || parsed?.output === 'json',
+          confirmTarget: parsed?.confirm,
+        });
       },
     },
   );
@@ -653,7 +658,7 @@ async function main(): Promise<void> {
         }, signal);
         await settingsManager.ensureConfigFile(signal);
         await traefikManager.setup(signal);
-        if (parsed?.output === 'table') console.log('BRC setup completed. Run brc start to connect services.');
+        if (parsed?.output === 'table') deps.write('BRC setup completed. Run brc start to connect services.');
         return 0;
       },
       start: async (signal) => {
@@ -678,28 +683,34 @@ async function main(): Promise<void> {
         }
         const agent = (await time('post-start-status', () => serviceManager.status()))
           .find((item) => item.name === 'agent');
-        if (parsed?.output === 'table') {
-          if (agent?.state !== 'pairing') console.log('BRC services started.');
-          else {
-            let pairing;
-            try {
-              pairing = relayDatabase.pendingPairings()[0];
-            } catch {
-              pairing = undefined;
-            }
-            if (!pairing) console.log('Agent awaits approval. Run brc status to check the pairing state.');
-            else {
+        let pairing: { url: string; code: string } | undefined;
+        let pairingFailure: string | undefined;
+        if (agent?.state === 'pairing') {
+          try {
+            const pending = relayDatabase.pendingPairings()[0];
+            if (pending) {
               const current = await loadSettings();
-              const base = current.services.publicUrl || `http://127.0.0.1:${current.services.proxyPort}`;
-              console.log(`Agent awaits approval. Open ${base.replace(/\/+$/, '')}/device/verify and enter code ${pairing.userCode}.`);
+              pairing = { url: `${resolvePublicUrl(current)}/device/verify`, code: pending.userCode };
             }
+          } catch (error) {
+            pairingFailure = error instanceof Error ? error.message : String(error);
           }
         }
-        return 0;
+        if (pairingFailure) deps.writeError(`Could not read pairing information: ${pairingFailure}`);
+        const message = pairing
+          ? `Agent awaits approval. Open ${pairing.url} and enter code ${pairing.code}.`
+          : agent?.state === 'pairing'
+            ? 'Agent awaits approval. Run brc status to check the pairing state.'
+            : 'BRC services started.';
+        if (parsed?.output === 'table') {
+          deps.write(message);
+          return 0;
+        }
+        return cliSuccess({ command: 'start', status: 'success', message, ...(pairing ? { pairing } : {}) });
       },
       stop: async (signal) => {
         await time('services-stop', () => serviceManager.stop(signal));
-        if (parsed?.output === 'table') console.log('BRC services stopped.');
+        if (parsed?.output === 'table') deps.write('BRC services stopped.');
         return 0;
       },
       restart: async (signal) => {
@@ -717,14 +728,14 @@ async function main(): Promise<void> {
             throw error;
           }
         }, signal));
-        if (parsed?.output === 'table') console.log('BRC services restarted.');
+        if (parsed?.output === 'table') deps.write('BRC services restarted.');
         return 0;
       },
       status: async () => {
         const statuses = await serviceManager.status();
         for (const status of statuses) {
           const pid = status.pid === null ? '' : ` PID ${status.pid}`;
-          console.log(`${status.name}: ${status.state}${pid} — ${status.detail}`);
+          deps.write(`${status.name}: ${status.state}${pid} — ${status.detail}`);
         }
         return statuses.some((status) => status.state === 'degraded') ? 1 : 0;
       },
@@ -745,7 +756,7 @@ async function main(): Promise<void> {
         await traefikManager.update(signal);
         const current = await traefikManager.currentVersion();
         if (!current) throw new Error('Traefik update completed without an installed version.');
-        if (parsed?.output === 'table') console.log(current === previous ? `Traefik ${current} is current.` : `Traefik updated: ${previous ?? 'not installed'} → ${current}.`);
+        if (parsed?.output === 'table') deps.write(current === previous ? `Traefik ${current} is current.` : `Traefik updated: ${previous ?? 'not installed'} → ${current}.`);
         return 0;
       },
       uninstall: maintenanceCommands.uninstall,

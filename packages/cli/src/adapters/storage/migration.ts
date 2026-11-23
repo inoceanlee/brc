@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import type { DatabaseSync } from 'node:sqlite';
+import { openReadOnlyDatabase } from 'brc-shared';
 import os from 'node:os';
 import path from 'node:path';
 import { resolveDiagnosticsDbPath } from 'brc-shared';
@@ -31,7 +32,7 @@ function importedIdentityKeys(paths: BrcPaths, env: NodeJS.ProcessEnv): Readonly
   if (!existsSync(diagnosticsFile)) return new Set<string>();
   let database: DatabaseSync | undefined;
   try {
-    database = new DatabaseSync(diagnosticsFile);
+    database = openReadOnlyDatabase(diagnosticsFile);
     const table = database.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
     ).get(MARKER_TABLE);
