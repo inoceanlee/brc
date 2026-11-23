@@ -62,6 +62,25 @@ export function diagnosticsRetentionConfig(
 
 type SqlParam = string | number | null | Uint8Array;
 
+export const RELAY_AUDIT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS relay_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  epoch_ms INTEGER NOT NULL,
+  user_id TEXT,
+  device_id TEXT,
+  client TEXT,
+  tool TEXT NOT NULL,
+  args_hash TEXT,
+  ok INTEGER NOT NULL,
+  ms INTEGER,
+  error TEXT,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_epoch ON relay_audit(epoch_ms);
+CREATE INDEX IF NOT EXISTS idx_audit_tool ON relay_audit(tool);
+`;
+
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
@@ -145,23 +164,7 @@ CREATE TABLE IF NOT EXISTS tool_history (
   payload TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_history_epoch ON tool_history(epoch_ms);
-CREATE TABLE IF NOT EXISTS relay_audit (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts INTEGER NOT NULL,
-  epoch_ms INTEGER NOT NULL,
-  user_id TEXT,
-  device_id TEXT,
-  client TEXT,
-  tool TEXT NOT NULL,
-  args_hash TEXT,
-  ok INTEGER NOT NULL,
-  ms INTEGER,
-  error TEXT,
-  payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_audit_epoch ON relay_audit(epoch_ms);
-CREATE INDEX IF NOT EXISTS idx_audit_tool ON relay_audit(tool);
-`;
+${RELAY_AUDIT_SCHEMA}`;
 
 export class DiagnosticDatabase {
   private closed = false;
@@ -202,6 +205,10 @@ function databaseSize(filename: string): number {
     try { total += statSync(`${filename}${suffix}`).size; } catch { }
   }
   return total;
+}
+
+export function openReadOnlyDatabase(filename: string): DatabaseSync {
+  return new DatabaseSync(filename, { readOnly: true });
 }
 
 export function openDiagnosticDatabase(

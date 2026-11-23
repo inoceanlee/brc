@@ -12,7 +12,7 @@ import type { RelayAudit } from '../../core/auth/ports.js';
 import type { LoginLimiter } from '../../core/auth/rate-limit.js';
 import type { RelayAuditEntry } from 'brc-shared';
 import type { RelayAuditLog } from '../storage/relay-audit.js';
-import { SCOPES, DEVICE_CODE_TTL_MS, DEVICE_POLL_INTERVAL_S } from '../../core/auth/policy.js';
+import { SCOPES, DEVICE_CODE_TTL_MS, DEVICE_POLL_INTERVAL_S, DEFAULT_AUDIT_LIMIT } from '../../core/auth/policy.js';
 import type { RelayConfig } from './config.js';
 import { createMcpServer } from './mcp/server.js';
 import * as pages from './pages/html.js';
@@ -259,7 +259,7 @@ export function mountRelayRoutes(deps: RelayHttpDependencies): void {
     const online = new Set(hub.list(userId).map((d) => d.deviceId));
     const devices = store.listDevices(userId).map((d) => ({ ...d, online: online.has(d.device_id) }));
     const names = new Map(devices.map((d) => [d.device_id, d.name]));
-    const rows = audit.recentAudit(userId, 100).map((a) => ({ ts: a.ts, device: names.get(a.device_id ?? '') ?? (a.device_id ?? '?').slice(0, 8), client: a.client, tool: a.tool, ok: a.ok, ms: a.ms, error: a.error }));
+    const rows = audit.recentAudit(userId, DEFAULT_AUDIT_LIMIT).map((a) => ({ ts: a.ts, device: names.get(a.device_id ?? '') ?? (a.device_id ?? '?').slice(0, 8), client: a.client, tool: a.tool, ok: a.ok, ms: a.ms, error: a.error }));
     res.type('html').send(adminPages.adminPage(cfg.publicUrl, devices, rows, audit.auditStats(userId)));
   });
   app.post('/admin/device', requireLogin, (req, res) => {

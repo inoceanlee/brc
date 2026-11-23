@@ -90,7 +90,7 @@ const log = (level: string, msg: string): void => {
     level: level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info',
     source: { file: 'relay/cli.ts', function: 'log' },
   });
-  (level === 'error' || level === 'warn' ? console.error : console.log)(line);
+  console.error(line);
   writeManagedLog(line);
 };
 const textLog: TextLogPort = {
@@ -126,7 +126,7 @@ if (process.argv.includes('--initialize')) {
       finally { store.close(); }
     }
   } catch (error) {
-    console.error(`Relay database initialization failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`Relay database initialization failed: ${error instanceof Error ? error.message : String(error)}\nRun: brc setup`);
     await closeLogs();
     process.exit(1);
   }

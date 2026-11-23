@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { TextLogPort } from 'brc-shared';
 import type { RelayStorePort } from '../../core/auth/ports.js';
+import { DEFAULT_AUDIT_LIMIT } from '../../core/auth/policy.js';
 import { importLegacyIdentityDatabase, type LegacyIdentityImportResult } from './legacy-import.js';
 import { RelayAuditLog } from './relay-audit.js';
 
@@ -492,7 +493,7 @@ export class SqliteStore implements RelayStorePort {
     });
   }
 
-  recentAudit(userId: string, limit = 100): AuditRow[] {
+  recentAudit(userId: string, limit = DEFAULT_AUDIT_LIMIT): AuditRow[] {
     return this.requireAudit().recentAudit(userId, limit);
   }
 

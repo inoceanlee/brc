@@ -183,6 +183,12 @@ export const IDENTITY_INSPECTION_RETRY_COUNT = 1;
 export const TRAEFIK_RELEASE_LOOKUP_ATTEMPTS = 2;
 export const TRAEFIK_RELEASE_RETRY_DELAY_MS = 1_000;
 
+export function resolvePublicUrl(settings: BrcSettings): string {
+  const configured = settings.services.publicUrl?.trim();
+  const fallback = `http://127.0.0.1:${settings.services.proxyPort}`;
+  return (configured || fallback).replace(/\/+$/, '');
+}
+
 export const DEFAULT_SETTINGS: Readonly<BrcSettings> = Object.freeze({
   version: 1,
   proxy: Object.freeze({

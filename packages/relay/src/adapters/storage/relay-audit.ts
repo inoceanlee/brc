@@ -8,9 +8,11 @@ import {
   SqliteRelayAudit,
   diagnosticsRetentionConfig,
   openDiagnosticDatabase,
+  RELAY_AUDIT_SCHEMA,
   resolveDiagnosticsDbPath,
 } from 'brc-shared';
 import type { RelayAudit } from '../../core/auth/ports.js';
+import { DEFAULT_AUDIT_LIMIT } from '../../core/auth/policy.js';
 
 export const RELAY_DIAGNOSTICS_SCHEMA_VERSION = 1;
 
@@ -79,24 +81,7 @@ export class RelayAuditLog {
     if (options.database) return new RelayAuditLog(options.database, false);
     if (options.dbFile === ':memory:') {
       const connection = new DatabaseSync(':memory:');
-      connection.exec(`
-        CREATE TABLE IF NOT EXISTS relay_audit (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          ts INTEGER NOT NULL,
-          epoch_ms INTEGER NOT NULL,
-          user_id TEXT,
-          device_id TEXT,
-          client TEXT,
-          tool TEXT NOT NULL,
-          args_hash TEXT,
-          ok INTEGER NOT NULL,
-          ms INTEGER,
-          error TEXT,
-          payload TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_audit_epoch ON relay_audit(epoch_ms);
-        CREATE INDEX IF NOT EXISTS idx_audit_tool ON relay_audit(tool);
-      `);
+      connection.exec(RELAY_AUDIT_SCHEMA);
       const database = new DiagnosticDatabase(connection, ':memory:', diagnosticsRetentionConfig(options.settings));
       return new RelayAuditLog(database, true);
     }
@@ -110,7 +95,7 @@ export class RelayAuditLog {
     return this.port.append(entry);
   }
 
-  recentAudit(userId: string, limit = 100): RelayAudit[] {
+  recentAudit(userId: string, limit = DEFAULT_AUDIT_LIMIT): RelayAudit[] {
     return this.database.connection.prepare(
       'SELECT id,ts,user_id,device_id,client,tool,args_hash,ok,ms,error FROM relay_audit WHERE user_id = ? ORDER BY id DESC LIMIT ?',
     ).all(userId, limit) as unknown as RelayAudit[];
