@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { cliSuccess, type CliResult } from 'brc-shared';
-import { lstat, writeFile } from 'node:fs/promises';
+import { lstat, realpath, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -110,8 +110,14 @@ export interface UninstallConfirmationOptions extends Pick<InteractiveTerminal, 
 
 export async function confirmBrcUninstall(root: string, options: UninstallConfirmationOptions = {}): Promise<boolean> {
   const expected = path.resolve(root);
-  if (options.confirmTarget !== undefined && path.resolve(options.confirmTarget) !== expected) {
-    throw Object.assign(new Error(`Uninstall confirmation target does not match BRC data root "${expected}".`), { exitCode: 2 });
+  const confirmTarget = options.confirmTarget;
+  if (confirmTarget !== undefined) {
+    const canonicalRoot = await realpath(expected).catch(() => expected);
+    const canonicalTarget = await realpath(confirmTarget).catch(() => path.resolve(confirmTarget));
+    if (canonicalTarget !== canonicalRoot) {
+      throw Object.assign(new Error(`Uninstall confirmation target does not match BRC data root "${expected}".`), { exitCode: 2 });
+    }
+    return true;
   }
   if (!allowsInteractiveInput({
     stdinTTY: Boolean(process.stdin.isTTY),

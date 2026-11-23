@@ -343,6 +343,8 @@ console.log(JSON.stringify(services.map(({ name, entrypoint, cwd, env }) => ({ n
           '-File',
           powershellShim,
           'uninstall',
+          '--confirm',
+          dataRoot,
           '--yes',
         ], { cwd: root, env: isolatedEnv });
       const reportMatch = command.match(/completion report: (.+?)(?: Review the residual paths above\.)?$/m);
