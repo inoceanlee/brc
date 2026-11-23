@@ -107,7 +107,7 @@ async function makeManagedRelay(t) {
   const spec = { name: 'relay', entrypoint, workspaceRoot: harness.root, cwd: harness.root, env: {} };
   const manager = new ProcessManager(harness.paths, { startupTimeoutMs: 3000, shutdownTimeoutMs: 300, pollIntervalMs: 25 });
   t.after(async () => {
-    await manager.stop(spec);
+    await manager.stop(spec).catch(() => {});
     await rm(harness.root, { recursive: true, force: true });
   });
   return { ...harness, entrypoint, spec, manager };
@@ -249,7 +249,7 @@ test('preserves PID-reused and corrupt records without stopping either process',
   assert.ok(report.preserved.some((item) => item.path === recordPath));
   assert.ok(report.preserved.some((item) => item.path === corruptPath));
   await writeFile(recordPath, original);
-  await harness.manager.stop(harness.spec);
+  await harness.manager.stop(harness.spec).catch(() => {});
 });
 
 test('cleanup preserves a previous-boot record when its live PID identity differs', async (t) => {
