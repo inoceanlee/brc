@@ -1082,8 +1082,9 @@ test('refuses forced termination when the PID identity changes after shutdown', 
     assert.equal((await harness.manager.status(harness.spec)).state, 'running');
   } finally {
     stopping = false;
+    stopInspections = 0;
     harness.manager.updateRuntimeSettings({ startupTimeoutMs: 3000, shutdownTimeoutMs: 5000 });
-    await assert.rejects(harness.manager.stop(harness.spec), /forcibly stopped/i);
+    await assert.rejects(harness.manager.stop(harness.spec), /forcibly stopped|forced termination/i);
   }
 });
 
