@@ -121,7 +121,7 @@ async function executeTool(name: string, args: Args): Promise<ToolResult> {
   try {
     await deps.trackToolCall(name);
   } catch {
-    process.stderr.write('Agent tool-call metadata logging failed.\n');
+    (deps.log ?? textLogToStderr()).error('Agent tool-call metadata logging failed.');
   }
   if (name !== 'get_recent_tool_calls' && name !== 'track_ui_event') {
     try {

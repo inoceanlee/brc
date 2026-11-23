@@ -10,6 +10,8 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { ShellEncodingCoordinator, type ShellEncodingSession } from './shell-coordinator.js';
 import { encodeShellInput } from './terminal-encoding.js';
+import type { TextLogPort } from 'brc-shared';
+import { textLogToStderr } from '../telemetry/logger.js';
 
 /**
  * Standard Windows PATHEXT value, used to repair a corrupted PATHEXT before
@@ -176,7 +178,8 @@ export class TerminalManager {
 
   constructor(
     private readonly configManager: Pick<AgentConfigManager, 'getConfig'>,
-    private readonly capture: (event: string, properties?: unknown) => Promise<void>
+    private readonly capture: (event: string, properties?: unknown) => Promise<void>,
+    private readonly log: TextLogPort = textLogToStderr()
   ) {}
 
   createVirtualNodeSession(timeout_ms: number): number {
@@ -218,7 +221,7 @@ export class TerminalManager {
       }
       return false;
     } catch (error) {
-      console.error(`Error sending input to process ${pid}:`, error);
+      this.log.error(`Error sending input to process ${pid}: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
   }
@@ -243,7 +246,6 @@ export class TerminalManager {
     let enhancedCommand = command;
     if (command.trim().startsWith('ssh ') && !command.includes(' -t')) {
       enhancedCommand = command.replace(/^ssh /, 'ssh -t ');
-      console.log(`Enhanced SSH command: ${enhancedCommand}`);
     }
 
   const effectiveShellPath = resolveDynamicShellPath(shellToUse);
@@ -327,7 +329,7 @@ export class TerminalManager {
         forwardProcessError(err);
       } else {
         pendingProcessError = err;
-        console.error(`Process error for "${command}": ${err.message}`);
+        this.log.error(`Process error for "${command}": ${err.message}`);
       }
     });
 

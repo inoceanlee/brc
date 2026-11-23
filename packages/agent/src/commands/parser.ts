@@ -105,7 +105,7 @@ export function parseAgentInvocation(argv: readonly string[]): AgentInvocation {
   else throw new AgentUsageError('Unknown command. Run brc-agent help.');
   if (!['completion', 'config allow-dir'].includes(command) && operands.length) throw new AgentUsageError('Unexpected argument: ' + operands[0]);
   const timeout = one('timeout');
-  if (timeout && (!/^\\d+$/.test(timeout) || Number(timeout) < 1)) throw new AgentUsageError('--timeout requires a positive number of milliseconds.');
+  if (timeout && (!/^\d+$/.test(timeout) || Number(timeout) < 1)) throw new AgentUsageError('--timeout requires a positive number of milliseconds.');
   const allowDirectories = [...(flags.get('allow-dir') ?? []), ...(command === 'config allow-dir' ? operands : [])];
   if (command === 'config allow-dir' && allowDirectories.length === 0) throw new AgentUsageError('Provide a directory to allow.');
   if (has('token-stdin') && command !== 'connect') throw new AgentUsageError('--token-stdin is only valid for connect.');

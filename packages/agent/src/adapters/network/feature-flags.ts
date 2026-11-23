@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { existsSync } from 'fs';
 import type { AgentLogger } from '../telemetry/logger.js';
+import { AGENT_DEFAULTS } from '../../core/config.js';
 
 interface FeatureFlags {
   version?: string;
@@ -161,7 +162,7 @@ export class FeatureFlagManager {
    * Fetch flags from remote URL
    */
   private async fetchFlags(): Promise<void> {
-    const FETCH_TIMEOUT_MS = 3000;
+    const FETCH_TIMEOUT_MS = AGENT_DEFAULTS.featureFlagFetchTimeoutMs;
     const controller = new AbortController();
     const abortTimeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     let hardTimeoutHandle: NodeJS.Timeout | undefined;

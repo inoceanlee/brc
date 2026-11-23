@@ -1,10 +1,13 @@
 import path from 'path';
+import type { TextLogPort } from 'brc-shared';
 import type { AgentConfigManager } from '../storage/config-manager.js';
+import { textLogToStderr } from '../telemetry/logger.js';
 
 export class CommandManager {
     constructor(
         private readonly configManager: Pick<AgentConfigManager, 'getConfig'>,
-        private readonly capture: (event: string, properties?: unknown) => Promise<void>
+        private readonly capture: (event: string, properties?: unknown) => Promise<void>,
+        private readonly log: TextLogPort = textLogToStderr()
     ) {}
 
 
@@ -255,7 +258,7 @@ export class CommandManager {
 
             return true;
         } catch (error) {
-            console.error('Error validating command:', error);
+            this.log.error(`Error validating command: ${error instanceof Error ? error.message : String(error)}`);
             this.capture('server_validate_command_error', {
                 error: error instanceof Error ? error.message : String(error)
             });

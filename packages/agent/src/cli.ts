@@ -102,8 +102,8 @@ export async function configureAgentServices(): Promise<AgentServices> {
   const createClient = (options: WsClientOptions) => new WsClient(options);
   const filesystem = { configManager, capture, fileHandlers, log: logger };
   const transfer = { ...filesystem, receiveKeys: new Map() };
-  const commandManager = new CommandManager(configManager, capture);
-  const terminalManager = new TerminalManager(configManager, capture);
+  const commandManager = new CommandManager(configManager, capture, logger);
+  const terminalManager = new TerminalManager(configManager, capture, logger);
   const terminal = { configManager, commandManager, terminalManager, capture };
   const searchManager = new SearchManager(filesystem);
   let historyFailureReporter: (message: string) => void = (message) => process.stderr.write(message + '\n');
@@ -128,7 +128,7 @@ export async function configureAgentServices(): Promise<AgentServices> {
     configManager, featureFlagManager, searchManager, toolHistory, usageTracker, fuzzySearchLogger,
     filesystem, terminal, transfer, currentClient, log: logger,
     logHistoryFailure: reportHistoryFailure,
-    trackToolCall: async (name) => trackToolCall(paths.logsDirectory, await logMaxBytes(), name),
+    trackToolCall: async (name) => trackToolCall(paths.logsDirectory, await logMaxBytes(), name, undefined, logger),
   });
   return { paths, env, credentials, logger, fileHandlers, createClient, bindHistoryFailureReporter, settingsStore, configManager, featureFlagManager, searchManager, toolHistory, usageTracker, fuzzySearchLogger, dispatcher, capture, context };
 }

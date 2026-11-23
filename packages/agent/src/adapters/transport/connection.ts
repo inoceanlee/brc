@@ -6,7 +6,7 @@ import { pairDevice, type DeviceCredentials } from './pairing.js';
 import { VERSION } from '../../core/version.js';
 import { AGENT_DEFAULTS } from '../../core/config.js';
 import type { AgentPaths } from '../storage/agent-paths.js';
-import type { AgentLogger, LogLevel } from '../telemetry/logger.js';
+import { logToStderr, type AgentLogger, type LogLevel } from '../telemetry/logger.js';
 import type { AgentInvocation } from '../../commands/parser.js';
 import { AgentUsageError } from '../../commands/parser.js';
 import { readTokenFromStdin } from '../terminal/secret-input.js';
@@ -95,16 +95,16 @@ export async function runAgentConnection(
   const unbindLog = services.logger.bind((level: LogLevel, message: string) => {
     const severity = level === 'warning' ? 'warn' : ['emergency', 'alert', 'critical', 'error'].includes(level) ? 'error' : level === 'debug' ? 'debug' : 'info';
     diagnostics.log(message, { level: severity, source: { file: 'agent/logger.ts', function: 'log' } });
-    if (severity === 'error') process.stderr.write('[agent:error] ' + message + '\n');
+    if (severity === 'error') logToStderr('error', message);
   });
   let controlStarting: Promise<ManagedControlServer | undefined> | undefined;
   let client: WsClient | undefined;
   let awaitingPairing = false;
   let stopPromise: Promise<void> | undefined;
-  const log = (level: 'info' | 'warn' | 'error' | 'debug', message: string): void => {
+  const log = (level: 'info' | 'warn' | 'error' | 'debug', message: string, force = false): void => {
     if (level === 'debug' && !inv.debug) return;
     diagnostics.log(message, { level, source: { file: 'agent/connection.ts', function: 'log' } });
-    if (!inv.quiet || level === 'error') process.stderr.write('[' + level + '] ' + message + '\n');
+    if (!inv.quiet || level === 'error' || force) process.stderr.write('[' + level + '] ' + message + '\n');
   };
   let historyFailure: string | undefined;
   const unbindHistoryFailure = services.bindHistoryFailureReporter((message) => {
@@ -112,6 +112,13 @@ export async function runAgentConnection(
     log('error', message);
   });
   const abort = new AbortController();
+  const timeoutMs = inv.timeoutMs;
+  const timeoutController = timeoutMs === undefined ? undefined : new AbortController();
+  let timeoutTimer: NodeJS.Timeout | undefined;
+  if (timeoutController && timeoutMs !== undefined) {
+    timeoutTimer = setTimeout(() => timeoutController.abort(new Error('Pairing aborted: agent connection timed out.')), timeoutMs);
+  }
+  const connectSignal = timeoutController ? AbortSignal.any([abort.signal, timeoutController.signal]) : abort.signal;
   const stop = (): Promise<void> => stopPromise ??= (async () => {
     const errors: unknown[] = [];
     abort.abort(new Error('Agent shutdown requested.'));
@@ -165,7 +172,7 @@ export async function runAgentConnection(
           }),
         ]);
       } catch (error) {
-        process.stderr.write(`Agent shutdown failed: ${String(error)}\n`);
+        log('error', `Agent shutdown failed: ${String(error)}`);
       } finally {
         clearTimeout(timer);
       }
@@ -177,7 +184,7 @@ export async function runAgentConnection(
           }),
         ]);
       } catch {
-        process.stderr.write('Agent control shutdown failed.\n');
+        log('error', 'Agent control shutdown failed.');
       } finally {
         clearTimeout(timer);
       }
@@ -196,7 +203,7 @@ export async function runAgentConnection(
       id: services.env.BRC_MANAGED_ID,
       service: services.env.BRC_MANAGED_SERVICE,
       onStopError: (error) => {
-        process.stderr.write(`BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}\n`);
+        log('error', `BRC managed shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
         process.exitCode = 1;
       },
       health: () => {
@@ -223,7 +230,8 @@ export async function runAgentConnection(
       try {
         creds = await pairDevice({
           relayUrl: relay, name, deviceId, openBrowser: !inv.noBrowser && services.env.BRC_NO_BROWSER !== '1',
-          log: (message) => process.stderr.write(message + '\n'), signal: abort.signal, credentials: services.credentials,
+          log: (message) => log('info', message, true), quiet: inv.quiet,
+          signal: connectSignal, credentials: services.credentials,
         });
       } finally {
         awaitingPairing = false;
@@ -255,5 +263,7 @@ export async function runAgentConnection(
       throw new AggregateError([new Error('Agent startup failed.'), ...errors], `Agent startup failed; Agent shutdown failed: ${detail}`);
     }
     if (!shutdownRequested) throw error;
+  } finally {
+    clearTimeout(timeoutTimer);
   }
 }

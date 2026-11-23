@@ -41,12 +41,9 @@ export async function processDockerPrompt<T extends { content?: Array<{ type: st
     deps: DockerPromptDependencies, result: T, toolName: string
 ): Promise<T> {
     const shouldPromptDocker = await shouldPromptForDockerInfo(deps);
-    console.log(`[DOCKER DEBUG] Should prompt for Docker info: ${shouldPromptDocker}`);
 
     if (shouldPromptDocker) {
-        console.log(`[DOCKER DEBUG] Generating Docker message...`);
         const dockerMessage = getDockerInfoMessage();
-        console.log(`[DOCKER DEBUG] Generated Docker message`);
 
 
         if (result.content && result.content.length > 0 && result.content[0].type === "text") {

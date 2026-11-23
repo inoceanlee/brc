@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { DeviceCredentials } from '../storage/credential-store.js';
+import { AGENT_DEFAULTS } from '../../core/config.js';
 
 export type { DeviceCredentials } from '../storage/credential-store.js';
 
@@ -14,6 +15,8 @@ export interface PairOptions {
   deviceId?: string;
   openBrowser?: boolean;
   log: (msg: string) => void;
+  quiet?: boolean;
+  progressIntervalMs?: number;
   signal?: AbortSignal;
   credentials: {
     load(): DeviceCredentials | null;
@@ -49,16 +52,23 @@ async function postJson<T>(url: string, body: unknown, signal?: AbortSignal): Pr
   return { status: res.status, json };
 }
 
+function pairingAbortError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  return reason instanceof Error && /timed out/i.test(reason.message)
+    ? new Error('Pairing aborted: agent connection timed out.')
+    : new Error('Pairing aborted.');
+}
+
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((resolve, reject) => {
-  if (signal?.aborted) return reject(new Error('Pairing aborted.'));
-  const abort = () => { clearTimeout(timer); reject(new Error('Pairing aborted.')); };
+  if (signal?.aborted) return reject(pairingAbortError(signal));
+  const abort = () => { clearTimeout(timer); reject(pairingAbortError(signal)); };
   const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, ms);
   signal?.addEventListener('abort', abort, { once: true });
 });
 
 /** Runs the pairing flow until approved, denied or expired. Returns saved credentials. */
 export async function pairDevice(opts: PairOptions): Promise<DeviceCredentials> {
-  if (opts.signal?.aborted) throw new Error('Pairing aborted.');
+  if (opts.signal?.aborted) throw pairingAbortError(opts.signal);
   if (opts.credentials.load()) throw new Error('agent already paired; clear credentials before pairing a different device');
   const base = opts.relayUrl.replace(/\/$/, '');
   const deviceId = opts.deviceId ?? randomUUID();
@@ -76,15 +86,23 @@ export async function pairDevice(opts: PairOptions): Promise<DeviceCredentials> 
 
   let state: Extract<PairingState, { kind: 'polling' }> = { kind: 'polling', interval: Math.max(2, start.interval ?? 5) * 1000 };
   const deadline = Date.now() + start.expires_in * 1000;
+  const progressIntervalMs = opts.progressIntervalMs ?? AGENT_DEFAULTS.pairingProgressIntervalMs;
+  const startedAt = Date.now();
+  let nextProgressAt = startedAt + progressIntervalMs;
   while (Date.now() < deadline) {
     await sleep(state.interval, opts.signal);
+    const now = Date.now();
+    if (!opts.quiet && now >= nextProgressAt) {
+      opts.log(`Waiting for approval… ${Math.round((now - startedAt) / 1000)}s`);
+      nextProgressAt = now + progressIntervalMs;
+    }
     const { json } = await postJson<PollResponse>(`${base}/device/poll`, {
       device_code: start.device_code, device_id: deviceId, name: opts.name, platform: `${process.platform}/${process.arch}`,
     }, opts.signal);
     const next = advancePairing(state, json);
     if (next.kind === 'approved') {
       const creds: DeviceCredentials = { relayUrl: base, deviceId: next.deviceId, deviceToken: next.deviceToken, name: opts.name, pairedAt: new Date().toISOString() };
-      if (opts.signal?.aborted) throw new Error('Pairing aborted.');
+      if (opts.signal?.aborted) throw pairingAbortError(opts.signal);
       opts.credentials.save(creds);
       opts.log(`Paired as "${opts.name}" [${next.deviceId}]; credentials saved to ${opts.credentials.filename}`);
       return creds;

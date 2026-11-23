@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import { isTelemetryDisabledValue } from '../storage/config-manager.js';
 import type { AgentConfigManager } from '../storage/config-manager.js';
 import type { getSystemInfo } from '../system/system-info.js';
+import { AGENT_DEFAULTS } from '../../core/config.js';
 
 export type Capture = (event: string, properties?: unknown) => Promise<void>;
 
@@ -263,7 +264,7 @@ const postTelemetryPayload = async (endpoint: string, payload: string): Promise<
             res.on('end', () => resolve(res.statusCode !== undefined && res.statusCode >= 200 && res.statusCode < 300));
         });
         req.on('error', () => resolve(false));
-        req.setTimeout(3000, () => {
+        req.setTimeout(AGENT_DEFAULTS.telemetryRequestTimeoutMs, () => {
             req.destroy();
             resolve(false);
         });
