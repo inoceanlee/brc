@@ -93,17 +93,21 @@ export class ServiceManager {
         }
         toStart.push(service);
       }
-      await Promise.all(toStart.map(async (service) => {
+      const startResults = await Promise.allSettled(toStart.map(async (service) => {
         signal?.throwIfAborted();
         await this.stage('spawn-ready', service.name, () => this.processes.start(service, signal));
         started.add(service);
       }));
-      const healthResults = await Promise.all(toStart.map(async (service) => ({
+      const startFailure = startResults.find((result) => result.status === 'rejected');
+      if (startFailure?.status === 'rejected') throw startFailure.reason;
+      const healthResults = await Promise.allSettled(toStart.map(async (service) => ({
         service,
         health: await this.stage('control-health', service.name, () => this.healthCheck.check(service, signal)),
       })));
-      const unhealthy = healthResults.find((result) => !result.health.ready);
-      if (unhealthy) throw new Error(`${unhealthy.service.name} failed its control health check: ${unhealthy.health.detail}`);
+      const healthFailure = healthResults.find((result) => result.status === 'rejected');
+      if (healthFailure?.status === 'rejected') throw healthFailure.reason;
+      const unhealthy = healthResults.find((result) => result.status === 'fulfilled' && !result.value.health.ready);
+      if (unhealthy?.status === 'fulfilled') throw new Error(`${unhealthy.value.service.name} failed its control health check: ${unhealthy.value.health.detail}`);
     } catch (error) {
       const rollbackErrors: unknown[] = [];
       for (const service of toStart.filter((item) => started.has(item)).reverse()) {
