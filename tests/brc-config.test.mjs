@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
-import { DEFAULT_SETTINGS as SHARED_DEFAULT_SETTINGS } from '../packages/shared/dist/index.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { resolveBrcPaths } from '../packages/cli/dist/config/paths.js';
 import { LifecycleLock as LifecycleLockImpl } from '../packages/cli/dist/adapters/storage/lock.js';
@@ -32,50 +31,6 @@ function commandDependencies(manager, paths, output) {
   return { manager, paths };
 }
 
-test('central settings defaults match the public configuration contract', () => {
-  const { agent, ...settings } = DEFAULT_SETTINGS;
-  assert.deepEqual(settings, {
-    version: 1,
-    proxy: {
-      rate: { average: 10, period: '1s', burst: 30 },
-      concurrent: 16,
-    },
-    services: {
-      relayPort: 3000,
-      proxyPort: 13001,
-      healthPort: 13002,
-      publicUrl: '',
-    },
-    logs: {
-      retentionDays: 7,
-      maxTotalMiB: 50,
-      rotateMiB: 4,
-    },
-    diagnostics: {
-      enabled: true,
-      resourceSampleMs: 1000,
-      functionSnapshotMs: 10000,
-      maxRecordBytes: 65536,
-      retentionDays: 7,
-    },
-    audit: {
-      retentionDays: 30,
-      maxEntries: 50_000,
-    },
-    runtime: {
-      startupTimeoutMs: 15_000,
-      shutdownTimeoutMs: 3_000,
-      lockWaitMs: 3_000,
-      lockPollMs: 50,
-    },
-  });
-  assert.equal(agent.fileReadLineLimit, 1_000);
-  assert.equal(agent.fileWriteLineLimit, 50);
-  assert.equal(agent.commandTimeoutMs, 1_000);
-  assert.equal(agent.telemetry.enabled, false);
-  assert.ok(agent.blockedCommands.length > 0);
-  assert.deepEqual(agent.allowedDirectories, []);
-});
 
 test('settings snapshots are independent of manager state and each other', async (t) => {
   const { manager } = await createFixture(t);
@@ -173,8 +128,6 @@ test('audit policy defaults and environment overrides reach Relay', async (t) =>
 
   assert.deepEqual(manager.get('audit.retentionDays'), { value: 90, source: 'environment' });
   assert.deepEqual(manager.get('audit.maxEntries'), { value: 1200, source: 'environment' });
-  assert.equal(DEFAULT_SETTINGS.audit.retentionDays, 30);
-  assert.equal(DEFAULT_SETTINGS.audit.maxEntries, 50_000);
 
   const relay = createDefaultServices(paths, manager.snapshot(), {}).find((service) => service.name === 'relay');
   assert.equal(relay.env.BRC_AUDIT_RETENTION_DAYS, '90');

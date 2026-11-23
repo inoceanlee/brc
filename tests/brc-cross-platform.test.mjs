@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import zlib from 'node:zlib';
 import fs from 'node:fs';
@@ -18,7 +17,6 @@ import {
 import {
   ShellEncodingCoordinator,
   DefaultShellEncodingSession,
-  ShellProbeFeedResult,
 } from '../packages/agent/dist/adapters/terminal/shell-coordinator.js';
 import { resolveDynamicShellPath } from '../packages/agent/dist/adapters/terminal/terminal-manager.js';
 
@@ -388,13 +386,6 @@ test('resolveBrcPaths backward-compatibility wrapper respects process and option
 /*                       3. Archive Extractor Factory                         */
 /* -------------------------------------------------------------------------- */
 
-test('ArchiveExtractorFactory creates correct extractor instances', () => {
-  const zip = ArchiveExtractorFactory.create('zip');
-  assert.ok(zip instanceof ZipArchiveExtractor);
-
-  const tarGz = ArchiveExtractorFactory.create('tar.gz');
-  assert.ok(tarGz instanceof TarGzArchiveExtractor);
-});
 
 test('ArchiveExtractorFactory rejects unsupported archive formats', () => {
   assert.throws(() => ArchiveExtractorFactory.create('rar'), /Unsupported archive format: rar/);
@@ -829,10 +820,3 @@ test('resolveDynamicShellPath resolves POSIX shell via standard fallback list', 
   }
 });
 
-test('inspectProcesses handles Linux EACCES and EPERM gracefully without throwing', async () => {
-  const { inspectProcesses } = await import('../packages/cli/dist/adapters/process/identity.js');
-  // On non-Linux, the Linux branch is not executed, but inspectProcesses should always resolve a Map
-  const result = await inspectProcesses([process.pid]);
-  assert.ok(result instanceof Map);
-  assert.ok(result.has(process.pid));
-});

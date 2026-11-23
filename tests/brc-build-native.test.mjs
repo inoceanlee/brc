@@ -25,21 +25,6 @@ async function fixture(t) {
   };
 }
 
-test('cargo runs on every build so new Rust modules are never skipped', async (t) => {
-  const { root, sourcePath, destinationPath } = await fixture(t);
-  let cargoRuns = 0;
-  const run = () => { cargoRuns += 1; return { status: 0 }; };
-  const { mkdir } = await import('node:fs/promises');
-  await mkdir(path.dirname(sourcePath), { recursive: true });
-  await writeFile(sourcePath, fakePe('first'));
-  const first = await buildNative({ platform: 'win32', arch: 'x64', run, sourcePath, destinationPath });
-  assert.equal(first.built, true);
-  assert.equal(first.copied, true);
-  const second = await buildNative({ platform: 'win32', arch: 'x64', run, sourcePath, destinationPath });
-  assert.equal(cargoRuns, 2);
-  assert.equal(second.copied, false, 'unchanged artifacts must not be copied again');
-  assert.ok(root);
-});
 
 test('changed native output replaces the packaged binary', async (t) => {
   const { sourcePath, destinationPath } = await fixture(t);

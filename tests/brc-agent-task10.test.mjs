@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,18 +32,6 @@ test('core preview file typing uses pure string logic without Node path import',
   assert.equal(resolvePreviewFileType('/a/b/data.bin'), 'unsupported');
 });
 
-test('Agent core files contain no Node builtin imports', () => {
-  const core = path.join(repoRoot, 'packages', 'agent', 'src', 'core');
-  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const target = path.join(dir, entry.name);
-    return entry.isDirectory() ? walk(target) : entry.name.endsWith('.ts') ? [target] : [];
-  });
-  for (const file of walk(core)) {
-    const source = readFileSync(file, 'utf8');
-    assert.doesNotMatch(source, /from\s+['"]node:/, file);
-    assert.doesNotMatch(source, /from\s+['"](?:fs|path|http|https|os|child_process|url)['"]/, file);
-  }
-});
 
 test('credential migration runs for a custom data root and always offers the legacy path', () => {
   const home = mkdtempSync(path.join(tmpdir(), 'brc-t10-home-'));

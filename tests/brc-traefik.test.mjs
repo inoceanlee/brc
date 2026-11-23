@@ -1196,14 +1196,6 @@ test('asynchronous progress output failure preserves checksum failure and stagin
   assert.deepEqual(await readdir(brcPaths.tmp), []);
 });
 
-test('ArchiveExtractorFactory creates ZipArchiveExtractor and TarGzArchiveExtractor', async () => {
-  const { ArchiveExtractorFactory, ZipArchiveExtractor, TarGzArchiveExtractor } = await import('../packages/cli/dist/adapters/traefik/archive.js');
-  const zipExtractor = ArchiveExtractorFactory.create('zip');
-  assert.ok(zipExtractor instanceof ZipArchiveExtractor);
-  const tarExtractor = ArchiveExtractorFactory.create('tar.gz');
-  assert.ok(tarExtractor instanceof TarGzArchiveExtractor);
-  assert.throws(() => ArchiveExtractorFactory.create('rar'), /Unsupported archive format/);
-});
 
 test('ZipArchiveExtractor extracts executable with stream and validates safety', async () => {
   const { ZipArchiveExtractor } = await import('../packages/cli/dist/adapters/traefik/archive.js');

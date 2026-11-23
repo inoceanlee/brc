@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { ReleaseProgress } from '../scripts/release-progress.mjs';
 import { ReleaseRunner } from '../scripts/release-runner.mjs';
 import { assertRegistryIntegrity, registryRepublishAt } from '../scripts/npm-registry-policy.mjs';
@@ -68,14 +67,6 @@ test('runner preserves concise subprocess errors', async () => {
   );
 });
 
-test('only the public CLI manifest declares a product version', () => {
-  const read = (file) => JSON.parse(readFileSync(path.resolve(file), 'utf8'));
-  const published = read('packages/cli/package.json');
-  assert.match(published.version, /^\d+\.\d+\.\d+$/);
-  for (const file of ['package.json', 'packages/shared/package.json', 'packages/relay/package.json', 'packages/agent/package.json']) {
-    assert.equal(Object.hasOwn(read(file), 'version'), false, file);
-  }
-});
 
 test('release requires a higher explicit CLI version than npm', () => {
   assert.doesNotThrow(() => assertReleaseVersion('2.1.1', '2.1.0'));

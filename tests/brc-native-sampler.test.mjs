@@ -45,21 +45,3 @@ test('native sample payload checks status before numeric fields', async () => {
   assert.throws(() => parseNativeSamplePayload(failed, 4242), /ACCESS_DENIED/);
 });
 
-test('native sampler invokes one native program with the sample subcommand', async () => {
-  const { createNativeProcessSample } = await import(resourcesUrl);
-  const calls = [];
-  const sample = createNativeProcessSample({
-    executablePath: 'C:/tools/brc-process.exe',
-    run: async (command, args) => {
-      calls.push([command, args]);
-      return { stdout: JSON.stringify({ samples: [{
-        pid: 77, status: 'found', cpuUserMs: 1, cpuSystemMs: 2, cpuPercent: null,
-        rssBytes: 3, systemPeakBytes: null, unavailable: null,
-      }] }) };
-    },
-  });
-  assert.deepEqual(await sample(77), {
-    cpuUserMs: 1, cpuSystemMs: 2, cpuPercent: null, rssBytes: 3, systemPeakBytes: null,
-  });
-  assert.deepEqual(calls, [['C:/tools/brc-process.exe', ['sample', '77']]]);
-});

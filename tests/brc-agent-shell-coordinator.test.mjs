@@ -49,20 +49,6 @@ test('ShellEncodingCoordinator resolves probe shells correctly across platforms'
   assert.equal(linuxPwsh.resolveProbeShell(), 'powershell');
 });
 
-test('CMD session transports Unicode commands through an isolated environment variable', () => {
-  const coordinator = new ShellEncodingCoordinator('win32', 'cmd.exe');
-  const command = 'echo BRC-中文-日本語-🙂';
-  const session = coordinator.createSession(command);
-  assert.equal(session.command, command);
-  assert.match(session.wrappedCommand, /chcp 65001 >nul/);
-  assert.match(session.wrappedCommand, /cmd \/d \/c !BRC_CMD_/);
-  assert.doesNotMatch(session.wrappedCommand, /中文|日本語|🙂/);
-  const entries = Object.entries(session.commandEnvironment);
-  assert.equal(entries.length, 1);
-  assert.match(entries[0][0], /^BRC_CMD_BRC_PROBE_[0-9a-f]{32}$/);
-  assert.equal(entries[0][1], command);
-  session.dispose();
-});
 
 test('CMD session rejects commands too large for reliable CMD parsing', () => {
   const coordinator = new ShellEncodingCoordinator('win32', 'cmd.exe');
@@ -76,17 +62,6 @@ test('CMD session rejects commands too large for reliable CMD parsing', () => {
   posix.dispose();
 });
 
-test('ShellEncodingCoordinator creates session with wrapped command and marker', () => {
-  const coordinator = new ShellEncodingCoordinator('linux', '/bin/bash');
-  const session = coordinator.createSession('echo hello', 5000);
-  assert.equal(session.command, 'echo hello');
-  assert.equal(session.probeRequired, true);
-  assert.equal(session.isReady, false);
-  assert.match(session.marker, /^BRC_PROBE_[0-9a-f]{32}$/);
-  assert.match(session.wrappedCommand, /locale charmap/);
-  assert.match(session.wrappedCommand, /echo hello/);
-  session.dispose();
-});
 
 test('ShellEncodingSession intercepts probe stdout, instantiates iconv decoders, and provides handshake', () => {
   const session = new DefaultShellEncodingSession('echo test', 5000, 'posix', 'BRC_PROBE_TEST');

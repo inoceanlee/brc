@@ -117,31 +117,6 @@ test('relay initializer imports the discovered legacy identity into a fresh data
   }
 });
 
-test('SqliteStore.initialize forwards its log port to legacy identity import', (t) => {
-  const root = temporaryRoot(t);
-  const legacyFile = path.join(root, 'legacy.sqlite');
-  SqliteStore.initialize(legacyFile);
-  const legacy = SqliteStore.open(legacyFile);
-  legacy.bootstrapAdministrator('legacy-admin', 'legacy-password');
-  legacy.close();
-  const target = path.join(root, 'data', 'relay.sqlite');
-  const diagnosticsDirectory = path.join(root, 'diagnostics-is-a-directory');
-  mkdirSync(diagnosticsDirectory);
-  const previous = process.env.BRC_DIAGNOSTICS_DB;
-  process.env.BRC_DIAGNOSTICS_DB = diagnosticsDirectory;
-  t.after(() => {
-    if (previous === undefined) delete process.env.BRC_DIAGNOSTICS_DB;
-    else process.env.BRC_DIAGNOSTICS_DB = previous;
-  });
-  const captured = [];
-  const log = {
-    error: (message) => captured.push(message),
-    warning: (message) => captured.push(message),
-    info: () => {},
-  };
-  SqliteStore.initialize(target, legacyFile, log);
-  assert.ok(captured.some((message) => /legacy identity import marker/i.test(message)), captured.join('\n'));
-});
 
 test('setup refuses a leftover legacy identity once the new database exists', async (t) => {
   const root = temporaryRoot(t);

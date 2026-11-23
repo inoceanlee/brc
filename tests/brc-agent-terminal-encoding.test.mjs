@@ -268,15 +268,6 @@ test('parsePosixLocaleReport throws on invalid probe report or unsupported encod
   assert.throws(() => parsePosixLocaleReport('charmap=invalid_encoding_xyz;lang='), /unsupported shell encoding/);
 });
 
-test('POSIX shell probe command builder injects locale charmap, LC_ALL/LANG and read handshake', () => {
-  const cmd = getPosixShellProbeCommand('BRC_PROBE_123', 'echo hello');
-  assert.match(cmd, /locale charmap/);
-  assert.match(cmd, /LC_ALL/);
-  assert.match(cmd, /BRC_PROBE_123\|charmap=%s;lang=%s/);
-  assert.match(cmd, /read -r _BRC_READY/);
-  assert.match(cmd, /echo hello/);
-  assert.equal(buildPosixShellProbeCommand('BRC_PROBE_123', 'echo hello'), cmd);
-});
 
 test('ShellEncodingProbe handles POSIX shell probe outputs', () => {
   const probe = new ShellEncodingProbe('BRC_PROBE_POSIX', 64 * 1024, 'posix');

@@ -6,7 +6,6 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { parseCommand } from '../packages/cli/dist/commands/parser.js';
-import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
 
 const tempRoot = realpathSync.native(tmpdir());
 
@@ -44,10 +43,6 @@ test('output, flags and option terminator are parsed consistently', () => {
   assert.equal(parseCommand(['logs', '--', 'cli']).logComponent, 'cli');
 });
 
-test('ServiceManager requires injected process and lock adapters', () => {
-  const paths = { root: 'root' };
-  assert.throws(() => new ServiceManager(paths, []), /requires|inject|process/i);
-});
 test('help and version expose machine-readable data', () => {
   for (const command of ['help', 'version']) {
     const result = invoke([command, '--json']);

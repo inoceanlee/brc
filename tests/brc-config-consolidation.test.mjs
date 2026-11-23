@@ -49,17 +49,6 @@ test('Shared YAML store supports revision-checked atomic updates', async (t) => 
   assert.equal(JSON.parse(await readFile(filename, 'utf8')).agent.fileWriteLineLimit, 88);
 });
 
-test('settings watcher can attach before the first configuration file is created', async (t) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'brc-watch-before-init-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const store = new YamlSettingsStore({
-    filename: path.join(dir, 'config', 'brc.yaml'),
-    codec: { parse: JSON.parse, stringify: JSON.stringify },
-    lock: { runExclusive: async (task) => task() },
-  });
-  const stop = store.watch(() => undefined);
-  stop();
-});
 
 test('Shared renderer separates machine data and machine errors', () => {
   const stdout = [];

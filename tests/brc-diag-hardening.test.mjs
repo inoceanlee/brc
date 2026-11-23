@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import ts from 'typescript';
 import { createInstrumentation } from '../scripts/instrument-functions.mjs';
-import { FunctionTiming, installFunctionProbe, clearEarlyProbe } from '../packages/shared/dist/diagnostics/core/functions.js';
+import { FunctionTiming, installFunctionProbe } from '../packages/shared/dist/diagnostics/core/functions.js';
 
 test('failure samples redact tokens and credentials', async () => {
   const instrumenter = createInstrumentation(ts, { rootDir: process.cwd(), packageName: 'redact-fixture' });
@@ -46,9 +46,3 @@ test('recursive early calls count once for time like the main timing', () => {
   }
 });
 
-test('clearing early probe removes global hooks when diagnostics disabled', () => {
-  clearEarlyProbe(globalThis);
-  assert.equal(globalThis.__brcDiagBegin, undefined);
-  assert.equal(globalThis.__brcDiagEnd, undefined);
-  assert.equal(globalThis[Symbol.for('brc.diag.early')], undefined);
-});

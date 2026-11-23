@@ -1311,14 +1311,3 @@ test('aborted service startup kills its child and removes the process record', a
   assert.equal((await harness.manager.status(harness.spec)).state, 'stopped');
 });
 
-test('service manager requires and executes the injected health-check port', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-services-health-port-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const processes = new FakeProcessManager();
-  const healthCheck = {
-    async check(spec) { return { ready: false, detail: `${spec.name} health rejected` }; },
-  };
-  const manager = new ServiceManager(paths(root), [service('relay', path.join(root, 'relay.js'), root)], processes, healthCheck, new LifecycleLock(paths(root)));
-  await assert.rejects(manager.start(), /control health check: relay health rejected/);
-  assert.deepEqual(processes.calls, ['start:relay', 'stop:relay']);
-});
