@@ -1173,6 +1173,49 @@ test('stop evicts a record whose PID was reused after boot', async (t) => {
   await assert.rejects(readFile(recordFile), { code: 'ENOENT' });
 });
 
+test('start recovers a reused PID occupied by another Node process', async (t) => {
+  const fakeForeignPid = 999996;
+  const harness = await makeHarness(t, {
+    processOptions: {
+      inspectProcess: async (pid) => {
+        if (pid === fakeForeignPid) {
+          return {
+            pid: fakeForeignPid,
+            createdAt: '1234567890',
+            executablePath: process.execPath,
+            commandLine: `${process.execPath} some-other-script.mjs`,
+          };
+        }
+        return inspectProcess(pid);
+      },
+    },
+  });
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify({
+    version: 1,
+    id: '44444444-5555-6666-7777-888888888888',
+    service: harness.spec.name,
+    pid: fakeForeignPid,
+    createdAt: '9999999999',
+    executablePath: process.execPath,
+    commandLine: `node ${harness.spec.entrypoint} --brc-managed-id=44444444-5555-6666-7777-888888888888`,
+    workspaceRoot: harness.spec.workspaceRoot,
+    entrypoint: harness.spec.entrypoint,
+    controlPort: 12345,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  }, null, 2));
+  const { utimes } = await import('node:fs/promises');
+  const previousBoot = new Date(Date.now() - os.uptime() * 1000 - 60_000);
+  await utimes(recordFile, previousBoot, previousBoot);
+  const status = await harness.manager.status(harness.spec);
+  assert.equal(status.state, 'degraded');
+  assert.match(status.detail, /recorded PID was reused/i);
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
+  await serviceManager.start();
+  const newRecord = JSON.parse(await readFile(recordFile, 'utf8'));
+  assert.notEqual(newRecord.pid, fakeForeignPid);
+});
+
 test('start and stop preserve an unverifiable record with no managed identity', async (t) => {
   const fakeForeignPid = 999997;
   const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
