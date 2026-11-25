@@ -88,6 +88,19 @@ test('SQLite snapshots persist across connections and classify states', async (t
   assert.equal((await reopened.read('relay', 'gone')).state, 'missing');
 });
 
+test('diagnostic writes wait out a writer lock longer than five seconds', async (t) => {
+  const { databasePath, store } = await makeStore(t);
+  const holder = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec('BEGIN IMMEDIATE');
+    setTimeout(() => { db.exec('COMMIT'); db.close(); }, 6000);
+  `, databasePath], { stdio: 'ignore' });
+  t.after(() => { if (!holder.killed) holder.kill(); });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await store.log.write({ level: 'info', component: 'cli', source: { file: 'test' }, message: 'after long lock' });
+});
+
 test('SQLite retention and rotation prune expired rows and bound table size', async (t) => {
   const config = {
     ...diagnosticsRetentionConfig(),
