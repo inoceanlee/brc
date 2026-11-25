@@ -4,8 +4,18 @@ import type { ManagedServiceName, ServiceStatus } from './ports.js';
 export const SERVICE_START_ORDER: readonly ManagedServiceName[] = ['relay', 'traefik', 'agent'];
 
 
+export const REUSED_PID_STATUS_DETAIL = 'Recorded PID was reused; process identity changed.';
+
+export function isStaleDegraded(status: Pick<ServiceStatus, 'state' | 'detail'>): boolean {
+  return status.state === 'degraded' && status.detail === REUSED_PID_STATUS_DETAIL;
+}
+
 export function isStartable(status: Pick<ServiceStatus, 'state' | 'detail'>): boolean {
   return status.state === 'stopped';
+}
+
+export function isRecoverableForStart(status: Pick<ServiceStatus, 'state' | 'detail'>): boolean {
+  return isStartable(status) || isStaleDegraded(status);
 }
 
 export function isActive(status: Pick<ServiceStatus, 'state'>): boolean {
