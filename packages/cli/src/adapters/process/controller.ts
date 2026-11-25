@@ -14,8 +14,9 @@ export { inspectProcess } from './identity.js';
 export type { ProcessIdentity } from './identity.js';
 
 import type { ControlHealthPort, ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
-import { REUSED_PID_STATUS_DETAIL } from '../../core/lifecycle/policy.js';
 export type { ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
+
+const REUSED_PID_DETAIL = 'Recorded PID was reused; process identity changed.';
 
 export interface ManagedProcessRecord extends ProcessIdentity {
   version: 1;
@@ -392,7 +393,7 @@ export class ProcessManager implements ControlHealthPort {
       ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
       : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
     if (confirmedReused(record, identity, this.previousBootRecords.has(record))) {
-      return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_STATUS_DETAIL };
+      return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_DETAIL, recoverable: true };
     }
     if (!sameIdentity(record, identity, spec)) {
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
@@ -448,7 +449,7 @@ export class ProcessManager implements ControlHealthPort {
       if (!identity) return await processDefinitelyExited(record.pid)
         ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
         : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
-      if (confirmedReused(record, identity, this.previousBootRecords.has(record))) return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_STATUS_DETAIL };
+      if (confirmedReused(record, identity, this.previousBootRecords.has(record))) return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_DETAIL, recoverable: true };
       if (!sameIdentity(record, identity, spec)) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
       try {
         const health = await this.readHealth(record);

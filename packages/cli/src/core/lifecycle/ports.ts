@@ -7,6 +7,7 @@ export interface ServiceStatus {
   state: ServiceState;
   pid: number | null;
   detail: string;
+  recoverable?: boolean;
 }
 
 export interface ManagedServiceSpec {

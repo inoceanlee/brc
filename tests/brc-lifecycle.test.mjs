@@ -1128,7 +1128,7 @@ test('start recovers a record whose PID was reused after boot', async (t) => {
 
   const status = await harness.manager.status(harness.spec);
   assert.equal(status.state, 'degraded');
-  assert.match(status.detail, /recorded PID was reused/i);
+  assert.equal(status.recoverable, true);
 
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await serviceManager.start();
@@ -1209,7 +1209,7 @@ test('start recovers a reused PID occupied by another Node process', async (t) =
   await utimes(recordFile, previousBoot, previousBoot);
   const status = await harness.manager.status(harness.spec);
   assert.equal(status.state, 'degraded');
-  assert.match(status.detail, /recorded PID was reused/i);
+  assert.equal(status.recoverable, true);
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await serviceManager.start();
   const newRecord = JSON.parse(await readFile(recordFile, 'utf8'));
@@ -1249,11 +1249,34 @@ test('start and stop preserve an unverifiable record with no managed identity', 
   await utimes(recordFile, previousBoot, previousBoot);
   const status = await harness.manager.status(harness.spec);
   assert.equal(status.state, 'degraded');
-  assert.match(status.detail, /identity changed/i);
+  assert.equal(status.recoverable, undefined);
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await assert.rejects(serviceManager.stop(), (error) => error.exitCode === 5);
   await assert.rejects(serviceManager.start(), (error) => error.exitCode === 5);
   assert.deepEqual(JSON.parse(await readFile(recordFile, 'utf8')), staleRecord);
+});
+
+test('start decision reads the recoverable flag, not the status detail text', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'brc-recoverable-'));
+  t.after(async () => { await rm(root, { recursive: true, force: true }); });
+  const spec = service('relay', path.join(root, 'fake-service.mjs'), root);
+  const started = [];
+  const processes = {
+    start: async (target) => { started.push(target.name); },
+    status: async () => ({ name: 'relay', state: 'degraded', pid: 1, detail: 'any wording at all', recoverable: true }),
+  };
+  const manager = new ServiceManager(paths(root), [spec], processes, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (operation) => operation() });
+  await manager.start();
+  assert.deepEqual(started, ['relay']);
+
+  const blocked = [];
+  const refusedProcesses = {
+    start: async (target) => { blocked.push(target.name); },
+    status: async () => ({ name: 'relay', state: 'degraded', pid: 1, detail: 'Recorded PID was reused; process identity changed.' }),
+  };
+  const refusedManager = new ServiceManager(paths(root), [spec], refusedProcesses, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (operation) => operation() });
+  await assert.rejects(refusedManager.start(), (error) => error.exitCode === 5);
+  assert.deepEqual(blocked, []);
 });
 
 test('service start preserves a corrupted process record', async (t) => {
