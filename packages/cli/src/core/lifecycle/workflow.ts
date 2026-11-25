@@ -1,7 +1,7 @@
 import type { TraceSink } from 'brc-shared';
 import type { BrcPaths } from '../../config/paths.js';
 import type { ControlHealthPort, LifecycleLockPort, ManagedServiceSpec, ProcessController, ServiceStatus } from './ports.js';
-import { isActive, isStartable } from './policy.js';
+import { isActive, isRecoverableForStart } from './policy.js';
 
 export interface LockedServiceOperations {
   start(known?: readonly ServiceStatus[], signal?: AbortSignal): Promise<void>;
@@ -88,7 +88,7 @@ export class ServiceManager {
         const prechecked = knownByName.get(service.name);
         const current = prechecked ?? await this.stage('precheck', service.name, () => this.processes.status(service));
         if (isActive(current) || (service.name === 'agent' && current.state === 'pairing')) continue;
-        if (!isStartable(current)) {
+        if (!isRecoverableForStart(current)) {
           throw Object.assign(new Error(`Cannot start ${service.name}: ${current.detail}`), { exitCode: 5 });
         }
         toStart.push(service);

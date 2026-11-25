@@ -1088,7 +1088,7 @@ test('refuses forced termination when the PID identity changes after shutdown', 
   }
 });
 
-test('start and stop preserve an old record when the PID identity differs', async (t) => {
+test('start recovers a record whose PID was reused after boot', async (t) => {
   const fakeForeignPid = 999999;
   const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
   const harness = await makeHarness(t, {
@@ -1107,13 +1107,12 @@ test('start and stop preserve an old record when the PID identity differs', asyn
     },
   });
 
-  // Seed a stale record with a valid format whose PID belongs to an unrelated system process
   const staleRecord = {
     version: 1,
     id: '11111111-2222-3333-4444-555555555555',
     service: harness.spec.name,
     pid: fakeForeignPid,
-    createdAt: '9999999999', // Mismatched creation time
+    createdAt: '9999999999',
     executablePath: foreignExecutable,
     commandLine: `node ${harness.spec.entrypoint} --brc-managed-id=11111111-2222-3333-4444-555555555555`,
     workspaceRoot: harness.spec.workspaceRoot,
@@ -1121,21 +1120,97 @@ test('start and stop preserve an old record when the PID identity differs', asyn
     controlPort: 12345,
     controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   };
-  await writeFile(path.join(harness.paths.runtime, `${harness.spec.name}.json`), JSON.stringify(staleRecord, null, 2));
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify(staleRecord, null, 2));
   const { utimes } = await import('node:fs/promises');
   const previousBoot = new Date(Date.now() - os.uptime() * 1000 - 60_000);
-  await utimes(path.join(harness.paths.runtime, 'relay.json'), previousBoot, previousBoot);
+  await utimes(recordFile, previousBoot, previousBoot);
 
-  // Querying status should still safely report degraded (read-only query does not mutate)
   const status = await harness.manager.status(harness.spec);
   assert.equal(status.state, 'degraded');
-  assert.match(status.detail, /identity/i);
+  assert.match(status.detail, /recorded PID was reused/i);
 
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
+  await serviceManager.start();
+  const newRecord = JSON.parse(await readFile(recordFile, 'utf8'));
+  assert.notEqual(newRecord.pid, fakeForeignPid);
+  const statusAfter = await harness.manager.status(harness.spec);
+  assert.equal(statusAfter.state, 'running');
+});
+
+test('stop evicts a record whose PID was reused after boot', async (t) => {
+  const fakeForeignPid = 999998;
+  const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
+  const harness = await makeHarness(t, {
+    processOptions: {
+      inspectProcess: async (pid) => {
+        if (pid === fakeForeignPid) {
+          return { pid: fakeForeignPid, createdAt: '1234567890', executablePath: foreignExecutable, commandLine: 'svchost.exe -k netsvcs' };
+        }
+        return inspectProcess(pid);
+      },
+    },
+  });
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify({
+    version: 1,
+    id: '22222222-3333-4444-5555-666666666666',
+    service: harness.spec.name,
+    pid: fakeForeignPid,
+    createdAt: '9999999999',
+    executablePath: foreignExecutable,
+    commandLine: `node ${harness.spec.entrypoint} --brc-managed-id=22222222-3333-4444-5555-666666666666`,
+    workspaceRoot: harness.spec.workspaceRoot,
+    entrypoint: harness.spec.entrypoint,
+    controlPort: 12345,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  }, null, 2));
+  const { utimes } = await import('node:fs/promises');
+  const previousBoot = new Date(Date.now() - os.uptime() * 1000 - 60_000);
+  await utimes(recordFile, previousBoot, previousBoot);
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
+  await serviceManager.stop();
+  await assert.rejects(readFile(recordFile), { code: 'ENOENT' });
+});
+
+test('start and stop preserve an unverifiable record with no managed identity', async (t) => {
+  const fakeForeignPid = 999997;
+  const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
+  const harness = await makeHarness(t, {
+    processOptions: {
+      inspectProcess: async (pid) => {
+        if (pid === fakeForeignPid) {
+          return { pid: fakeForeignPid, createdAt: '1234567890', executablePath: foreignExecutable, commandLine: 'svchost.exe -k netsvcs' };
+        }
+        return inspectProcess(pid);
+      },
+    },
+  });
+  const staleRecord = {
+    version: 1,
+    id: '33333333-4444-5555-6666-777777777777',
+    service: harness.spec.name,
+    pid: fakeForeignPid,
+    createdAt: '9999999999',
+    executablePath: foreignExecutable,
+    commandLine: 'svchost.exe -k netsvcs',
+    workspaceRoot: harness.spec.workspaceRoot,
+    entrypoint: harness.spec.entrypoint,
+    controlPort: 12345,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  };
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify(staleRecord, null, 2));
+  const { utimes } = await import('node:fs/promises');
+  const previousBoot = new Date(Date.now() - os.uptime() * 1000 - 60_000);
+  await utimes(recordFile, previousBoot, previousBoot);
+  const status = await harness.manager.status(harness.spec);
+  assert.equal(status.state, 'degraded');
+  assert.match(status.detail, /identity changed/i);
   const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
   await assert.rejects(serviceManager.stop(), (error) => error.exitCode === 5);
   await assert.rejects(serviceManager.start(), (error) => error.exitCode === 5);
-  assert.deepEqual(JSON.parse(await readFile(path.join(harness.paths.runtime, 'relay.json'), 'utf8')), staleRecord);
-  await rm(path.join(harness.paths.runtime, 'relay.json'));
+  assert.deepEqual(JSON.parse(await readFile(recordFile, 'utf8')), staleRecord);
 });
 
 test('service start preserves a corrupted process record', async (t) => {
