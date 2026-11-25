@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import { ProcessManager, inspectProcess } from '../packages/cli/dist/adapters/process/controller.js';
 import { inspectProcesses } from '../packages/cli/dist/adapters/process/identity.js';
 import { ServiceManager } from '../packages/cli/dist/core/lifecycle/workflow.js';
+import { isReusedPidRecord, shouldWriteTraefikConfig, startRejection } from '../packages/cli/dist/core/lifecycle/policy.js';
 import { createDefaultServices } from '../packages/cli/dist/adapters/process/specs.js';
 import { DEFAULT_SETTINGS } from '../packages/cli/dist/config/settings.js';
 import { cleanRuntime as runCleanup } from '../packages/cli/dist/adapters/storage/cleanup.js';
@@ -1277,6 +1278,101 @@ test('start decision reads the recoverable flag, not the status detail text', as
   const refusedManager = new ServiceManager(paths(root), [spec], refusedProcesses, { check: async () => ({ ready: true, detail: '' }) }, { runExclusive: (operation) => operation() });
   await assert.rejects(refusedManager.start(), (error) => error.exitCode === 5);
   assert.deepEqual(blocked, []);
+});
+
+test('reused PID rule is decided from structured facts', () => {
+  const facts = {
+    samePid: true,
+    creationTimeChanged: true,
+    storedCommandHasManagedId: true,
+    storedCommandHasEntrypoint: true,
+    currentCommandDiffers: true,
+    currentCommandHasNoManagedId: true,
+  };
+  assert.equal(isReusedPidRecord(facts), true);
+  for (const key of Object.keys(facts)) {
+    assert.equal(isReusedPidRecord({ ...facts, [key]: false }), false, key);
+  }
+});
+
+test('partial running set with recoverable service is rejected', () => {
+  const statuses = [
+    { name: 'relay', state: 'running', pid: 1, detail: '' },
+    { name: 'traefik', state: 'degraded', pid: 2, detail: '', recoverable: true },
+  ];
+  assert.match(startRejection(statuses) ?? '', /partially running/);
+});
+
+test('traefik config is written when all services are recoverable', () => {
+  const statuses = [{ name: 'traefik', state: 'degraded', pid: 1, detail: '', recoverable: true }];
+  assert.equal(shouldWriteTraefikConfig(statuses), true);
+});
+
+test('start recovers a stale record even when its file was touched after boot', async (t) => {
+  const fakeForeignPid = 999995;
+  const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
+  const harness = await makeHarness(t, {
+    processOptions: {
+      inspectProcess: async (pid) => {
+        if (pid === fakeForeignPid) {
+          return { pid: fakeForeignPid, createdAt: '1234567890', executablePath: foreignExecutable, commandLine: 'svchost.exe -k netsvcs' };
+        }
+        return inspectProcess(pid);
+      },
+    },
+  });
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify({
+    version: 1,
+    id: '55555555-6666-7777-8888-999999999999',
+    service: harness.spec.name,
+    pid: fakeForeignPid,
+    createdAt: '9999999999',
+    executablePath: foreignExecutable,
+    commandLine: `node ${harness.spec.entrypoint} --brc-managed-id=55555555-6666-7777-8888-999999999999`,
+    workspaceRoot: harness.spec.workspaceRoot,
+    entrypoint: harness.spec.entrypoint,
+    controlPort: 12345,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  }, null, 2));
+  const status = await harness.manager.status(harness.spec);
+  assert.equal(status.recoverable, true);
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
+  await serviceManager.start();
+  assert.notEqual(JSON.parse(await readFile(recordFile, 'utf8')).pid, fakeForeignPid);
+});
+
+test('reused PID owned by another managed instance is not recoverable', async (t) => {
+  const fakeForeignPid = 999994;
+  const foreignExecutable = process.platform === 'win32' ? 'C:\\Windows\\System32\\svchost.exe' : '/usr/sbin/sshd';
+  const harness = await makeHarness(t, {
+    processOptions: {
+      inspectProcess: async (pid) => {
+        if (pid === fakeForeignPid) {
+          return { pid: fakeForeignPid, createdAt: '1234567890', executablePath: foreignExecutable, commandLine: 'node other-service.mjs --brc-managed-id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' };
+        }
+        return inspectProcess(pid);
+      },
+    },
+  });
+  const recordFile = path.join(harness.paths.runtime, `${harness.spec.name}.json`);
+  await writeFile(recordFile, JSON.stringify({
+    version: 1,
+    id: '66666666-7777-8888-9999-aaaaaaaaaaaa',
+    service: harness.spec.name,
+    pid: fakeForeignPid,
+    createdAt: '9999999999',
+    executablePath: foreignExecutable,
+    commandLine: `node ${harness.spec.entrypoint} --brc-managed-id=66666666-7777-8888-9999-aaaaaaaaaaaa`,
+    workspaceRoot: harness.spec.workspaceRoot,
+    entrypoint: harness.spec.entrypoint,
+    controlPort: 12345,
+    controlToken: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  }, null, 2));
+  const status = await harness.manager.status(harness.spec);
+  assert.equal(status.recoverable, undefined);
+  const serviceManager = new ServiceManager(harness.paths, [harness.spec], harness.manager, harness.manager, new LifecycleLock(harness.paths));
+  await assert.rejects(serviceManager.start(), (error) => error.exitCode === 5);
 });
 
 test('service start preserves a corrupted process record', async (t) => {

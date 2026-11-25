@@ -480,6 +480,16 @@ test('configuration rejects degraded ownership even when PID reuse is claimed', 
   detail = 'Cannot verify process identity; refusing process control.';
   await assert.rejects(manager.writeConfig(), /Cannot apply Traefik configuration/);
 });
+test('configuration writes when degraded service is marked recoverable', async (t) => {
+  const { paths: brcPaths } = await makeRoot(t);
+  const lifecycle = makeLifecycle();
+  lifecycle.status = async () => [{ name: 'traefik', state: 'degraded', pid: 123, detail: 'reason may change', recoverable: true }];
+  const manager = makeManager(brcPaths, makeRelease('3.7.16'), { lifecycle });
+  await manager.writeConfig();
+  const dynamic = yaml.safeLoad(await readFile(path.join(brcPaths.traefik, 'config', 'dynamic.yml'), 'utf8'));
+  assert.equal(typeof dynamic.http, 'object');
+});
+
 test('configuration uses BrcSettings and keeps a single public proxy router', async (t) => {
   const { paths: brcPaths } = await makeRoot(t);
   const settings = structuredClone(DEFAULT_SETTINGS);
