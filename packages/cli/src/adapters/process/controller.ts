@@ -4,7 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import os from 'node:os';
 import { realpathSync } from 'node:fs';
-import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../../config/paths.js';
@@ -134,8 +134,7 @@ function confirmedReused(
   return storedCommand.includes(normalizedId)
     && storedCommand.includes(normalizeCommandLine(path.resolve(record.entrypoint)))
     && commandLine !== storedCommand
-    && !commandLine.includes(normalizedId)
-    && !samePath(current.executablePath, process.execPath);
+    && !commandLine.includes(normalizedId);
 }
 
 function parseProcessRecord(value: unknown, spec: ManagedServiceSpec): ManagedProcessRecord {
@@ -741,8 +740,16 @@ export class ProcessManager implements ControlHealthPort {
   private async readRecord(spec: ManagedServiceSpec): Promise<ManagedProcessRecord | null> {
     const filename = recordPath(this.paths, spec.name);
     try {
-      const record = parseProcessRecord(JSON.parse(await readFile(filename, 'utf8')), spec);
-      if (isStaleFromPreviousBoot((await stat(filename)).mtimeMs)) this.previousBootRecords.add(record);
+      const handle = await open(filename, 'r');
+      let record: ManagedProcessRecord;
+      let mtimeMs: number;
+      try {
+        record = parseProcessRecord(JSON.parse(await handle.readFile('utf8')), spec);
+        mtimeMs = (await handle.stat()).mtimeMs;
+      } finally {
+        await handle.close();
+      }
+      if (isStaleFromPreviousBoot(mtimeMs)) this.previousBootRecords.add(record);
       if (!matchesRecordedInstallation(record, spec)) {
         throw new Error(`${spec.name} process record belongs to another workspace; refusing process control.`);
       }
