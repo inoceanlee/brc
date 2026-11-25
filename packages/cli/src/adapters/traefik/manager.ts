@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { BrcPaths } from '../../config/paths.js';
 import type { BrcSettings } from '../../config/settings.js';
 import type { LockedServiceOperations, ServiceManager } from '../../core/lifecycle/workflow.js';
-import { isStartable } from '../../core/lifecycle/policy.js';
+import { isRecoverableForStart } from '../../core/lifecycle/policy.js';
 import { readChecksum, renderConfig, type TraefikRelease, type VersionManifest } from '../../core/traefik/rules.js';
 import { processArchive } from './archive.js';
 import { readManifest, TraefikInput, type TraefikInputOptions } from './input.js';
@@ -87,7 +87,7 @@ export class TraefikManager {
             throw new Error('Traefik installation changed while setup was waiting for the lifecycle lock.');
           }
           const status = await this.serviceStatus();
-          if (status?.state === 'starting' || (status?.state === 'degraded' && !isStartable(status))) {
+          if (status?.state === 'starting' || (status?.state === 'degraded' && !isRecoverableForStart(status))) {
             throw new Error(`Cannot apply Traefik configuration while its service is ${status.state}: ${status.detail}`);
           }
           if (status?.state !== 'running') await this.writeCurrentConfig(signal);
@@ -227,7 +227,7 @@ export class TraefikManager {
   ): Promise<void> {
     signal?.throwIfAborted();
     const status = await this.serviceStatus();
-    if (status?.state === 'starting' || (status?.state === 'degraded' && !isStartable(status))) {
+    if (status?.state === 'starting' || (status?.state === 'degraded' && !isRecoverableForStart(status))) {
       throw new Error(`Cannot apply Traefik configuration while its service is ${status.state}: ${status.detail}`);
     }
     if (status?.state === 'running' && !previous) {
@@ -303,7 +303,7 @@ export class TraefikManager {
   private async isRunning(): Promise<boolean> {
     const status = await this.serviceStatus();
     if (!status) throw new Error('Traefik is not registered with the lifecycle service manager.');
-    if (status.state === 'starting' || (status.state === 'degraded' && !isStartable(status))) {
+    if (status.state === 'starting' || (status.state === 'degraded' && !isRecoverableForStart(status))) {
       throw new Error(`Cannot change Traefik version while its service is ${status.state}: ${status.detail}`);
     }
     return status.state === 'running';

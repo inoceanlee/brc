@@ -4,7 +4,7 @@ import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import os from 'node:os';
 import { realpathSync } from 'node:fs';
-import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { BrcPaths } from '../../config/paths.js';
@@ -14,6 +14,7 @@ export { inspectProcess } from './identity.js';
 export type { ProcessIdentity } from './identity.js';
 
 import type { ControlHealthPort, ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
+import { isReusedPidRecord, type ReusedPidEvidence } from '../../core/lifecycle/policy.js';
 export type { ManagedServiceName, ManagedServiceSpec, ServiceState, ServiceStatus } from '../../core/lifecycle/ports.js';
 
 const REUSED_PID_DETAIL = 'Recorded PID was reused; process identity changed.';
@@ -122,20 +123,19 @@ function sameIdentity(record: ManagedProcessRecord, current: ProcessIdentity, sp
     && commandLine.includes(normalizedId);
 }
 
-function confirmedReused(
-  record: ManagedProcessRecord,
-  current: ProcessIdentity,
-  previousBoot: boolean,
-): boolean {
-  if (!previousBoot || current.pid !== record.pid || current.createdAt === record.createdAt) return false;
-  const managedId = `--brc-managed-id=${record.id}`;
-  const normalizedId = process.platform === 'win32' ? managedId.toLowerCase() : managedId;
+function reusedPidEvidence(record: ManagedProcessRecord, current: ProcessIdentity): ReusedPidEvidence {
+  const managedId = normalizeCommandLine(`--brc-managed-id=${record.id}`);
+  const managedPrefix = normalizeCommandLine('--brc-managed-id=');
   const storedCommand = normalizeCommandLine(record.commandLine);
   const commandLine = normalizeCommandLine(current.commandLine);
-  return storedCommand.includes(normalizedId)
-    && storedCommand.includes(normalizeCommandLine(path.resolve(record.entrypoint)))
-    && commandLine !== storedCommand
-    && !commandLine.includes(normalizedId);
+  return {
+    samePid: current.pid === record.pid,
+    creationTimeChanged: current.createdAt !== record.createdAt,
+    storedCommandHasManagedId: storedCommand.includes(managedId),
+    storedCommandHasEntrypoint: storedCommand.includes(normalizeCommandLine(path.resolve(record.entrypoint))),
+    currentCommandDiffers: commandLine !== storedCommand,
+    currentCommandHasNoManagedId: !commandLine.includes(managedPrefix),
+  };
 }
 
 function parseProcessRecord(value: unknown, spec: ManagedServiceSpec): ManagedProcessRecord {
@@ -226,7 +226,6 @@ export class ProcessManager implements ControlHealthPort {
   private readonly inspect: ProcessInspector;
   private readonly customInspector: boolean;
   private readonly starting = new Map<ManagedServiceName, number | null>();
-  private readonly previousBootRecords = new WeakSet<ManagedProcessRecord>();
 
   constructor(private readonly paths: BrcPaths, options: ProcessManagerOptions = {}) {
     this.startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_SETTINGS.runtime.startupTimeoutMs;
@@ -261,7 +260,7 @@ export class ProcessManager implements ControlHealthPort {
         if (!identity) {
           if (!await processDefinitelyExited(current.pid)) throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to start.`), { exitCode: 5 });
           await this.removeRecord(spec.name);
-        } else if (confirmedReused(current, identity, this.previousBootRecords.has(current))) {
+        } else if (isReusedPidRecord(reusedPidEvidence(current, identity))) {
           await this.removeRecord(spec.name);
         } else if (!sameIdentity(current, identity, spec)) {
           throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing to start.`), { exitCode: 5 });
@@ -392,7 +391,7 @@ export class ProcessManager implements ControlHealthPort {
     if (!identity) return await processDefinitelyExited(record.pid)
       ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
       : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
-    if (confirmedReused(record, identity, this.previousBootRecords.has(record))) {
+    if (isReusedPidRecord(reusedPidEvidence(record, identity))) {
       return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_DETAIL, recoverable: true };
     }
     if (!sameIdentity(record, identity, spec)) {
@@ -449,7 +448,7 @@ export class ProcessManager implements ControlHealthPort {
       if (!identity) return await processDefinitelyExited(record.pid)
         ? { name: spec.name, state: 'stopped', pid: null, detail: 'Recorded process has exited.' }
         : { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Cannot verify process identity; refusing process control.' };
-      if (confirmedReused(record, identity, this.previousBootRecords.has(record))) return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_DETAIL, recoverable: true };
+      if (isReusedPidRecord(reusedPidEvidence(record, identity))) return { name: spec.name, state: 'degraded', pid: record.pid, detail: REUSED_PID_DETAIL, recoverable: true };
       if (!sameIdentity(record, identity, spec)) return { name: spec.name, state: 'degraded', pid: record.pid, detail: 'Process identity changed; refusing process control.' };
       try {
         const health = await this.readHealth(record);
@@ -580,7 +579,7 @@ export class ProcessManager implements ControlHealthPort {
       if (removeRecord) await this.removeRecord(spec.name);
       return;
     }
-    if (confirmedReused(record, current, this.previousBootRecords.has(record))) {
+    if (isReusedPidRecord(reusedPidEvidence(record, current))) {
       if (removeRecord) await this.removeRecord(spec.name);
       return;
     }
@@ -741,16 +740,7 @@ export class ProcessManager implements ControlHealthPort {
   private async readRecord(spec: ManagedServiceSpec): Promise<ManagedProcessRecord | null> {
     const filename = recordPath(this.paths, spec.name);
     try {
-      const handle = await open(filename, 'r');
-      let record: ManagedProcessRecord;
-      let mtimeMs: number;
-      try {
-        record = parseProcessRecord(JSON.parse(await handle.readFile('utf8')), spec);
-        mtimeMs = (await handle.stat()).mtimeMs;
-      } finally {
-        await handle.close();
-      }
-      if (isStaleFromPreviousBoot(mtimeMs)) this.previousBootRecords.add(record);
+      const record = parseProcessRecord(JSON.parse(await readFile(filename, 'utf8')), spec);
       if (!matchesRecordedInstallation(record, spec)) {
         throw new Error(`${spec.name} process record belongs to another workspace; refusing process control.`);
       }
