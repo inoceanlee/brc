@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_tool ON relay_audit(tool);
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
+PRAGMA busy_timeout = 30000;
 PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS diagnostic_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -218,7 +218,7 @@ export function openDiagnosticDatabase(
   const resolved = path.resolve(databasePath);
   mkdirSync(path.dirname(resolved), { recursive: true });
   const connection = new DatabaseSync(resolved);
-  connection.exec('PRAGMA busy_timeout = 5000;');
+  connection.exec('PRAGMA busy_timeout = 30000;');
   connection.exec(SCHEMA);
   return new DiagnosticDatabase(connection, resolved, config);
 }
@@ -824,3 +824,5 @@ function snapshotOptions(options: SqliteDiagnosticsStoreOptions): Pick<SqliteSna
     ...(options.now === undefined ? {} : { now: options.now }),
   };
 }
+
+
