@@ -682,7 +682,7 @@ export class ProcessManager implements ControlHealthPort {
       signal?.throwIfAborted();
       if (!current) {
         if (await processDefinitelyExited(record.pid)) return true;
-        if (this.customInspector || Date.now() + this.pollIntervalMs >= deadline) {
+        if (Date.now() + this.pollIntervalMs >= deadline) {
           throw Object.assign(new Error(`${spec.name} process identity cannot be verified; refusing process control.`), { exitCode: 5 });
         }
       } else if (!sameIdentity(record, current, spec)) {
